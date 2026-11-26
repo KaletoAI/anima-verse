@@ -64,10 +64,14 @@ template_front}`` (``world_dev_media.media_roots``).
   (h) "Demo Ruin" (marked created by the run): two gallery images; one is
       deleted by hand -> its record "already gone", no exception. Then the row
       goes (delete_location_row, which leaves the files) -> the remaining image
-      is unlinked by its recorded path. sweep_orphan_dirs -> its gallery dir
-      (only gallery_meta.json / prompts.json left) and locations/<ruin> are
-      gone. "Demo Fort" (created, a foreign notes.txt in its gallery) -> the
-      dir is kept, reason "not the run's".
+      is unlinked by its recorded path; the day step CREATED the gallery dir
+      (a "gallery_dir" record, plan 2026-11-25-world-dev-free-fixes Task 2),
+      so the removal takes it too (only gallery_meta.json / prompts.json were
+      left) -> removed == [second image, world_gallery/<ruin>].
+      sweep_orphan_dirs -> locations/<ruin> (and its model3d) gone; the
+      gallery dir is no longer the sweep's. "Demo Fort" (created, a foreign
+      notes.txt in its gallery) -> the removal keeps its gallery dir "not
+      empty", the sweep keeps it "not the run's".
   (i) mesh with a producer note ("mesh: smoke failure") -> StepError status
       "failed", note carried, the written glb is in its artefacts (capture
       survives the failure).
@@ -434,8 +438,11 @@ check("(h) row deleted", delete_location_row(ruin))
 check("(h) the gallery dir is still there (row delete leaves files)", rdir.is_dir())
 removed, kept = removal(ra + rb, "(h)")
 check("(h) first already gone", {"path": ra[0]["path"], "reason": "already gone"} in kept, kept)
-check("(h) second unlinked by path", removed == [rb[0]["path"]] and not (STORAGE / rb[0]["path"]).exists(),
-      removed)
+check("(h) the day step created the gallery dir", [a["type"] for a in ra] == ["gallery_image", "gallery_dir"]
+      and [a["type"] for a in rb] == ["gallery_image"], (ra, rb))
+check("(h) second unlinked by path, the step's gallery dir removed with it",
+      removed == [rb[0]["path"], f"world_gallery/{ruin}"] and not (STORAGE / rb[0]["path"]).exists()
+      and not rdir.exists(), removed)
 _, fa = wdm.PRODUCERS["gallery"](ctx, "location", fort, step_of("location", fort, "day:"))
 fdir = get_gallery_dir(fort)
 (fdir / "notes.txt").write_text("someone else's", encoding="utf-8")
@@ -445,8 +452,8 @@ sweep = wdm.sweep_orphan_dirs(run)
 check("(h) ruin gallery dir gone", not rdir.exists(),
       sorted(p.name for p in rdir.iterdir()) if rdir.exists() else None)
 check("(h) ruin model dir gone", not (STORAGE / "locations" / ruin).exists())
-check("(h) sweep reports the ruin dirs", f"world_gallery/{ruin}" in sweep["removed"]
-      and f"locations/{ruin}" in sweep["removed"], sweep)
+check("(h) sweep reports the ruin model dirs (its gallery dir went with the removal)",
+      f"world_gallery/{ruin}" not in sweep["removed"] and f"locations/{ruin}" in sweep["removed"], sweep)
 check("(h) fort dir kept, not the run's", fdir.is_dir()
       and {"path": f"world_gallery/{fort}", "reason": "not the run's"} in sweep["kept"], sweep)
 check("(h) the live keep is never swept", gdir.is_dir() and mdir.is_dir())

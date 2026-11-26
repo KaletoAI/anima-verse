@@ -84,13 +84,19 @@ def _scaffold(file_id: str, language: str) -> str:
 
 def _atomic_write(path: Path, text: str) -> None:
     """Replace a soul file; caller holds its soul_file lock."""
+    _atomic_write_bytes(path, text.encode("utf-8"))
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Replace a soul file with exactly ``data``; caller holds its soul_file
+    lock. The source-file cache is invalidated in every case."""
     from app.models.character_template import invalidate_source_file
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + "." + uuid4().hex)
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            stream.write(text)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
         try:
@@ -331,3 +337,33 @@ def write_text(character_name: str, rel_path: str, text: Optional[str]) -> None:
                 invalidate_source_file(path)
             return
         _atomic_write(path, str(text).rstrip() + "\n")
+
+
+def read_raw(character_name: str, rel_path: str) -> Optional[str]:
+    """The stored text of one character text file EXACTLY as its bytes are
+    (UTF-8, no newline translation — a CRLF file keeps its CRLF), or None
+    when it is absent. What a World Dev journal records as a section's
+    before/after text, so the undo can put back the very bytes."""
+    path = soul_text_path(character_name, rel_path)
+    with keyed_lock("soul_file", str(path)):
+        try:
+            return path.read_bytes().decode("utf-8")
+        except FileNotFoundError:
+            return None
+
+
+def write_raw(character_name: str, rel_path: str, text: Optional[str]) -> None:
+    """Replace one character text file atomically with exactly
+    ``text.encode("utf-8")`` (no rstrip, no added newline, no newline
+    translation); ``None`` removes it. The counterpart of :func:`read_raw`.
+    The source-file cache is invalidated in every case."""
+    from app.models.character_template import invalidate_source_file
+    path = soul_text_path(character_name, rel_path)
+    with keyed_lock("soul_file", str(path)):
+        if text is None:
+            try:
+                path.unlink(missing_ok=True)
+            finally:
+                invalidate_source_file(path)
+            return
+        _atomic_write_bytes(path, str(text).encode("utf-8"))

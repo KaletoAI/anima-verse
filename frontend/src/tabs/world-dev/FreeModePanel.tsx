@@ -57,12 +57,22 @@ interface MediaElement {
   produced: number
 }
 
+/** An element an interrupted run renders once accepted (no job row yet). */
+interface MediaWaiting {
+  kind: 'location' | 'character' | string
+  id: string
+  name: string
+  steps: { id: string; label: string }[]
+}
+
 /** The run's media (plan 2026-11-25-world-dev-free-media, Tasks 10/11): the
- *  run switch, the media state (open · accepted · closed) and the elements. */
+ *  run switch, the media state (open · accepted · closed) and the elements;
+ *  `waiting` lists what an interrupted run renders after Accept (F1). */
 interface MediaStatus {
   enabled: boolean
   state: string
   elements: MediaElement[]
+  waiting: MediaWaiting[]
 }
 
 interface FreeRun {
@@ -660,6 +670,14 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
   }, [loadMedia, runId, t, toast])
 
   const mediaView = media && media.run === runId ? media.status : null
+  // An interrupted run renders nothing before Accept: what it would render.
+  const mediaWaiting = mediaView && status === 'interrupted' ? (mediaView.waiting || []) : []
+  // An element with a row from an earlier turn AND new due steps shows its
+  // waiting steps on that row; only the others get a row of their own, so
+  // the header counts each element once.
+  const mediaWaitingByKey = new Map(mediaWaiting.map((w) => [`${w.kind}:${w.id}`, w]))
+  const mediaElementKeys = new Set((mediaView?.elements || []).map((el) => `${el.kind}:${el.id}`))
+  const mediaWaitingOnly = mediaWaiting.filter((w) => !mediaElementKeys.has(`${w.kind}:${w.id}`))
   const mediaRetryable = !!mediaView && mediaView.elements.some((el) => (
     el.status === 'failed' || el.status === 'skipped'
     || el.steps.some((s) => s.status === 'failed' || s.status === 'skipped')))
@@ -810,7 +828,7 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
                   aria-expanded={mediaOpen} onClick={() => setMediaOpen(!mediaOpen)}>
                   <span aria-hidden="true">{mediaOpen ? '▾' : '▸'}</span>
                   <span className="ga-form-section-label">{t('Media')}</span>
-                  <span className="ga-form-hint">({mediaView.elements.length})</span>
+                  <span className="ga-form-hint">({mediaView.elements.length + mediaWaitingOnly.length})</span>
                 </button>
                 <label className="ga-wd-free-check"
                   title={running && !mediaView.enabled
@@ -822,17 +840,26 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
                   <span>{t('Generate media')}</span>
                 </label>
                 <button type="button" className="ga-btn ga-btn-sm"
-                  disabled={mediaBusy || !inReview || !mediaView.enabled || !mediaRetryable}
+                  disabled={mediaBusy || !inReview || status === 'interrupted'
+                    || !mediaView.enabled || !mediaRetryable}
                   onClick={() => { void retryMedia() }}>
                   {t('Retry failed/skipped')}
                 </button>
               </div>
               {mediaOpen ? (
-                mediaView.elements.length === 0 ? (
+                mediaView.elements.length === 0 && mediaWaiting.length === 0 ? (
                   <div className="ga-form-hint">{t('No media jobs yet.')}</div>
                 ) : (
+                  <>
+                  {mediaWaiting.length ? (
+                    <div className="ga-form-hint">
+                      {t('This run was interrupted: its media are rendered after Accept; Discard drops them.')}
+                    </div>
+                  ) : null}
                   <div className="ga-wd-free-media-grid">
-                    {mediaView.elements.map((el) => (
+                    {mediaView.elements.map((el) => {
+                      const waitingHere = mediaWaitingByKey.get(`${el.kind}:${el.id}`)
+                      return (
                       <div key={`${el.kind}:${el.id}`} className="ga-wd-free-media-row">
                         <span className="ga-wd-free-media-name" title={el.id}>
                           {el.kind === 'location' ? t('location') : el.kind === 'character' ? t('character') : el.kind} &quot;{el.name || el.id}&quot;
@@ -850,6 +877,13 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
                               {s.label}
                             </span>
                           ))}
+                          {waitingHere ? waitingHere.steps.map((s) => (
+                            <span key={`waiting:${s.id}`}
+                              className="ga-wd-free-chip ga-wd-free-chip-sm ga-wd-free-chip-waiting"
+                              title={t('Waiting for Accept')}>
+                              {s.label}
+                            </span>
+                          )) : null}
                           {el.produced ? (
                             <span className="ga-form-hint">
                               {t('{n} file(s)').replace('{n}', String(el.produced))}
@@ -860,8 +894,27 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
                           <span className="ga-form-hint ga-wd-free-media-note">{el.note}</span>
                         ) : null}
                       </div>
+                      )
+                    })}
+                    {mediaWaitingOnly.map((el) => (
+                      <div key={`waiting:${el.kind}:${el.id}`} className="ga-wd-free-media-row">
+                        <span className="ga-wd-free-media-name" title={el.id}>
+                          {el.kind === 'location' ? t('location') : el.kind === 'character' ? t('character') : el.kind} &quot;{el.name || el.id}&quot;
+                        </span>
+                        <span className="ga-wd-free-chip ga-wd-free-chip-waiting">
+                          {t('Waiting for Accept')}
+                        </span>
+                        <span className="ga-wd-free-media-steps">
+                          {el.steps.map((s) => (
+                            <span key={s.id} className="ga-wd-free-chip ga-wd-free-chip-sm ga-wd-free-chip-waiting">
+                              {s.label}
+                            </span>
+                          ))}
+                        </span>
+                      </div>
                     ))}
                   </div>
+                  </>
                 )
               ) : null}
             </div>

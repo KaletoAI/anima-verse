@@ -96,6 +96,22 @@ Turns 11/12, the by-name entry write fails AFTER the main write
   create_location {name "Demo Fail", rooms [Cellar], entry_room "Cellar"} -> the
   RuntimeError again, the newest row is a "write" whose inverse deletes the new place, the place
   exists; undo(run, 12) -> complete, no place "Demo Fail".
+Turn 2 (q), one rate per stat (F8d; world_ops._sanitize_stat_rates keeps a
+  second entry of the same stat, and the hourly tick would apply both — one
+  entry per stat is the editor's meaning): the character templates are read
+  from a temp directory with ONE template whose one field has store
+  "status_effects" (stat_hints.get_all_stat_keys collects exactly those), so
+  S = wt._stat_keys()[0] — the stat key is read, never named here.
+  update stat_rates [{S, 2}, {S, -1}] -> refused "'stat_rates[1].stat' 'S' is
+  already rated in stat_rates[0] — one entry per stat", record unchanged; the
+  same in a room (rooms [Hall (id) with those rates, Kitchen (id)]) -> "'rooms[0]
+  .stat_rates[1].stat' 'S' is already rated in rooms[0].stat_rates[0]"
+  (_check_room_extras names a room "rooms[<i>]"). Before the fixture, a FRESH
+  run (closed again: one open run at a time) whose first call is
+  create_location "Demo Spa" with the doubled place rates, then a second one
+  with the doubled room rates -> both refused, the location count is unchanged
+  and the run has no backup_path (the check runs before the safety backup,
+  which is taken lazily before the first write).
 End: discard_preview(run) names "Demo Inn" in exactly one line (the only
   element the run created, the Tower is no element of the run); undo(run) ->
   complete and no place "Demo Inn" — preview and undo agree.
@@ -126,6 +142,20 @@ from app.core import config, db  # noqa: E402
 config.load(paths.get_config_path())
 db.init_schema()
 
+import json  # noqa: E402
+
+from app.models import character_template  # noqa: E402
+
+TEMPLATES = Path(tempfile.mkdtemp(prefix="smoke_wd_lv_tpl_"))
+atexit.register(shutil.rmtree, TEMPLATES, ignore_errors=True)
+(TEMPLATES / "demo-stats.json").write_text(json.dumps({
+    "name": "demo-stats", "template_type": "character",
+    "sections": [{"id": "stats", "fields": [
+        {"key": "demo_stat", "label": "Demo stat", "type": "number",
+         "store": "status_effects"}]}]}), encoding="utf-8")
+character_template.get_templates_dir = lambda: TEMPLATES  # type: ignore[assignment]
+character_template.clear_template_cache()
+
 from app.core import world_dev_runs as wr  # noqa: E402
 from app.core import world_dev_tools as wt  # noqa: E402
 from app.core import world_dev_undo as wu  # noqa: E402
@@ -141,6 +171,27 @@ def check(label, cond, detail=None):
     if not cond:
         failures.append(label)
 
+
+# ── (q) a fresh run: the doubled stat is refused before the first write ──
+STATS = wt._stat_keys()
+check("(q) fixture: the temp world has a stat key", bool(STATS), STATS)
+S = STATS[0] if STATS else "?"
+TWICE = [{"stat": S, "per_hour": 2}, {"stat": S, "per_hour": -1}]
+run_q = wr.create_run("stat twice", "m", "p", "u", 40, 300000)
+n_locs = len(list_locations())
+for tag, data in (("place", {"name": "Demo Spa", "stat_rates": TWICE,
+                             "rooms": [{"name": "Hall"}]}),
+                  ("room", {"name": "Demo Spa",
+                            "rooms": [{"name": "Hall", "stat_rates": TWICE}]})):
+    res = wt.run_tool(wt.ToolCtx(run_id=run_q, turn=1), "create_location", {"data": data})
+    check(f"(q) create, {tag} stat twice: refused", not res.ok and not res.wrote, res)
+    check(f"(q) create, {tag} stat twice: line", "is already rated in" in res.line
+          and "one entry per stat" in res.line, res.line)
+check("(q) create: location count unchanged", len(list_locations()) == n_locs,
+      (n_locs, len(list_locations())))
+check("(q) create: no backup taken", not (wr.get_run(run_q) or {}).get("backup_path"),
+      (wr.get_run(run_q) or {}).get("backup_path"))
+wr.set_status(run_q, "rolled_back")  # one open run at a time
 
 run = wr.create_run("location values", "m", "p", "u", 40, 300000)
 
@@ -228,6 +279,14 @@ refused("(k) drop the entry room", {"id": INN, "patch": {"rooms": [{"id": HALL}]
         'removes the entry room "Kitchen"', "send entry_room too")
 refused("(m) danger 10**400", {"id": INN, "patch": {"danger_level": 10 ** 400}},
         "'danger_level' must be a number")
+
+# ── Turn 2 (q): one rate per stat ───────────────────────────────────────
+refused("(q) place stat twice", {"id": INN, "patch": {"stat_rates": TWICE}},
+        f"'stat_rates[1].stat' {S!r} is already rated in stat_rates[0] — one entry per stat")
+refused("(q) room stat twice", {"id": INN, "patch": {"rooms": [
+    {"id": HALL, "stat_rates": TWICE}, {"id": KITCHEN}]}},
+        f"'rooms[0].stat_rates[1].stat' {S!r} is already rated in "
+        "rooms[0].stat_rates[0] — one entry per stat")
 
 # ── Turn 3: accepted values ──────────────────────────────────────────────
 before3 = get_location_by_id(INN)

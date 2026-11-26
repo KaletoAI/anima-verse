@@ -27,9 +27,10 @@ touches them):
          meta.label "Demo Grove" (an area with NPC slots needs one), meta.scatter =
          one entry, meta.npc_slots = one slot (role "Demo Guard").
 
-Seed outline: a place without a drawn boundary is judged as the 10 m square
+Seed outline: create_location without a boundary stores the 10 m square
 (map_layout_apply.SEED_BOUNDARY_M = 10) centred on its pin, so a pin at
-(100,100) spans x 95…105, z 95…105.
+(100,100) spans x 95…105, z 95…105 (third run: the stored square, and a place
+without a stored outline is its pin only).
 
 Pure helpers (map_layout_apply), entries {name, pos_x, pos_z, yaw_deg,
 boundary = seed square}: A at (0,0) spans -5…5, B at (5,0) spans 0…10 (shares
@@ -134,6 +135,32 @@ Second run (all far from the fixtures, which cover 0…40 and 150…160):
            add_terrain_area with polygon [[0,0],[5,0],[10,0]] -> both
            refused with "encloses no area".
   (m) undo(run 2) -> complete, no place of run 2 left, the run-2 area gone.
+
+Third run — F9 (plan docs/superpowers/plans/2026-11-25-world-dev-free-fixes.md,
+Task 11): create_location STORES the seed square when no boundary is given, and
+a place without a stored boundary (made elsewhere) is judged as its pin only —
+it has no area on the map (world_geometry.effective_boundary). Everything lies
+far east of the fixtures (x >= 1000, default grass ground). Seed square =
+SEED_BOUNDARY_M (10) centred on the pin, ±5 m.
+  (o1) create_location Demo Barn at (1100,100), no boundary -> ok; the stored
+       map3d.boundary == mla.seed_boundary(), map3d.plan_width_m == 10; the
+       line has "outline: 10 m square (no boundary given)".
+  (o2) Demo Pin upserted directly at (1000,0) WITHOUT map3d (no outline).
+       create_location Demo Cart at (1008,0), no boundary: it spans x
+       1003…1013, z -5…5. The pin (1000,0) lies outside that and has no area
+       -> no "; warnings:" (before: the pin's assumed seed 995…1005 shared
+       x 1003…1005 with the cart and warned).
+       map_region{990,-10,1020,10}: the Demo Pin line has no "outline" and
+       " · on grass"; the cart line has "outline (1003,-5)-(1013,5)".
+  (o3) Demo Post upserted at (2000,0) without map3d. create_location Demo
+       Gate at (2008,0) WITH boundary [[-10,-1],[10,-1],[10,1],[-10,1]]: it
+       spans x 1998…2018, z -1…1 and contains the post's pin -> still no
+       "; warnings:" (a pin has no area to share).
+  (o4) Demo Shop at (1300,0) and Demo Inn at (1308,0), both without boundary:
+       stored squares 1295…1305 and 1303…1313 share x 1303…1305 -> the inn's
+       line has 'overlaps place <shop id> "Demo Shop"'.
+  (o5) undo(run 3) -> complete; Barn, Cart, Gate, Shop, Inn gone; Demo Pin
+       and Demo Post (not the run's) stay unchanged.
 """
 from __future__ import annotations
 
@@ -456,6 +483,72 @@ check("(m) no run-2 place left",
                                  "Demo Kiosk", "Demo Hall")))
 ids = {a["id"] for a in terrain.list_areas()}
 check("(m) run-2 area gone, fixtures kept", ids == {F_IMP, F_GRW, F_ALONG}, ids)
+
+# ── Third run: F9 — the seed square is stored, outline-less places are pins ──
+wr.set_status(run, "rolled_back")
+run = wr.create_run("placement3", "m", "p", "u", 40, 300000)
+from app.models.world import upsert_location  # noqa: E402
+
+# (o1)
+res = call(1, "create_location", {"data": {"name": "Demo Barn", "rooms": [{"name": "Room"}]},
+                                  "x": 1100, "z": 100})
+check("(o1) ok", res.ok and res.wrote, res)
+barn = (named("Demo Barn") or [{}])[0]
+check("(o1) seed square stored", (barn.get("map3d") or {}).get("boundary") == SEED,
+      barn.get("map3d"))
+check("(o1) plan width 10", float((barn.get("map3d") or {}).get("plan_width_m") or 0) == 10.0,
+      barn.get("map3d"))
+check("(o1) line names the seed outline",
+      "outline: 10 m square (no boundary given)" in res.line, res.line)
+
+# (o2)
+upsert_location({"id": "loc_demo_pin", "name": "Demo Pin", "pos_x": 1000.0, "pos_z": 0.0,
+                 "yaw_deg": 0.0}, sync_world=False)
+PIN_BEFORE = get_location_by_id("loc_demo_pin")
+check("(o2) fixture pin has no outline",
+      not ((PIN_BEFORE or {}).get("map3d") or {}).get("boundary"), PIN_BEFORE)
+res = call(1, "create_location", {"data": {"name": "Demo Cart", "rooms": [{"name": "Room"}]},
+                                  "x": 1008, "z": 0})
+check("(o2) cart ok, no warning (a pin has no area)",
+      res.ok and "; warnings:" not in res.line, res)
+CART = (named("Demo Cart") or [{}])[0].get("id") or ""
+res = call(1, "map_region", {"min_x": 990, "min_z": -10, "max_x": 1020, "max_z": 10})
+lines = res.line.split("\n")
+pin_line = next((l for l in lines if l.startswith("place loc_demo_pin ")), "")
+check("(o2) pin line without outline",
+      bool(pin_line) and "outline" not in pin_line and " · on grass" in pin_line, pin_line)
+cart_line = next((l for l in lines if l.startswith(f"place {CART} ")), "")
+check("(o2) cart outline box", "outline (1003,-5)-(1013,5)" in cart_line, cart_line)
+
+# (o3)
+upsert_location({"id": "loc_demo_post", "name": "Demo Post", "pos_x": 2000.0, "pos_z": 0.0,
+                 "yaw_deg": 0.0}, sync_world=False)
+POST_BEFORE = get_location_by_id("loc_demo_post")
+res = call(1, "create_location", {"data": {"name": "Demo Gate", "rooms": [{"name": "Room"}]},
+                                  "x": 2008, "z": 0,
+                                  "boundary": [[-10, -1], [10, -1], [10, 1], [-10, 1]]})
+check("(o3) drawn outline over a pin: no warning",
+      res.ok and "; warnings:" not in res.line, res)
+
+# (o4)
+res = call(1, "create_location", {"data": {"name": "Demo Shop", "rooms": [{"name": "Room"}]},
+                                  "x": 1300, "z": 0})
+check("(o4) shop ok", res.ok, res)
+SHOP = (named("Demo Shop") or [{}])[0].get("id") or ""
+res = call(1, "create_location", {"data": {"name": "Demo Inn", "rooms": [{"name": "Room"}]},
+                                  "x": 1308, "z": 0})
+check("(o4) inn overlaps the stored shop square",
+      res.ok and f'overlaps place {SHOP} "Demo Shop"' in res.line, res)
+
+# (o5)
+rep = wu.undo(run)
+check("(o5) undo complete", rep["complete"], rep)
+check("(o5) no run-3 place left",
+      not any(named(n) for n in ("Demo Barn", "Demo Cart", "Demo Gate", "Demo Shop",
+                                 "Demo Inn")))
+check("(o5) pin and post unchanged",
+      get_location_by_id("loc_demo_pin") == PIN_BEFORE
+      and get_location_by_id("loc_demo_post") == POST_BEFORE)
 
 print()
 if failures:

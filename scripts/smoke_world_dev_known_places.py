@@ -93,6 +93,14 @@ Turn 10 (m) a stored non-list: Demo Keyless gets config known_locations
       "Demo Hut" (a string), then JSON null; update{known_places: [B]} is
       refused each time ("are no list"), no write row in turn 10, the stored
       value unchanged.
+  (o) add_known_location under the profile lock (F8e): "Demo Ada" (saved
+      directly, known_locations []); thread A takes keyed_lock
+      ("character_profile", "Demo Ada") and holds it 0.3 s; thread B, started
+      0.05 s later, calls models.character.add_known_location("Demo Ada", A).
+      A locked read-modify-write cannot read before A lets go, so B ends no
+      earlier than A's release (time.monotonic of both, B's end >= A's
+      release) — unlocked, B would end at ~0.05 s, long before 0.3 s. The
+      stored list is then [A] (A exactly once).
   (g) travel: travel_engine.start_journey(Demo Fisher, C) does not answer
       "unknown_target" (C is known); start_journey(Demo Old, C) does (its
       known places are [A] after (c)'s undo).
@@ -439,6 +447,48 @@ check("(n) undo restores [A, 5, \"\"]",
 c = dict(get_character_config(KEYLESS) or {})
 c.pop("known_locations", None)
 save_character_config(KEYLESS, c)
+
+# ── (o) add_known_location waits for the profile lock ─────────────
+import threading  # noqa: E402
+import time  # noqa: E402
+
+from app.core.keyed_lock import keyed_lock  # noqa: E402
+
+ADA = "Demo Ada"
+save_character_profile(ADA, {"template": "human-roleplay"}, create_new=True)
+c = dict(get_character_config(ADA) or {})
+c["known_locations"] = []
+save_character_config(ADA, c)
+stamps = {}
+held = threading.Event()
+
+
+def _holder():
+    with keyed_lock("character_profile", ADA):
+        held.set()
+        time.sleep(0.3)
+        stamps["a_release"] = time.monotonic()
+
+
+def _adder():
+    mchar.add_known_location(ADA, A)
+    stamps["b_end"] = time.monotonic()
+
+
+ta = threading.Thread(target=_holder)
+ta.start()
+held.wait(2)
+time.sleep(0.05)
+tb = threading.Thread(target=_adder)
+tb.start()
+ta.join(5)
+tb.join(5)
+check("(o) B ended no earlier than A's release",
+      "b_end" in stamps and "a_release" in stamps
+      and stamps["b_end"] >= stamps["a_release"], stamps)
+check("(o) stored list [A] (A once)",
+      (get_character_config(ADA) or {}).get("known_locations") == [A],
+      get_character_config(ADA))
 
 # ── (g) travel ─────────────────────────────────────────────────────────
 from app.core import travel_engine  # noqa: E402

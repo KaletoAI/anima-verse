@@ -54,17 +54,28 @@ R, S1, S2, S3:
   (c) get_area{H}: 'height <H> "Demo Hill" height_m 5 falloff_m 30' then
       'polygon (300 points): ' + FMT(H polygon).
   (d) unknown id "ta_nosuch" -> refused: ok False, "no terrain or height area".
-  (e) own budget MAX_AREA_CHARS = 12000, of which 80 characters are kept for
-      the cut line; every list is cut on a WHOLE point and closed by ",…]".
+  (e) own budget MAX_AREA_CHARS = 12000; every list is cut on a WHOLE point
+      and closed by ",…]". The cut line names the follow-up call per cut
+      part: '<part>: <s> of <n> points shown; more: get_area{"id": "<id>",
+      "points": "<part>", "offset": <s>}', parts joined by "; ", the whole
+      wrapped in '[cut — ' … ']'. Its room is reserved up front as the
+      WORST-CASE line (plan 2026-11-25-world-dev-free-fixes Task 8): every
+      present part (stroke if the area has one, polygon always) at
+      s = n (the most digits), plus its newline.
       A terrain area L of 2000 points [1000.11 + i, 2000.22] (i = 0..1999):
-      every point is "[dddd.11,2000.22]" = 17 characters. Head
+      every point is "[dddd.11,2000.22]" = 17 characters. Worst-case cut
+      line '[cut — polygon: 2000 of 2000 points shown; more:
+      get_area{"id": "ta_long", "points": "polygon", "offset": 2000}]' =
+      7 + 34 + 8 ("; more: ") + 62 + 1 = 112, reserve 113. Head
       'terrain ta_long grass z_order 0' = 31 characters, so the polygon line
-      may take 12000 - 80 - 31 - 1 (newline) = 11888 characters. Prefix
+      may take 12000 - 113 - 31 - 1 (newline) = 11855 characters. Prefix
       'polygon (2000 points): ' = 23; n points take 23 + 1 ("[") + 17n +
-      (n - 1) commas + 3 (",…]") = 26 + 18n <= 11888 -> n = 659 (exactly
-      11888). Result: head, 'polygon (2000 points): [' + the first 659
-      points joined by "," + ',…]', then '[cut — polygon: 659 of 2000 points
-      shown]'. No coordinate is split.
+      (n - 1) commas + 3 (",…]") = 26 + 18n <= 11855 -> n = 657 (line
+      11852). Result: head, 'polygon (2000 points): [' + the first 657
+      points joined by "," + ',…]', then '[cut — polygon: 657 of 2000 points
+      shown; more: get_area{"id": "ta_long", "points": "polygon", "offset":
+      657}]' (110). Total 31 + 1 + 11852 + 1 + 110 = 11995. No coordinate is
+      split. (With the old fixed 80-character reserve: 659 points.)
   (f) mid-size outline (D11 must not depend on the remaining budget): box
       (200,200)-(300,300) holds M, kind "grass", 80 points: for i = 0..39
       [210.13 + 1.01*i, 220.17], then for j = 0..39 [210.13 + 1.01*(39-j),
@@ -85,17 +96,21 @@ R, S1, S2, S3:
       [100.11 + (399-j), 504.22] for j = 0..399. Each point is
       "[ddd.11,50d.22]" = 15 characters. Head 'terrain ta_road water z_order
       0' = 31. A water area carries the extras line 'water: water_level=0'
-      (WATER LINE below) = 20 characters + newline, reserved first, so
-      12000 - 80 - 31 - 21 = 11868 characters are left. Stroke line
-      'stroke: width_m 8 points ' (25) + 400*15 + 399 + 2 = 6426 <= 11867 ->
-      WHOLE. Left for the polygon: 11868 - 6427 = 5441, line budget 5440.
-      Prefix 'polygon (800 points): ' = 22; n points take 22 + 1 + 15n +
-      (n - 1) + 3 = 25 + 16n <= 5440 -> n = 338 (line length 5433). Result:
-      head, the whole stroke line, 'polygon (800 points): [' + the first 338
-      polygon points + ',…]', the water line, then
-      '[cut — polygon: 338 of 800 points shown]'.
-      (Before the extras lines existed (Task 6 of the phase-2 plan): 339
-      points, line 5449.)
+      (WATER LINE below) = 20 characters + newline, reserved first. The
+      worst-case cut line names both parts: 7 + 'stroke: 400 of 400 points
+      shown' (31) + 8 + 'get_area{"id": "ta_road", "points": "stroke",
+      "offset": 400}' (60) + 2 ("; ") + 'polygon: 800 of 800 points shown'
+      (32) + 8 + 'get_area{"id": "ta_road", "points": "polygon", "offset":
+      800}' (61) + 1 = 210, reserve 211. So 12000 - 211 - 31 - 21 = 11737
+      characters are left. Stroke line 'stroke: width_m 8 points ' (25) +
+      400*15 + 399 + 2 = 6426 -> WHOLE. Left for the polygon:
+      11737 - 6427 = 5310, line budget 5309. Prefix 'polygon (800 points): '
+      = 22; n points take 22 + 1 + 15n + (n - 1) + 3 = 25 + 16n <= 5309 ->
+      n = 330 (line length 5305). Result: head, the whole stroke line,
+      'polygon (800 points): [' + the first 330 polygon points + ',…]', the
+      water line, then '[cut — polygon: 330 of 800 points shown; more:
+      get_area{"id": "ta_road", "points": "polygon", "offset": 330}]'.
+      (Fixed 80-character reserve: 338 points, line 5433.)
   (h) optional stroke keys: area ta_brook, kind "water", stroke {points
       [[5,5],[15,5],[25,8]], width_m 3, style "wavy", spacing_m 6,
       amplitude_m 1.5} (all inside terrain's clamps 2..100 / 0.5..30, so
@@ -112,20 +127,26 @@ R, S1, S2, S3:
       for i = 0..1023 (MAX_STROKE_POINTS), width_m 8}, polygon of 2048
       points [3000.11 + i, 4000.22] (i = 0..2047). Head
       'terrain ta_fill water "' + 80 + '" z_order 0' = 22 + 1 + 80 + 1 + 10
-      = 114; the water line (20 + newline) is reserved, so
-      12000 - 80 - 114 - 21 = 11785 are left. The shortest polygon
-      line 'polygon (2048 points): […]' (26) plus its newline (27) is
-      reserved, so the stroke line budget is 11785 - 1 - 27 = 11757. Every
+      = 114; the water line (20 + newline) is reserved, and the worst-case
+      cut line 7 + 'stroke: 1024 of 1024 points shown' (33) + 8 +
+      'get_area{"id": "ta_fill", "points": "stroke", "offset": 1024}' (61) +
+      2 + 'polygon: 2048 of 2048 points shown' (34) + 8 + 'get_area{"id":
+      "ta_fill", "points": "polygon", "offset": 2048}' (62) + 1 = 216 plus
+      its newline, so 12000 - 217 - 114 - 21 = 11648 are left. The shortest
+      polygon line 'polygon (2048 points): […]' (26) plus its newline (27) is
+      reserved, so the stroke line budget is 11648 - 1 - 27 = 11620. Every
       stroke point is "[dddd.11,2000.22]" = 17 characters; prefix
       'stroke: width_m 8 points ' = 25; n points take 25 + 1 + 17n + (n - 1)
-      + 3 = 28 + 18n <= 11757 -> n = 651 (line 11746). Left for the polygon
-      11785 - 11747 = 38, line budget 37: one point would take 23 + 1 + 17
-      + 3 = 44 > 37, so the line is 'polygon (2048 points): […]'. Then the
-      water line; cut line '[cut — stroke: 651 of 1024 points shown;
-      polygon: 0 of 2048 points shown]' = 7 + 32 + 2 + 31 + 1 = 73. Total
-      114 + 1 + 11746 + 1 + 26 + 1 + 20 + 1 + 73 = 11983 <= 12000. (The code
-      before the reserve for the polygon line: 654 points, total 12016;
-      before the extras lines: 652 points, line 11764, total 11980.)
+      + 3 = 28 + 18n <= 11620 -> n = 644 (line exactly 11620). Left for the
+      polygon 11648 - 11621 = 27, line budget 26: one point would take
+      23 + 1 + 17 + 3 = 44 > 26, so the line is 'polygon (2048 points): […]'
+      (26, fits exactly). Then the water line; cut line '[cut — stroke: 644
+      of 1024 points shown; more: get_area{"id": "ta_fill", "points":
+      "stroke", "offset": 644}; polygon: 0 of 2048 points shown; more:
+      get_area{"id": "ta_fill", "points": "polygon", "offset": 0}]' = 7 + 32
+      + 8 + 60 + 2 + 31 + 8 + 59 + 1 = 208. Total 114 + 1 + 11620 + 1 + 26 +
+      1 + 20 + 1 + 208 = 11992 <= 12000. (Fixed 80-character reserve with
+      the short cut line: 651 points, total 11983.)
   WATER LINE: every "water" fixture here is saved through terrain.save_area
       without a level, so terrain.settle_water_level freezes water_level =
       the median natural height along its rim — 0 on this flat temp world (no
@@ -153,11 +174,53 @@ R, S1, S2, S3:
       {points [[300,310],[340,310]], width_m 6, along [{spacing_m 25,
       offset_m 4}]}. undo(run, turn=2) restores the whole row: meta.stroke points
       [[300,300],[340,300]] again, along unchanged.
+  (m) paging (points / offset / limit): area ta_page, kind "grass", polygon
+      [[i, 0] for i = 0..9] (10 points, all on z = 0 — the sanitizer keeps a
+      collinear outline, as for ta_long), no stroke. Head 'terrain ta_page
+      grass z_order 0'.
+      {points "polygon", offset 7, limit 2} -> line 2 'polygon points 7…8 of
+      10: [[7,0],[8,0]]' (the slice 7, 8; whole JSON since nothing was cut
+      by the budget), last line '[more — get_area{"id": "ta_page", "points":
+      "polygon", "offset": 9}]' (8 + 1 = 9 < 10). 3 lines.
+      {points "polygon", offset 9} -> 'polygon points 9…9 of 10: [[9,0]]', no
+      more line (9 + 1 = 10): 2 lines.
+      Refusals: offset 10 -> 'offset 10 is past the last point (10 points:
+      0…9)'; points "stroke" -> 'area ta_page has no stroke'; offset 3
+      without points -> refused (it names 'points'); limit 2 without points
+      -> refused; points "line" -> refused (names stroke and polygon);
+      limit 0, offset -1, offset 1.5, offset true -> refused.
+  (n) the default cut line names its follow-up, and paging through it gives
+      the whole list back: area ta_cutref, kind "grass", stroke of
+      terrain.MAX_STROKE_POINTS = 1024 points [1000.11 + i, 2000.22] (the
+      sanitizer caps a stroke at 1024, so the plan's 3000 cannot be stored;
+      1024 points of 17 characters are ~18 400 characters, over 12000 all
+      the same), polygon the square [[0,0],[4,0],[4,4],[0,4]]. The answer's
+      last line starts '[cut — stroke: ' and contains '"points": "stroke",
+      "offset": <s>}' with <s> the count of 'stroke: <s> of 1024 points
+      shown'; 0 < s < 1024. Then get_area{points "stroke", offset s}, and
+      every following page at the offset its '[more — …]' line names, until
+      a page has no more line: the pages' points (a cut list's ',…]' read
+      as ']') appended to the first s points equal the stored stroke —
+      nothing skipped, nothing repeated; every page <= 12000.
+  (o) length bound: an id of 60 characters ('ta_' + 57 'x'), kind "grass",
+      stroke 1024 points and polygon terrain.MAX_POINTS = 2050 points
+      [3000.11 + i, 4000.22] — both cut. The reserve is the cut line built
+      with s = n = 1024 / 2050 for both parts and this id, which is at
+      least as long as the real line (whose s are smaller), so
+      len(answer) <= MAX_AREA_CHARS, and the cut line names both parts
+      ('"points": "stroke"' and '"points": "polygon"'). Paged reads of the
+      same area (polygon offset 0, stroke offset 0) stay <= 12000 too.
+  (p) signature and keys: get_area{"id": "ta_page", "bogus": 1} -> the
+      _only_keys refusal 'unknown get_area key(s) bogus — allowed: id,
+      limit, offset, points'; the registered signature string contains
+      'points?' (and 'offset?', 'limit?').
 """
 from __future__ import annotations
 
 import atexit
+import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -279,12 +342,13 @@ full = f"terrain {L} grass z_order 0\npolygon (2000 points): " + FMT(L_POLY)
 check("(e) fixture longer than the budget", len(full) > 12000, len(full))
 res = wt.run_tool(ctx, "get_area", {"id": L})
 want = ("terrain ta_long grass z_order 0\npolygon (2000 points): ["
-        + ",".join(f"[{num(x)},{num(z)}]" for x, z in L_POLY[:659]) + ",…]"
-        + "\n[cut — polygon: 659 of 2000 points shown]")
-check("(e) cut on point 659", res.line == want, res.line[-120:])
-check("(e) polygon line 11888 chars", len(res.line.split("\n")[1]) == 11888,
+        + ",".join(f"[{num(x)},{num(z)}]" for x, z in L_POLY[:657]) + ",…]"
+        + '\n[cut — polygon: 657 of 2000 points shown; more: get_area{"id": "ta_long", '
+        '"points": "polygon", "offset": 657}]')
+check("(e) cut on point 657", res.line == want, res.line[-160:])
+check("(e) polygon line 11852 chars", len(res.line.split("\n")[1]) == 11852,
       len(res.line.split("\n")[1]))
-check("(e) within the budget", len(res.line) <= 12000, len(res.line))
+check("(e) total 11995", len(res.line) == 11995, len(res.line))
 
 # (f)
 M_POLY = ([[round(210.13 + 1.01 * i, 2), 220.17] for i in range(40)]
@@ -323,13 +387,14 @@ check("(g) head", out[0] == "terrain ta_road water z_order 0", out[0])
 check("(g) whole stroke line", len(out) > 1
       and out[1] == "stroke: width_m 8 points " + FMT(G_STROKE)
       and len(out[1]) == 6426, out[1][:80] if len(out) > 1 else None)
-check("(g) polygon cut on point 339", len(out) > 2
+check("(g) polygon cut on point 330", len(out) > 2
       and out[2] == "polygon (800 points): [" + ",".join(
-          f"[{num(x)},{num(z)}]" for x, z in G_POLY[:338]) + ",…]"
-      and len(out[2]) == 5433, out[2][-60:] if len(out) > 2 else None)
+          f"[{num(x)},{num(z)}]" for x, z in G_POLY[:330]) + ",…]"
+      and len(out[2]) == 5305, out[2][-60:] if len(out) > 2 else None)
 check("(g) water line, then the cut line", len(out) == 5
       and out[3] == "water: water_level=0"
-      and out[4] == "[cut — polygon: 338 of 800 points shown]",
+      and out[4] == ('[cut — polygon: 330 of 800 points shown; more: get_area{"id": '
+                     '"ta_road", "points": "polygon", "offset": 330}]'),
       out[3:] if len(out) > 3 else None)
 check("(g) within the budget", len(res.line) <= 12000, len(res.line))
 
@@ -364,17 +429,19 @@ terrain.save_area({"id": "ta_fill", "kind": "water", "polygon": J_POLY,
 res = wt.run_tool(ctx, "get_area", {"id": "ta_fill"})
 out = res.line.split("\n")
 check("(j) head 114", len(out[0]) == 114, len(out[0]))
-check("(j) stroke cut on point 651", len(out) > 1
+check("(j) stroke cut on point 644", len(out) > 1
       and out[1] == "stroke: width_m 8 points [" + ",".join(
-          f"[{num(x)},{num(z)}]" for x, z in J_STROKE[:651]) + ",…]"
-      and len(out[1]) == 11746, len(out[1]) if len(out) > 1 else None)
+          f"[{num(x)},{num(z)}]" for x, z in J_STROKE[:644]) + ",…]"
+      and len(out[1]) == 11620, len(out[1]) if len(out) > 1 else None)
 check("(j) empty polygon line", len(out) > 2 and out[2] == "polygon (2048 points): […]",
       out[2:3])
 check("(j) water line, then the cut line", len(out) == 5
       and out[3] == "water: water_level=0" and out[4]
-      == "[cut — stroke: 651 of 1024 points shown; polygon: 0 of 2048 points shown]",
+      == ('[cut — stroke: 644 of 1024 points shown; more: get_area{"id": "ta_fill", '
+          '"points": "stroke", "offset": 644}; polygon: 0 of 2048 points shown; more: '
+          'get_area{"id": "ta_fill", "points": "polygon", "offset": 0}]'),
       out[3:])
-check("(j) total 11983 <= 12000", len(res.line) == 11983, len(res.line))
+check("(j) total 11992 <= 12000", len(res.line) == 11992, len(res.line))
 
 # (k)
 terrain.save_area({"id": "ta_far", "kind": "grass", "polygon":
@@ -408,6 +475,105 @@ wu.undo(run, turn=2)
 got = (terrain.get_area("ta_lamps").get("meta") or {}).get("stroke")
 check("(l) undo restores", got == {"points": [[300, 300], [340, 300]], "width_m": 6,
                                    "along": [{"spacing_m": 25, "offset_m": 4}]}, got)
+
+# (m)
+P_POLY = [[i, 0] for i in range(10)]
+terrain.save_area({"id": "ta_page", "kind": "grass", "polygon": P_POLY})
+res = wt.run_tool(ctx, "get_area", {"id": "ta_page", "points": "polygon", "offset": 7,
+                                    "limit": 2})
+out = res.line.split("\n")
+check("(m) ok", res.ok, res.line)
+check("(m) head", out[0] == "terrain ta_page grass z_order 0", out[0])
+check("(m) slice 7…8", len(out) > 1 and out[1] == "polygon points 7…8 of 10: [[7,0],[8,0]]",
+      out[1:2])
+check("(m) more line", len(out) == 3 and out[2]
+      == '[more — get_area{"id": "ta_page", "points": "polygon", "offset": 9}]', out[2:])
+res = wt.run_tool(ctx, "get_area", {"id": "ta_page", "points": "polygon", "offset": 9})
+check("(m) last page, no more line",
+      res.ok and res.line.split("\n")[1:] == ["polygon points 9…9 of 10: [[9,0]]"], res.line)
+res = wt.run_tool(ctx, "get_area", {"id": "ta_page", "points": "polygon", "offset": 10})
+check("(m) offset past the end", not res.ok
+      and "offset 10 is past the last point (10 points: 0…9)" in res.line, res.line)
+res = wt.run_tool(ctx, "get_area", {"id": "ta_page", "points": "stroke"})
+check("(m) no stroke", not res.ok and "area ta_page has no stroke" in res.line, res.line)
+for bad, needle in (({"offset": 3}, "points"), ({"limit": 2}, "points"),
+                    ({"points": "line"}, "polygon"),
+                    ({"points": "polygon", "limit": 0}, "limit"),
+                    ({"points": "polygon", "offset": -1}, "offset"),
+                    ({"points": "polygon", "offset": 1.5}, "offset"),
+                    ({"points": "polygon", "offset": True}, "offset")):
+    res = wt.run_tool(ctx, "get_area", {"id": "ta_page", **bad})
+    check(f"(m) refused {bad}", not res.ok and needle in res.line, res.line)
+
+
+def page_points(line):
+    """The point list of a paged line ('<part> points a…b of n: [...]')."""
+    body = line.split(": ", 1)[1]
+    if body.endswith(",…]"):
+        body = body[:-3] + "]"
+    return json.loads(body)
+
+
+# (n)
+N_STROKE = [[round(1000.11 + i, 2), 2000.22] for i in range(1024)]
+terrain.save_area({"id": "ta_cutref", "kind": "grass",
+                   "polygon": [[0, 0], [4, 0], [4, 4], [0, 4]],
+                   "meta": {"stroke": {"points": N_STROKE, "width_m": 8}}})
+res = wt.run_tool(ctx, "get_area", {"id": "ta_cutref"})
+out = res.line.split("\n")
+check("(n) within the budget", len(res.line) <= 12000, len(res.line))
+m_shown = re.search(r"\[cut — stroke: (\d+) of 1024 points shown", out[-1])
+m_off = re.search(r'"points": "stroke", "offset": (\d+)\}', out[-1])
+check("(n) cut line names the follow-up", bool(m_shown and m_off), out[-1])
+shown = int(m_shown.group(1)) if m_shown else -1
+check("(n) offset == shown, 0 < s < 1024", bool(m_off) and int(m_off.group(1)) == shown
+      and 0 < shown < 1024, (shown, out[-1]))
+got = list(N_STROKE[:shown]) if shown > 0 else []
+offset, pages = shown, 0
+while 0 < offset and pages < 10:
+    pages += 1
+    res = wt.run_tool(ctx, "get_area", {"id": "ta_cutref", "points": "stroke",
+                                        "offset": offset})
+    out = res.line.split("\n")
+    check(f"(n) page {pages} ok and <= 12000", res.ok and len(res.line) <= 12000,
+          (res.line[:200], len(res.line)))
+    if not res.ok:
+        break
+    pts = page_points(out[1])
+    check(f"(n) page {pages} starts at {offset}",
+          out[1].startswith(f"stroke points {offset}…{offset + len(pts) - 1} of 1024: "),
+          out[1][:60])
+    got += pts
+    more = re.search(r'^\[more — get_area\{"id": "ta_cutref", "points": "stroke", '
+                     r'"offset": (\d+)\}\]$', out[-1])
+    offset = int(more.group(1)) if more else 0
+check("(n) pages give the whole stroke back", got == N_STROKE, (len(got), pages))
+
+# (o)
+LONG_ID = "ta_" + "x" * 57
+check("(o) id is 60 characters", len(LONG_ID) == 60)
+terrain.save_area({"id": LONG_ID, "kind": "grass",
+                   "polygon": [[round(3000.11 + i, 2), 4000.22] for i in range(2050)],
+                   "meta": {"stroke": {"points": N_STROKE, "width_m": 8}}})
+res = wt.run_tool(ctx, "get_area", {"id": LONG_ID})
+last = res.line.split("\n")[-1]
+check("(o) <= MAX_AREA_CHARS", res.ok and len(res.line) <= wt.MAX_AREA_CHARS, len(res.line))
+check("(o) cut line names both parts", '"points": "stroke"' in last
+      and '"points": "polygon"' in last and LONG_ID in last, last)
+for part in ("polygon", "stroke"):
+    res = wt.run_tool(ctx, "get_area", {"id": LONG_ID, "points": part, "offset": 0})
+    check(f"(o) paged {part} <= MAX_AREA_CHARS with a more line",
+          res.ok and len(res.line) <= wt.MAX_AREA_CHARS
+          and res.line.split("\n")[-1].startswith("[more — "), (len(res.line), res.line[-120:]))
+
+# (p)
+res = wt.run_tool(ctx, "get_area", {"id": "ta_page", "bogus": 1})
+check("(p) unknown key refused", not res.ok
+      and "unknown get_area key(s) bogus — allowed: id, limit, offset, points" in res.line,
+      res.line)
+sig = wt.TOOLS["get_area"].signature
+check("(p) signature names the paging",
+      all(k in sig for k in ("points?", "offset?", "limit?")), sig)
 
 print()
 if failures:

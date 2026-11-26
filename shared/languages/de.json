@@ -7235,6 +7235,8 @@
     "Retry failed/skipped": "Fehlgeschlagene/übersprungene erneut versuchen",
     "location": "Ort",
     "No media jobs yet.": "Noch keine Medienaufträge.",
+    "Waiting for Accept": "Wartet auf Übernehmen",
+    "This run was interrupted: its media are rendered after Accept; Discard drops them.": "Dieser Lauf wurde unterbrochen: seine Medien werden nach Übernehmen erzeugt; Verwerfen verwirft sie.",
     "After each turn the server renders the standard images and 3D models of what the run built; Discard removes them again.": "Nach jedem Zug rendert der Server die Standardbilder und 3D-Modelle dessen, was der Lauf gebaut hat; Verwerfen entfernt sie wieder.",
     "Media switch failed": "Medienschalter fehlgeschlagen",
     "Media retry failed": "Erneuter Medienversuch fehlgeschlagen",

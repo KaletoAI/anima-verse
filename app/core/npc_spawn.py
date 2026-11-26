@@ -125,6 +125,11 @@ def cap_reached() -> bool:
 # Slots — pure
 # ---------------------------------------------------------------------------
 
+#: The highest count_min / count_max a slot stores: ``normalize_slot`` clamps
+#: to it, and the World Dev tools refuse a larger value with this same bound.
+SLOT_COUNT_MAX = 20
+
+
 def normalize_slot(raw: Any) -> Optional[Dict[str, Any]]:
     """One authored slot, cleaned. ``None`` when it names no role.
 
@@ -170,7 +175,7 @@ def normalize_slot(raw: Any) -> Optional[Dict[str, Any]]:
             value = float(raw.get(key, fallback))
             if not math.isfinite(value):
                 raise ValueError(f"{key} must be finite")
-            return max(0, min(20, int(value)))
+            return max(0, min(SLOT_COUNT_MAX, int(value)))
         except (TypeError, ValueError, OverflowError):
             logger.warning("slot %r: unusable %s %r — using %d", role, key,
                            raw.get(key), fallback)

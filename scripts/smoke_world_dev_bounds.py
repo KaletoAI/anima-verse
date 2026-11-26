@@ -17,10 +17,11 @@ manual's "small village"). A point is outside when x < min_x or x > max_x or
 z < min_z or z > max_z (map_layout_apply.point_outside — the box edge itself is
 inside).
 
-A place without a drawn outline is judged by its seed square
+create_location without a boundary STORES the seed square
 (map_layout_apply.seed_boundary: SEED_BOUNDARY_M = 10, a square ±5 m around the
-pin, 4 corners), so a place yields 5 points: its pin + the 4 world corners
-(yaw 0: pin ± 5 on both axes).
+pin, 4 corners), so such a place yields 5 points: its pin + the 4 world corners
+(yaw 0: pin ± 5 on both axes). A place made elsewhere without a stored outline
+is its pin only (case k).
 
   (a) empty world: world_overview{} has the line "extent: none yet" (no place,
       no area — current_world_bounds() is None) and the line
@@ -47,8 +48,9 @@ pin, 4 corners), so a place yields 5 points: its pin + the 4 world corners
   (e2) add_height_area [[300,300],[400,300],[400,400]] height 5 -> ok with
       ": 3 of 3 points lie outside the build bounds" (every x >= 300 > 150).
   (e3) set_build_bounds{B} again -> ok, the line ends
-      "; warning: 3 places / areas lie outside — they stay, the box only
-      guides new writes" (the second hut, the forest, the height area; the
+      "; warning: 3 places / areas / props lie outside — they stay, the box
+      only guides new writes" (plural for a count other than 1; no world prop
+      yet — props count since F10) (the second hut, the forest, the height area; the
       first hut lies wholly inside).
   (e4) world_overview{}: "extent: x 100…205, z -5…50" — current_world_bounds
       reads place outlines and terrain areas (not height areas): huts x
@@ -102,6 +104,15 @@ After (g) the world is empty again and the run still carries B.
       min_x NaN / inf / True / "-150" refused ("must be a number" — a bool
       or a numeric string is not a coordinate). Last ok call: the 20000 box;
       after the refusals it is still stored. set_build_bounds{B} restores B.
+  (k) F9 (plan 2026-11-25-world-dev-free-fixes.md, Task 11): a place made
+      elsewhere WITHOUT a stored outline has no area on the map, so it counts
+      with its pin only. undo(run) -> complete, the world is empty again. "Demo
+      Post" upserted directly at (148, 0) without map3d. world_overview{}:
+      "extent: x 148…148, z 0…0" (before: its assumed seed square gave
+      x 143…153, z -5…5). set_build_bounds{B} -> the exact line without a
+      warning: the pin x 148 <= 150 is inside (before: the corner x 153 was
+      out). place_location{post, 160, 0} -> one point, the single-point
+      wording 'place "Demo Post" (160,0) lies outside the build bounds'.
 """
 import atexit
 import os
@@ -239,8 +250,8 @@ hill = (list_height_areas() or [{}])[0].get("id")
 r = call("set_build_bounds", dict(B))
 check("(e3) ok", r.ok, r.line)
 check("(e3) warning names 3", r.line == (
-    "build bounds of this run: x -150…150, z -150…150; warning: 3 places / areas lie "
-    "outside — they stay, the box only guides new writes"), r.line)
+    "build bounds of this run: x -150…150, z -150…150; warning: 3 places / areas / props "
+    "lie outside — they stay, the box only guides new writes"), r.line)
 
 r = call("world_overview", {})
 check("(e4) extent", line_of(r.line, "extent: ") == "extent: x 100…205, z -5…50", r.line)
@@ -343,6 +354,26 @@ check("(j) last ok box kept", (wr.get_run(run) or {}).get("bounds") ==
       {**B_STORED, "min_x": -10000.0, "max_x": 10000.0}, (wr.get_run(run) or {}).get("bounds"))
 r = call("set_build_bounds", dict(B))
 check("(j) B restored", r.ok and (wr.get_run(run) or {}).get("bounds") == B_STORED, r.line)
+
+# ── (k) an outline-less place counts with its pin only ───────────────────
+print("(k) outline-less place: pin only")
+u = wu.undo(run)
+check("(k) undo complete", u.get("complete"), u)
+check("(k) world empty", (len(list_locations()), len(list_areas())) == (0, 0),
+      (len(list_locations()), len(list_areas())))
+from app.models.world import upsert_location  # noqa: E402
+
+upsert_location({"id": "loc_demo_post", "name": "Demo Post", "pos_x": 148.0, "pos_z": 0.0,
+                 "yaw_deg": 0.0}, sync_world=False)
+r = call("world_overview", {})
+check("(k) extent is the pin", line_of(r.line, "extent: ") == "extent: x 148…148, z 0…0",
+      r.line)
+r = call("set_build_bounds", dict(B))
+check("(k) pin inside: no warning",
+      r.line == "build bounds of this run: x -150…150, z -150…150", r.line)
+r = call("place_location", {"id": "loc_demo_post", "x": 160, "z": 0})
+check("(k) one point wording",
+      r.ok and 'place "Demo Post" (160,0) lies outside the build bounds' in r.line, r.line)
 
 if failures:
     print(f"FAILED: {len(failures)}")

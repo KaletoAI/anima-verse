@@ -125,7 +125,8 @@ task is submitted, no producer runs, rows stay where the smoke puts them.
 Turn 1 creates "Demo R4" with the rooms Main and Back.
 26. (a) start with generate_media false -> run.media_enabled False; GET
     .../media -> enabled False, state "open", elements [] (the turn-end
-    schedule queued nothing: the switch is off). generate_media "yes" (not a
+    schedule queued nothing: the switch is off), waiting [] (listed only
+    for an interrupted run with the switch on — fixes plan Task 1, F1). generate_media "yes" (not a
     bool) -> 400 before the manager is called.
 27. (c) media-switch {enabled: true} in review -> 200, one queued row (the
     created place is due). Its steps, counted by hand from _location_steps:
@@ -565,9 +566,9 @@ def run4(c, body):
                    .list_locations() if loc.get("name") == "Demo R4"), None)
     check("26 Demo R4 exists", bool(loc_id), loc_id)
     r = c.get(f"/world-dev/free/{run_id}/media", headers=ADMIN)
-    check("26 GET media -> enabled False, state open, elements []",
+    check("26 GET media -> enabled False, state open, elements [], waiting []",
           r.status_code == 200 and r.json() == {"enabled": False, "state": "open",
-                                                "elements": []}, r.text)
+                                                "elements": [], "waiting": []}, r.text)
 
     url = f"/world-dev/free/{run_id}"
     r = c.post(url + "/media-switch", headers=ADMIN, json={"enabled": "on"})

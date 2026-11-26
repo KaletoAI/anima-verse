@@ -296,13 +296,31 @@ def note_baseline(run_id: str, kind: str, target_id: str,
 
 def mark_created(run_id: str, kind: str, target_id: str) -> None:
     """The run created this element: its baseline becomes NULL, overriding
-    any baseline stored earlier (UPSERT)."""
+    any baseline stored earlier (UPSERT). The FIRST dict baseline it
+    overrides is kept in ``prior_json`` (a later override keeps it; on the
+    right-hand side SQLite reads the OLD row values), so a rolled-back create
+    can give it back (:func:`restore_prior_baseline`)."""
     with _Db() as conn:
         conn.execute(
             "INSERT INTO world_dev_media_baseline "
             "(run_id, kind, target_id, fps_json, created_at) VALUES (?, ?, ?, NULL, ?) "
-            "ON CONFLICT (run_id, kind, target_id) DO UPDATE SET fps_json=NULL",
+            "ON CONFLICT (run_id, kind, target_id) DO UPDATE SET "
+            "prior_json=COALESCE(prior_json, fps_json), fps_json=NULL",
             (run_id, kind, str(target_id), utc_now_iso()))
+
+
+def restore_prior_baseline(run_id: str, kind: str, target_id: str) -> bool:
+    """Give a created element its first baseline back (``fps_json`` =
+    ``prior_json``) — only while it is marked created (NULL) and a prior
+    exists. ``prior_json`` stays, so a later re-create finds it again.
+    True when a row changed."""
+    with _Db() as conn:
+        cur = conn.execute(
+            "UPDATE world_dev_media_baseline SET fps_json=prior_json "
+            "WHERE run_id=? AND kind=? AND target_id=? "
+            "AND fps_json IS NULL AND prior_json IS NOT NULL",
+            (run_id, kind, str(target_id)))
+        return cur.rowcount > 0
 
 
 def baselines(run_id: str) -> Dict[Tuple[str, str], Optional[dict]]:

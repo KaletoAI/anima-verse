@@ -465,9 +465,11 @@ _ROOM_STR = ("id", "name", "description", "indoor", "decency", "style_hint",
 _ROOM_BOOL = ("swim_allowed",)
 _ROOM_KEYS = set(_ROOM_STR) | set(_ROOM_BOOL) | {"ambience", "stat_rates"}
 #: The map3d keys create_location / update_location take (E3; plan_width_m
-#: is derived from the boundary, never an input). The other keys
-#: world_ops._sanitize_map3d keeps are refused there with a pointer; their
-#: stored values survive the map3d merge of update_location.
+#: is derived from the boundary, never an input — an echo of the derived
+#: value is dropped by _drop_derived_plan_width). The other keys
+#: world_ops._sanitize_map3d keeps are refused there with a pointer, unless
+#: update_location gets them back unchanged (_drop_map3d_echo); their stored
+#: values survive the map3d merge of update_location.
 _MAP3D_KEYS = {"floors", "footprint", "style", "color", "ground_corridor",
                "boundary", "storey_height_m"}
 #: map3d keys that belong to the floor plan: written by set_room_layout.
@@ -612,8 +614,10 @@ def _whole_in(value: Any, lo: int, hi: int) -> bool:
 
 def _check_stat_rates(value: Any, what: str) -> None:
     """A stat_rates list (place or room): at most ten {stat, per_hour}, stat
-    one of the world's stat keys, per_hour a whole number -50…50 — then
-    nothing the editor's sanitizer would rewrite."""
+    one of the world's stat keys, per_hour a whole number -50…50, each stat
+    at most once (the sanitizer would keep a second entry and the hourly
+    tick would apply both) — then nothing the editor's sanitizer would
+    rewrite."""
     from app.core.world_ops import _sanitize_stat_rates
     if not isinstance(value, list):
         raise ToolRefusal(f"'{what}' must be a list of {{stat, per_hour}}")
@@ -630,6 +634,13 @@ def _check_stat_rates(value: Any, what: str) -> None:
                               + " (list_catalog stats)")
         if not _whole_in(rate.get("per_hour"), -50, 50):
             raise ToolRefusal(f"'{what}[{i}].per_hour' must be a whole number -50…50")
+    first: Dict[str, int] = {}
+    for i, rate in enumerate(value):
+        stat = rate["stat"]
+        if stat in first:
+            raise ToolRefusal(f"'{what}[{i}].stat' {stat!r} is already rated in "
+                              f"{what}[{first[stat]}] — one entry per stat")
+        first[stat] = i
     _refuse_rewritten(what, value, _sanitize_stat_rates(value))
 
 
@@ -716,8 +727,11 @@ def _check_npc_slots(value: Any, room_ids: Optional[Dict[str, str]]) -> None:
     role, counts out of range, unusable when / radius_m); a slot's room is a
     STORED room id of the place (``room_ids`` id -> name; None on create — the
     ids are minted by the create writer); a bound character is an existing
-    temporary NPC."""
-    from app.core.npc_spawn import normalize_slots
+    temporary NPC. An unusable when / count / radius_m is refused here with
+    its own wording, BEFORE normalize_slots runs (which would log a warning
+    for it and rewrite it)."""
+    from app.core.npc_spawn import SLOT_COUNT_MAX, normalize_slots
+    from app.core.npc_windows import normalize_when
     from app.models.character import character_row_exists, is_temporary_npc
     if not isinstance(value, list):
         raise ToolRefusal("'npc_slots' must be a list of slot objects")
@@ -727,6 +741,7 @@ def _check_npc_slots(value: Any, room_ids: Optional[Dict[str, str]]) -> None:
         _only_keys(slot, _SLOT_KEYS, f"npc_slots[{i}]")
         if not isinstance(slot.get("role"), str) or not slot["role"].strip():
             raise ToolRefusal(f"'npc_slots[{i}]' needs a non-empty 'role'")
+        _check_slot_values(slot, f"npc_slots[{i}]", SLOT_COUNT_MAX, normalize_when)
     _refuse_rewritten("npc_slots", value, normalize_slots(value))
     for i, slot in enumerate(value):
         room = str(slot.get("room") or "")
@@ -750,6 +765,43 @@ def _check_npc_slots(value: Any, room_ids: Optional[Dict[str, str]]) -> None:
         if who and not (character_row_exists(who) and is_temporary_npc(who)):
             raise ToolRefusal(f"'npc_slots[{i}].character' {who!r} is no existing "
                               f"temporary NPC")
+
+
+def _slot_number(value: Any) -> Optional[float]:
+    """A finite JSON number (never a bool or a numeric string), else None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+def _check_slot_values(slot: Dict[str, Any], where: str, count_max_bound: int,
+                       normalize_when: Any) -> None:
+    """when / count_min / count_max / radius_m of one slot, each refused with
+    its own wording (an absent or null value is the slot default)."""
+    when = slot.get("when")
+    if when not in (None, "") and not (isinstance(when, str) and normalize_when(when)):
+        raise ToolRefusal(f"'{where}.when' must be \"\" (always), \"day\", \"night\" or a "
+                          f"game-time span \"HH:MM-HH:MM\" — got {when!r}")
+    counts: Dict[str, float] = {}
+    for key in ("count_min", "count_max"):
+        if slot.get(key) is None:
+            continue
+        num = _slot_number(slot[key])
+        if num is None or num != int(num) or not 0 <= num <= count_max_bound:
+            raise ToolRefusal(f"'{where}.{key}' must be a whole number 0…{count_max_bound} "
+                              f"— got {slot[key]!r}")
+        counts[key] = num
+    # normalize_slot's defaults: count_min 1, count_max max(1, count_min).
+    low = counts.get("count_min", 1)
+    if "count_max" in counts and counts["count_max"] < low:
+        raise ToolRefusal(f"'{where}.count_max' must not be below count_min ({_g(low)}"
+                          + ("" if "count_min" in counts else ", its default")
+                          + f") — got {_g(counts['count_max'])}")
+    if slot.get("radius_m") is not None:
+        radius = _slot_number(slot["radius_m"])
+        if radius is None or radius < 0:
+            raise ToolRefusal(f"'{where}.radius_m' must be a number ≥ 0 (metres; 0 = the "
+                              f"rooms) — got {slot['radius_m']!r}")
 
 
 def _npc_template_names() -> List[str]:
@@ -959,6 +1011,85 @@ def _check_name_length(value: Optional[str], what: str) -> None:
     if value is not None and len(value) > MAX_NAME_CHARS:
         raise ToolRefusal(f"{what} is {len(value)} characters long — "
                           f"at most {MAX_NAME_CHARS}")
+
+
+def _drop_derived_plan_width(data: Dict[str, Any], derived: float) -> Dict[str, Any]:
+    """``map3d.plan_width_m`` is computed by the writer from the boundary
+    (world_geometry.polygon_plan_width_m), never an input. A value sent back
+    unchanged — the stored map3d echoed — is dropped; any other value is
+    refused with the derived width, so the agent learns where the size comes
+    from. ``derived`` is the width the write would store (0 = no outline).
+    Returns ``data`` itself or a copy without the key."""
+    m3 = data.get("map3d")
+    if not isinstance(m3, dict) or "plan_width_m" not in m3:
+        return data
+    sent = m3["plan_width_m"]
+    ok = (sent is None or (isinstance(sent, (int, float)) and not isinstance(sent, bool)
+                           and derived > 0 and abs(float(sent) - derived) <= 0.01))
+    if not ok:
+        raise ToolRefusal(
+            "map3d.plan_width_m is derived by the writer from map3d.boundary "
+            + (f"(here {_g(derived)} m)" if derived > 0 else "(this place has no outline)")
+            + " — omit it; change the size through the boundary")
+    out = dict(data)
+    out["map3d"] = {k: v for k, v in m3.items() if k != "plan_width_m"}
+    return out
+
+
+def _stored_map3d(lid: str) -> Dict[str, Any]:
+    """The stored map3d of a place ({} when the place or its map3d is missing).
+    Read without the write lock: callers use it for pre-checks of keys that
+    are dropped, never written."""
+    from app.models.world import get_location_by_id
+    m3 = (get_location_by_id(lid) or {}).get("map3d")
+    return m3 if isinstance(m3, dict) else {}
+
+
+def _stored_plan_width(stored_m3: Dict[str, Any]) -> float:
+    """The plan width the stored outline yields (0.0 without one)."""
+    from app.core.world_geometry import polygon_plan_width_m
+    boundary = stored_m3.get("boundary")
+    if boundary is None:
+        return 0.0
+    return float(polygon_plan_width_m(boundary) or 0.0)
+
+
+def _drop_map3d_echo(lid: str, patch: Dict[str, Any]) -> Dict[str, Any]:
+    """update_location: the map3d an agent read and sends back must not be
+    refused for keys it cannot write. A floor-plan or editor key
+    (_MAP3D_PLAN_KEYS / _MAP3D_EDITOR_KEYS) equal to the stored value is
+    dropped — a changed one stays and is refused by _check_location_fields
+    with its pointer; ``plan_width_m`` goes through _drop_derived_plan_width.
+    A map3d left empty stays an empty merge (a no-op for the map3d).
+    Returns ``patch`` itself or a copy."""
+    m3 = patch.get("map3d")
+    if not isinstance(m3, dict):
+        return patch
+    echo_keys = [k for k in (*_MAP3D_PLAN_KEYS, *_MAP3D_EDITOR_KEYS) if k in m3]
+    if not echo_keys and "plan_width_m" not in m3:
+        return patch
+    stored = _stored_map3d(lid)
+    out = dict(patch)
+    if "plan_width_m" in m3:
+        if m3.get("boundary") is not None:
+            derived = _derived_plan_width(("map3d.boundary", m3["boundary"]))
+        else:
+            derived = _stored_plan_width(stored)
+        out = _drop_derived_plan_width(out, derived)
+    new_m3 = {k: v for k, v in out["map3d"].items()
+              if not (k in echo_keys and k in stored and stored[k] == v)}
+    out["map3d"] = new_m3
+    return out
+
+
+def _derived_plan_width(*rings: Tuple[str, Any]) -> float:
+    """The plan width of the first given outline as (key, ring) — a malformed
+    one is refused under its key; 0.0 when none is given."""
+    from app.core.world_geometry import polygon_plan_width_m
+    for key, ring in rings:
+        if ring is not None:
+            return float(polygon_plan_width_m(_ring(ring, key)) or 0.0)
+    return 0.0
 
 
 def _check_location_fields(data: Dict[str, Any], what: str,
@@ -1437,10 +1568,12 @@ def _run_bounds(run_id: str) -> Optional[Dict[str, float]]:
 def _place_points(loc_like: Dict[str, Any], x: Any, z: Any,
                   yaw: Any) -> List[Tuple[float, float]]:
     """The pin plus the world outline of a place standing at (x, z, yaw) —
-    its drawn boundary, else the seed square (the outline every placement
-    check judges a place by, _placement_entry)."""
+    its stored boundary; a place without one is its pin only (it has no area
+    on the map, _placement_entry)."""
     from app.core.world_geometry import boundary_world_points
     entry = _placement_entry(loc_like, x, z, yaw)
+    if entry["boundary"] is None:
+        return [(entry["pos_x"], entry["pos_z"])]
     outline = boundary_world_points({
         "pos_x": entry["pos_x"], "pos_z": entry["pos_z"], "yaw_deg": entry["yaw_deg"],
         "map3d": {"boundary": entry["boundary"]}}) or []
@@ -1468,8 +1601,8 @@ def _built_places() -> List[List[Tuple[float, float]]]:
 
 def _built_extent() -> Optional[Dict[str, float]]:
     """The built extent: map_layout_apply.current_world_bounds (drawn place
-    outlines and painted ground) plus every placed place's pin and seed
-    square — a place without a drawn outline is built too."""
+    outlines and painted ground) plus every placed place's pin — a place
+    without a stored outline is built too, as the point the map shows."""
     from app.core.map_layout_apply import box_union, current_world_bounds
     box = current_world_bounds()
     for pts in _built_places():
@@ -1501,18 +1634,21 @@ def _bounds_warnings(points: List[Tuple[float, float]], what: str,
 
 
 def _count_outside(box: Dict[str, float]) -> int:
-    """How many placed places, terrain areas and height areas have a point
-    outside the box.
+    """How many placed places, terrain areas, height areas and world props
+    have a point outside the box (a world prop is its point (x, z)).
 
-    Cost: one pass over every placed place (seed or drawn outline), terrain
-    area and height area, on each set_build_bounds and world_overview (like
+    Cost: one pass over every placed place (pin + stored outline), terrain
+    area, height area and world prop, on each set_build_bounds (like
     _built_extent). Fine at village scale; if it ever gets slow, cache by the
-    world/terrain generation counters or test polygon bounding boxes first."""
+    world/terrain/world-props generation counters or test polygon bounding
+    boxes first."""
     from app.core.map_layout_apply import point_outside
     from app.models.heightfield import list_height_areas
     from app.models.terrain import list_areas
+    from app.models.world_props import list_world_props
     shapes = _built_places() + [_polygon_points(a.get("polygon"))
                                 for a in list(list_areas()) + list(list_height_areas())]
+    shapes += [[(float(p["x"]), float(p["z"]))] for p in list_world_props()]
     return sum(1 for pts in shapes if any(point_outside(box, x, z) for x, z in pts))
 
 
@@ -1532,11 +1668,14 @@ def _set_build_bounds(step: _Step, args: Dict[str, Any]) -> str:
             raise ToolRefusal(f"the {axis} side is {_g(side)} m — each side must be "
                               f"{_g(BUILD_BOUNDS_MIN_SIDE_M)} … "
                               f"{_g(BUILD_BOUNDS_MAX_SIDE_M)} m (a small village: 300)")
+    # Count before storing: a failing read then leaves no box behind an error.
+    outside = _count_outside(box)
     wr.set_bounds(step.ctx.run_id, box)
     line = "build bounds of this run: " + _box_text(box)
-    outside = _count_outside(box)
     if outside:
-        line += (f"; warning: {outside} places / areas lie outside — they stay, "
+        what = ("place / area / prop lies" if outside == 1
+                else "places / areas / props lie")
+        line += (f"; warning: {outside} {what} outside — they stay, "
                  f"the box only guides new writes")
     return line
 
@@ -1809,16 +1948,17 @@ def _area_extras(area: Dict[str, Any]) -> str:
 def _place_extras(loc: Dict[str, Any],
                   ground: Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]], str]) -> str:
     """" · outline (x0,z0)-(x1,z1) · on <kind>" of a placed place: the world
-    bbox of the outline the placement checks judge it by (its drawn boundary,
-    else the seed square) and the terrain kind under its pin."""
+    bbox of its stored boundary (none for a place without one — a pin has no
+    area) and the terrain kind under its pin."""
     from app.core.terrain_query import kind_at
     from app.core.world_geometry import boundary_world_points
     _catalog, areas, default_kind = ground
     entry = _placement_entry(loc, loc["pos_x"], loc["pos_z"], loc.get("yaw_deg"))
-    pts = boundary_world_points({"pos_x": entry["pos_x"], "pos_z": entry["pos_z"],
-                                 "yaw_deg": entry["yaw_deg"],
-                                 "map3d": {"boundary": entry["boundary"]}})
-    box = _bbox(pts)
+    box = None
+    if entry["boundary"] is not None:
+        box = _bbox(boundary_world_points({"pos_x": entry["pos_x"], "pos_z": entry["pos_z"],
+                                           "yaw_deg": entry["yaw_deg"],
+                                           "map3d": {"boundary": entry["boundary"]}}))
     kind = kind_at(entry["pos_x"], entry["pos_z"], areas=areas, default_kind=default_kind)
     return (f" · outline {_corners(box)}" if box else "") + f" · on {kind}"
 
@@ -1828,10 +1968,35 @@ def _place_extras(loc: Dict[str, Any],
 MAX_REGION_POLY_CHARS = 400
 
 #: Own budget of one get_area result: the stroke line (the recipe) first,
-#: then the outline, each cut on a point boundary beyond it.
+#: then the outline, each cut on a point boundary beyond it. A paged read
+#: (points / offset / limit) has the same budget.
 MAX_AREA_CHARS = 12000
-#: Part of MAX_AREA_CHARS kept free for the cut line.
-_AREA_CUT_RESERVE = 80
+#: The point lists of an area get_area can page through.
+_AREA_PARTS = ("stroke", "polygon")
+
+
+def _area_more_call(area_id: str, part: str, offset: int) -> str:
+    """The get_area call that reads ``part`` on from ``offset``."""
+    return (f'get_area{{"id": {json.dumps(area_id, ensure_ascii=False)}, '
+            f'"points": "{part}", "offset": {offset}}}')
+
+
+def _area_cut_line(area_id: str, cuts: List[Tuple[str, int, int]]) -> str:
+    """get_area's closing line for the cut lists: per (part, shown, total)
+    '<part>: <shown> of <total> points shown; more: <the call reading on
+    from <shown>>', parts joined by "; "."""
+    return "[cut — " + "; ".join(
+        f"{part}: {shown} of {total} points shown; more: "
+        + _area_more_call(area_id, part, shown)
+        for part, shown, total in cuts) + "]"
+
+
+def _area_cut_reserve(area_id: str, parts: List[Tuple[str, int]]) -> int:
+    """Room kept for the cut line (and its newline): the line built by the
+    same formatter with EVERY present part (part, total) cut at shown =
+    offset = total — the most digits a real cut line can have — so the
+    answer never exceeds MAX_AREA_CHARS, whatever the id length."""
+    return len(_area_cut_line(area_id, [(part, total, total) for part, total in parts])) + 1
 
 
 def _label(label: Any, limit: int) -> str:
@@ -1947,14 +2112,25 @@ def _area_info_lines(meta: Dict[str, Any]) -> List[str]:
     return lines + [_short(x, _AREA_INFO_LINE_MAX) for x in cut]
 
 
-@_tool("get_area", False, "get_area{id}",
+@_tool("get_area", False, "get_area{id, points?, offset?, limit?}",
        "one terrain or height area whole: its full polygon, and a stroke "
-       "area's centre line and width (own budget of 12000 characters)")
+       "area's centre line and width (own budget of 12000 characters); a list "
+       "cut there reads on with points \"stroke\"|\"polygon\" + offset (+ limit) "
+       "— the cut line names the exact call")
 def _get_area(step: _Step, args: Dict[str, Any]) -> str:
     from app.models.heightfield import list_height_areas
     from app.models.terrain import get_area
-    _only_keys(args, {"id"}, "get_area")
+    _only_keys(args, {"id", "points", "offset", "limit"}, "get_area")
     aid = _str(args, "id", required=True)
+    part = _str(args, "points")
+    if part is None:
+        if any(args.get(k) is not None for k in ("offset", "limit")):
+            raise ToolRefusal("get_area: 'offset' and 'limit' page through one point "
+                              "list — send them with 'points' (\"stroke\" or \"polygon\")")
+    elif part not in _AREA_PARTS:
+        raise ToolRefusal("get_area: 'points' must be \"stroke\" or \"polygon\"")
+    offset = _whole_arg(args, "offset", 0, 1_000_000, 0, "get_area")
+    limit = _whole_arg(args, "limit", 1, 1_000_000, 0, "get_area")
     area = get_area(aid)
     if area is not None:
         meta = area.get("meta") or {}
@@ -1971,18 +2147,26 @@ def _get_area(step: _Step, args: Dict[str, Any]) -> str:
         out = [f'height {area["id"]}' + (f' "{_label(label, 80)}"' if label else "")
                + f" height_m {_g(area.get('height_m'))}"
                + f" falloff_m {_g(area.get('falloff_m'))}"]
+    stroke = meta.get("stroke")
+    spts = (stroke.get("points") or []) if isinstance(stroke, dict) else []
+    poly = area.get("polygon") or []
+    if part is not None:
+        if part == "stroke" and not spts:
+            raise ToolRefusal(f"area {area['id']} has no stroke")
+        return _area_page(area["id"], out[0], part, spts if part == "stroke" else poly,
+                          offset, limit)
     # What the area carries besides its shape (scatter, NPC slots, water,
-    # relief) closes the answer; those short lines are reserved first.
+    # relief) closes the answer; those short lines are reserved first, and
+    # so is the longest cut line this area can need.
     extra = _area_info_lines(meta) if out[0].startswith("terrain ") else []
+    parts = ([("stroke", len(spts))] if spts else []) + [("polygon", len(poly))]
+    left = (MAX_AREA_CHARS - _area_cut_reserve(area["id"], parts) - len(out[0])
+            - sum(len(x) + 1 for x in extra))
     # The stroke is the authoritative recipe (a stroke area's polygon is
     # derived from it), so it comes first and is budgeted first; the
     # polygon takes what is left. Both cut on a point boundary only.
-    left = (MAX_AREA_CHARS - _AREA_CUT_RESERVE - len(out[0])
-            - sum(len(x) + 1 for x in extra))
-    cuts: List[str] = []
-    stroke = meta.get("stroke")
-    if isinstance(stroke, dict) and stroke.get("points"):
-        spts = stroke.get("points") or []
+    cuts: List[Tuple[str, int, int]] = []
+    if spts:
         prefix = f"stroke: width_m {_g(stroke.get('width_m'))}"
         for key in ("style", "spacing_m", "amplitude_m"):
             if stroke.get(key) not in (None, ""):
@@ -1995,20 +2179,50 @@ def _get_area(step: _Step, args: Dict[str, Any]) -> str:
             prefix += f" along: {len(along)} rows (kept on update)"
         # The polygon line always follows, so its shortest form (no point
         # shown) is reserved before the stroke takes the rest.
-        poly_min = len(f"polygon ({len(area.get('polygon') or [])} points): […]") + 1
+        poly_min = len(f"polygon ({len(poly)} points): […]") + 1
         line, shown = _fit_points(f"{prefix} points ", spts, left - 1 - poly_min)
         out.append(line)
         left -= len(line) + 1
         if shown < len(spts):
-            cuts.append(f"stroke: {shown} of {len(spts)} points shown")
-    poly = area.get("polygon") or []
+            cuts.append(("stroke", shown, len(spts)))
     line, shown = _fit_points(f"polygon ({len(poly)} points): ", poly, left - 1)
     out.append(line)
     if shown < len(poly):
-        cuts.append(f"polygon: {shown} of {len(poly)} points shown")
+        cuts.append(("polygon", shown, len(poly)))
     out.extend(extra)
     if cuts:
-        out.append(f"[cut — {'; '.join(cuts)}]")
+        out.append(_area_cut_line(area["id"], cuts))
+    return "\n".join(out)
+
+
+def _area_page(area_id: str, head: str, part: str, pts: List[Any], offset: int,
+               limit: int) -> str:
+    """A paged get_area answer: the head line, '<part> points <a>…<b> of <n>:
+    [<points>]' for the slice from ``offset`` of at most ``limit`` points
+    (0 = no limit) that fits MAX_AREA_CHARS — whole points, closed by ",…]"
+    when the budget cut it — then, while points follow, the call reading
+    on. The extras lines of the full answer are not repeated."""
+    total = len(pts)
+    if not total:
+        raise ToolRefusal(f"area {area_id} has no {part} points")
+    if offset >= total:
+        raise ToolRefusal(f"offset {offset} is past the last point "
+                          f"({total} points: 0…{total - 1})")
+    chunk = pts[offset:offset + limit] if limit else pts[offset:]
+    # Both the line prefix and the more line are budgeted at their longest
+    # (indices with the most digits), so the real ones always fit.
+    more_room = len(f"[more — {_area_more_call(area_id, part, total)}]") + 1
+    budget = MAX_AREA_CHARS - len(head) - 1 - more_room
+    _, shown = _fit_points(f"{part} points {total - 1}…{total - 1} of {total}: ",
+                           chunk, budget)
+    if not shown:
+        raise ToolRefusal(f"point {offset} of the {part} does not fit one get_area answer")
+    last = offset + shown - 1
+    body = (_fmt_points(chunk) if shown == len(chunk) else
+            "[" + ",".join(f"[{_m2(p[0])},{_m2(p[1])}]" for p in chunk[:shown]) + ",…]")
+    out = [head, f"{part} points {offset}…{last} of {total}: {body}"]
+    if last + 1 < total:
+        out.append(f"[more — {_area_more_call(area_id, part, last + 1)}]")
     return "\n".join(out)
 
 
@@ -2261,13 +2475,14 @@ def _references_to_location(loc_id: str) -> List[str]:
 def _placement_entry(loc_like: Dict[str, Any], x: Any, z: Any, yaw: Any) -> Dict[str, Any]:
     """The placement-check entry of a place standing at (x, z, yaw): its name
     and its outline in local metres — ``map3d.boundary`` of a location body or
-    row, else the seed square of a place without a drawn outline
-    (``map_layout_apply.seed_boundary``, the 10 m square the manual promises)."""
-    from app.core.map_layout_apply import seed_boundary
+    row, else None: a place without a stored outline has no area on the map
+    (world_geometry.effective_boundary), so every check judges it by its pin
+    only. create_location stores the seed square itself when no boundary is
+    given, so a run-made place always has one."""
     m3 = loc_like.get("map3d") if isinstance(loc_like.get("map3d"), dict) else {}
     return {"name": str(loc_like.get("name") or loc_like.get("id") or ""),
             "pos_x": float(x), "pos_z": float(z), "yaw_deg": float(yaw or 0.0),
-            "boundary": m3.get("boundary") or seed_boundary()}
+            "boundary": m3.get("boundary") or None}
 
 
 def _placement_world() -> Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]], str]:
@@ -2421,6 +2636,7 @@ def _newly_impassable(before: Dict[str, Tuple[str, str]],
        "create_location{data, x?, z?, yaw?, boundary?:[[x,z],...]}",
        "new place (the place fields the core writers take, plus rooms); boundary in local metres")
 def _create_location(step: _Step, args: Dict[str, Any]) -> str:
+    from app.core.map_layout_apply import SEED_BOUNDARY_M, seed_boundary
     from app.core.world_ops import create_location_with_extras
     from app.models.world import (get_location_by_id, list_locations,
                                   update_location_position, world_write_lock)
@@ -2429,6 +2645,11 @@ def _create_location(step: _Step, args: Dict[str, Any]) -> str:
     if not isinstance(data, dict):
         raise ToolRefusal("'data' must be an object with the location fields")
     data = _drop_none(data)
+    _m3 = data.get("map3d") if isinstance(data.get("map3d"), dict) else {}
+    data = _drop_derived_plan_width(data, _derived_plan_width(
+        ("boundary", args.get("boundary")), ("map3d.boundary", _m3.get("boundary")))
+        or (SEED_BOUNDARY_M if args.get("boundary") is None and not _m3.get("boundary")
+            else 0.0))
     _check_location_fields(data, "location", creating=True)
     if "npc_slots" in data:
         _check_npc_slots(data["npc_slots"], None)
@@ -2447,8 +2668,17 @@ def _create_location(step: _Step, args: Dict[str, Any]) -> str:
     body["name"] = name
     body["rooms"] = body.get("rooms") or []
     _normalize_rooms(body["rooms"])
+    seeded = False
     if boundary is not None:
         body["map3d"] = {**(body.get("map3d") or {}), "boundary": boundary}
+    elif not (body.get("map3d") if isinstance(body.get("map3d"), dict) else {}).get("boundary"):
+        # No outline given: the seed square the manual promises is STORED, so
+        # the checks below, the map and the renderers all see the same area
+        # (a place without a stored boundary has none). The delete_location
+        # inverse removes it with the row.
+        body["map3d"] = {**(body.get("map3d") or {}), "boundary": seed_boundary(),
+                         "plan_width_m": SEED_BOUNDARY_M}
+        seeded = True
     if body.get("map3d") is not None:
         _refuse_map3d_dropped(body["map3d"], body["map3d"])
     # The rooms get their ids from the writer: the entry room is resolved
@@ -2506,6 +2736,8 @@ def _create_location(step: _Step, args: Dict[str, Any]) -> str:
             _verify_room_extras(lid, body["rooms"], set())
         after = get_location_by_id(lid) or {}
         line = f'created location {lid} "{after.get("name") or name}" at {_where(after)}'
+        if seeded:
+            line += f" · outline: {SEED_BOUNDARY_M:g} m square (no boundary given)"
         line += _warn_suffix(([f'a place called "{name}" already exists — '
                                f"this is a second one"] if taken else []) + placement)
         line += completeness.suffix(completeness.location_gaps(after))
@@ -2597,6 +2829,7 @@ def _update_location(step: _Step, args: Dict[str, Any]) -> str:
     patch = _drop_none(patch)
     if not patch:
         raise ToolRefusal("'patch' has only null values — nothing to change")
+    patch = _drop_map3d_echo(lid, patch)
     _check_location_fields(patch, "patch")
     if "name" in patch and not str(patch["name"] or "").strip():
         raise ToolRefusal("'name' must not be empty")
@@ -2610,10 +2843,17 @@ def _update_location(step: _Step, args: Dict[str, Any]) -> str:
     if "npc_slots" in body:
         pre_rooms = [r for r in pre.get("rooms") or [] if isinstance(r, dict)]
         if body.get("rooms") is not None:
-            pre_ids = {str(r.get("id")) for r in pre_rooms}
-            # Sent rooms with a stored id stay; new rooms have no id yet.
-            pre_rooms = [r for r in body["rooms"]
-                         if isinstance(r, dict) and str(r.get("id") or "") in pre_ids]
+            # Sent rooms with a stored id stay; new rooms have no id yet. A
+            # kept room may be sent as {id} alone, so its NAME (for the
+            # refusal's list) is the stored one.
+            stored_ids = {str(r.get("id") or "") for r in pre_rooms}
+            sent_ids = {str(r.get("id") or "") for r in body["rooms"] if isinstance(r, dict)}
+            for rid in sorted(sent_ids - stored_ids - {""}):
+                # Same wording as the check under the lock: a mistyped room
+                # id is named as such, not as a slot room outside the place.
+                raise ToolRefusal(f"room id {rid!r} does not exist in {lid} — "
+                                  f"omit the id for a new room")
+            pre_rooms = [r for r in pre_rooms if str(r.get("id") or "") in sent_ids]
         _check_npc_slots(body["npc_slots"], _slot_room_ids(pre_rooms))
     step.prepare()
     with world_write_lock:
@@ -3888,9 +4128,9 @@ _WORLD_PROP_ARGS = {"prop_id": "prop_id", "x": "x", "z": "z", "yaw": "yaw_deg",
 def _world_prop_warnings(x: float, z: float) -> List[str]:
     """Hints for a world prop at (x, z): impassable ground under it (the
     terrain kind the map reads there) and the outline of a placed place it
-    stands in (drawn boundary, else the seed square — the outline every
-    placement check judges a place by). A read only; a failure costs the
-    hints, never the step."""
+    stands in (its stored boundary; a place without one is a pin and has no
+    outline to stand in). A read only; a failure costs the hints, never the
+    step."""
     from app.core.terrain_query import kind_at
     from app.core.world_geometry import boundary_contains
     from app.models.world import list_locations
@@ -3904,6 +4144,8 @@ def _world_prop_warnings(x: float, z: float) -> List[str]:
             if loc.get("pos_x") is None or loc.get("pos_z") is None:
                 continue
             entry = _placement_entry(loc, loc["pos_x"], loc["pos_z"], loc.get("yaw_deg"))
+            if entry["boundary"] is None:
+                continue
             shape = {"pos_x": entry["pos_x"], "pos_z": entry["pos_z"],
                      "yaw_deg": entry["yaw_deg"], "map3d": {"boundary": entry["boundary"]}}
             if boundary_contains(shape, x, z):
@@ -4989,8 +5231,8 @@ def _stored_known_ids(name: str) -> List[str]:
 def _add_known_places(name: str, ids: List[str]) -> Tuple[List[str], List[str]]:
     """Add ids to the character's known places (add-only, stored order kept,
     the new ones appended in the order given) — the tool's own locked
-    read-modify-write: models.character.add_known_location is unlocked and
-    ignores the save result. Reads and writes ONLY the stored
+    read-modify-write rather than models.character.add_known_location,
+    because the journal needs exact bytes. Reads and writes ONLY the stored
     ``known_locations`` key (``character.stored_known_locations`` /
     ``write_known_locations``): the rest of the stored config, its absent
     defaults and ``updated_at`` stay as they are, so the undo
@@ -5390,6 +5632,14 @@ def _create_character(step: _Step, args: Dict[str, Any]) -> str:
     return line
 
 
+def _soul_norm(text: str) -> str:
+    """A soul section's text with its line ends made one kind (CRLF / CR ->
+    LF) and its trailing whitespace dropped: what update_character compares
+    to tell a real change from a rewrite that would only touch line ends,
+    the final newline or trailing spaces."""
+    return text.replace("\r\n", "\n").replace("\r", "\n").rstrip()
+
+
 @_tool("update_character", True, "update_character{name, patch}",
        "change fields of a character; 'soul:<field>' = the whole new text of a "
        "soul section (trailing whitespace is normalised to one newline); home / home_room / schedule; body_slots (merged per "
@@ -5559,22 +5809,32 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
         # Soul sections first: a profile save (below) creates missing soul
         # files from their scaffold, which must not become a section's
         # "before" text.
+        # Before and after are the RAW file text (soul_writer.read_raw), so
+        # the undo puts back the very bytes (a CRLF file stays CRLF, a file
+        # without a final newline keeps none). A text that differs from the
+        # stored one only in its line ends is no change the agent asked for:
+        # it is neither written nor journaled.
         for rel, text in soul_patch.items():
-            sstep = group_step()
             path = soul_writer.soul_text_path(name, rel)
             with keyed_lock("soul_file", str(path)):
-                before_text = soul_writer.read_text(name, rel)
+                before_text = soul_writer.read_raw(name, rel)
+                new_text = text.rstrip() + "\n"
+                if (before_text is not None
+                        and _soul_norm(before_text) == _soul_norm(new_text)):
+                    lines.append(f"soul {rel} unchanged")
+                    continue
+                sstep = group_step()
                 inverse = {"op": "restore_soul", "name": name, "file_id": rel,
                            "before_text": before_text}
                 sstep.begin("character", name, inverse)
 
                 def reconcile_soul(rel=rel, before_text=before_text, inverse=inverse):
-                    now = soul_writer.read_text(name, rel)
+                    now = soul_writer.read_raw(name, rel)
                     return None if now == before_text else (name, inverse, now)
 
                 with sstep.writing(reconcile_soul):
-                    soul_writer.write_text(name, rel, text)
-                written = soul_writer.read_text(name, rel)
+                    soul_writer.write_raw(name, rel, new_text)
+                written = soul_writer.read_raw(name, rel)
                 sline = (f"soul {rel}" + ("" if before_text is not None else " (new file)")
                          if written != before_text else f"soul {rel} unchanged")
                 sstep.complete(written, sline)
@@ -5822,8 +6082,10 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
 
         if known_ids:
             # Its own step with a PER-PLACE inverse: in-game discovery
-            # (add_known_location) extends the list at any time, so a
-            # whole-list restore would make the undo "changed since". The
+            # (add_known_location — locked like this step, so never between
+            # its read and its write, but at any time between this turn and
+            # the undo) extends the list, so a whole-list restore would make
+            # the undo "changed since". The
             # inverse removes exactly the places this call added. Still under
             # the keyed_lock("character_profile") taken above.
             kstep = group_step()
@@ -6997,6 +7259,13 @@ def _delete_created(step: _Step, args: Dict[str, Any]) -> str:
         step.complete(None, f"error: could not delete: {reason}", kind="refused")
         raise ToolRefusal(f"could not delete {_kind_label(kind)} {ident}: {reason}")
     wr.mark_undone(step.ctx.run_id, int(creating["seq"]))
+    # The creating entry is undone and the element gone: the media lane gives
+    # it its first baseline back, exactly as the undo does (F4) — the undo of
+    # this turn finds that entry already undone and never reaches its hook.
+    from app.core import world_dev_media
+    target = world_dev_media.create_target(creating.get("inverse"))
+    if target is not None:
+        world_dev_media.note_create_undone(step.ctx.run_id, target[0], target[1])
     kept = [str(s.get("item")) for s in skips if "item" in s]
     line = (f"deleted {_kind_label(kind)} {ident} (created in step #{creating['seq']})"
             + (f"; items kept (still in use): {', '.join(kept)}" if kept else "")
@@ -7126,7 +7395,7 @@ def _remove_earlier_media(step: _Step, kind: str, ident: str) -> int:
     if not rows:
         return 0
     dirs = {str(a.get("path")) for r in rows for a in r.get("produced") or []
-            if isinstance(a, dict) and a.get("type") == "dir"}
+            if isinstance(a, dict) and a.get("type") in ("dir", "gallery_dir")}
     rep = world_dev_media.remove_element_media(step.ctx.run_id, kind, ident)
     if rep.get("pending"):
         raise ToolRefusal(f"{_kind_label(kind)} {ident}: a render of it is still running "

@@ -150,7 +150,8 @@
   white-space: nowrap;
 }
 .ga-wd-free-chip-sm { font-size: 11px; padding: 0 5px; }
-.ga-wd-free-chip-queued { color: #8b949e; }
+.ga-wd-free-chip-queued,
+.ga-wd-free-chip-waiting { color: #8b949e; }
 .ga-wd-free-chip-running { color: #d29922; border-color: #d29922; }
 .ga-wd-free-chip-done { color: #3fb950; }
 .ga-wd-free-chip-failed { color: #f85149; border-color: #f85149; }

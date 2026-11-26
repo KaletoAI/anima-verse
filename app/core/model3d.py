@@ -4954,7 +4954,13 @@ def maybe_auto_generate_for_outfit(character_name: str) -> bool:
 
     Paused (Ruling A42, ``generation_pause``): off the pipeline the run is
     held (Resume calls this hook again); on it ``figure_build.request`` holds
-    the Build."""
+    the Build.
+
+    A World Dev turn that defers the character swallows the call and records
+    it for the run's release (``world_dev_media.suppress_if_deferred``)."""
+    from app.core import world_dev_media
+    if world_dev_media.suppress_if_deferred(character_name, "model3d.maybe_auto_generate_for_outfit"):
+        return False
     try:
         from app.core.base_body import is_base_pipeline
         if is_base_pipeline(character_name):

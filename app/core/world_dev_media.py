@@ -22,14 +22,19 @@ tools call):
 - ``model_refs._fire_kind`` — the body of a timer armed BEFORE the run touched
   the character; while deferred it fires nothing and is recorded as
   ``model_refs._fire_kind:<kind>`` (the replay re-arms only that kind's timer,
-  ``model_refs.rearm_timer``). The off-pipeline
-  auto mesh (``model3d.maybe_auto_generate_for_outfit`` →
-  ``model3d.trigger_generation``) runs only after such a T-pose pass, so it is
-  covered by this guard.
+  ``model_refs.rearm_timer``).
+- ``model3d.maybe_auto_generate_for_outfit`` — the auto-mesh hook (off the
+  pipeline → ``model3d.trigger_generation``, on it → ``figure_build.request``)
+  is guarded itself, as its first statement: it is reached not only after a
+  T-pose pass of a (guarded) timer but also from a T-pose render already
+  running when the turn began and from ``generation_pause``'s Resume.
 - ``figure_build.request`` — every automatic Build request: garment_hair
   (hairstyle claim / wear), garments (body change), base_body (piece ready,
-  detail change), outfit_bodies, hairstyle_delete, model3d's auto-mesh hook,
-  the Build timer and generation_pause's Resume. ``figure_build.start`` (a
+  detail change), outfit_bodies, hairstyle_delete, the Build timer and
+  generation_pause's Resume. The auto-mesh hook's own call never gets here
+  while deferred: the hook's guard (above) swallows it first and records it as
+  ``model3d.maybe_auto_generate_for_outfit``, whose replay reaches this
+  request again on the pipeline. ``figure_build.start`` (a
   click) stays unguarded.
 - ``garment_assembly.schedule`` — recorded with ``signature=None`` (a later
   write of the turn may have changed the outfit; the replay re-resolves the
@@ -55,6 +60,13 @@ rollback defers the run's characters again before its journal undo
 characters that still exist (the ordinary automatic path, so "Build
 automatically" and the per-character pause still decide); an Accept releases
 without a replay.
+
+Known gap of the no-replay turn end: a call swallowed mid-turn comes back only
+if the turn-end plan holds an equivalent step. An off-pipeline auto mesh
+(``model3d.maybe_auto_generate_for_outfit`` reached from ``generation_pause``'s
+Resume or a T-pose render already in flight) has none unless the run touched
+that character's mesh inputs, so it is dropped until the character's next
+outfit or T-pose trigger.
 
 State is in memory, guarded by one ``threading.Lock``: a restart ends every
 turn anyway (``world_dev_agent.mark_interrupted_on_boot``).
@@ -84,13 +96,17 @@ exists at that moment — the create paths (``git grep -n '"op": "delete_locatio
   plan every render of a character the run does not own.
 
 A create-inverse sets the baseline to NULL (``wr.mark_created``, overriding an
-earlier one): every step of a created element is due. ``plan(run_id)`` is pure
+earlier one): every step of a created element is due. The first dict baseline
+it overrode is kept: when the undo marks the last standing creating entry of
+the element undone (reversed or skipped as already gone), the element gets it
+back (``note_create_undone``, F4) — a rolled-back create of a same-name
+element plans nothing that its first look did not already have. ``plan(run_id)`` is pure
 (no writes) and lists, for a run in review, the due steps per element.
 
 Task 5 — the cost gate. Before every step the lane asks ``step_gate``: the
 run's media switch, the media master switch, the character's pause of
-automatic generation, "Build automatically" for a Build, then ``route_check``
-for EVERY occasion the step routes — an empty chain or a chain without a
+automatic generation, for a Build the world's automatic outfit renders and
+"Build automatically", then ``route_check`` for EVERY occasion the step routes — an empty chain or a chain without a
 usable entry is a visible skip note, never the empty-chain cheapest (possibly
 paid) pick. A Build's occasions are those of the character's OWN
 ``figure_build.plan`` steps (``BUILD_STEP_OCCASIONS``), so an occasion no step
@@ -134,7 +150,10 @@ element's steps just before its producer and stores the then-current fp
 (M14); a cancel / remove flag stops a running row after its current step.
 ``remove_run_media`` waits at most ``DISCARD_WAIT_S`` for a running row and
 reports it under ``pending`` (the lane removes its output when the step
-ends); ``reset_on_boot`` re-queues rows a restart left running.
+ends); ``reset_on_boot`` re-queues rows a restart left running — except
+those of an interrupted run, which it cancels (F1: an interrupted run
+renders nothing before Accept; ``schedule(run, accepting=True)`` from the
+Accept is its only scheduling).
 """
 from __future__ import annotations
 
@@ -217,6 +236,9 @@ def _replay_call(trigger: str) -> Callable[..., Any] | None:
     if trigger == "garment_assembly.schedule":
         from app.core import garment_assembly
         return garment_assembly.schedule
+    if trigger == "model3d.maybe_auto_generate_for_outfit":
+        from app.core import model3d
+        return model3d.maybe_auto_generate_for_outfit
     return None
 
 
@@ -301,9 +323,15 @@ def defer_run(run_id: str) -> List[str]:
 CREATE_INVERSE_OPS = frozenset({"delete_location", "delete_character"})
 #: Journal target kinds whose elements get media.
 MEDIA_KINDS = ("location", "character")
-#: Run statuses in which ``plan`` (and the scheduling built on it) acts —
-#: never during a running turn (M15).
+#: Run statuses in which ``plan`` acts — never during a running turn (M15).
+#: ``interrupted`` is listed so the panel can show what waits for Accept.
 PLAN_STATUSES = ("awaiting_review", "interrupted")
+#: Run statuses in which ``schedule`` queues rows on its own: an
+#: interrupted run renders nothing before Accept (F1); its Accept schedules
+#: once (``schedule(run, accepting=True)``), a Discard drops the plan.
+SCHEDULE_STATUSES = ("awaiting_review",)
+#: The note of a row an interrupted run held at boot (``reset_on_boot``).
+NOTE_WAIT_ACCEPT = "the run was interrupted — its media render after Accept"
 #: Row statuses whose steps "hold" a fingerprint (an equal step is not due).
 HOLDING_ROW_STATUSES = ("queued", "running", "done")
 
@@ -400,7 +428,15 @@ def _character_steps(name: str, profile: Dict[str, Any]) -> List[StepSpec]:
         if hair:
             steps.append(StepSpec("hairstyle", "hairstyle", (), hair, "hairstyle"))
     template = str(profile.get("template") or "")
-    face = resolve_face_prompt(profile, name, get_template(template) if template else None)
+    # Neutral inputs, like the mesh/reference fingerprints: a temporary
+    # state's image modifier is not part of the character's look, so it must
+    # not make the portrait due. Known consequence: the render itself
+    # (npc_assets.render_profile_image, the profile-image route's request)
+    # still applies the states active at render time, and a later state change
+    # does not make that portrait due again — only a change of the neutral face
+    # prompt does.
+    face = resolve_face_prompt(profile, name, get_template(template) if template else None,
+                               apply_modifiers=False)
     steps.append(StepSpec("portrait", "portrait", ("profile",), face, "portrait"))
     if pipeline:
         steps.append(StepSpec("build", "Figure Build", (), _figure_fp(name, profile), "build"))
@@ -465,6 +501,49 @@ def note_touch(run_id: str, kind: str, target_id: Optional[str],
             wr.note_baseline(run_id, kind, ident, {})
         except Exception:  # noqa: BLE001
             logger.exception("World Dev media: baseline {} of %s %s not stored", kind, ident)
+
+
+def is_create_inverse(inverse: Any) -> bool:
+    """True for an inverse that marks its element created (``note_touch``):
+    ``delete_location``, or a CLAIMED ``delete_character``."""
+    if not isinstance(inverse, dict) or inverse.get("op") not in CREATE_INVERSE_OPS:
+        return False
+    return inverse.get("op") != "delete_character" or bool(inverse.get("claimed"))
+
+
+def create_target(inverse: Any) -> Optional[Tuple[str, str]]:
+    """(media kind, id) of a create inverse (:func:`is_create_inverse`), else None."""
+    if not is_create_inverse(inverse):
+        return None
+    if inverse.get("op") == "delete_location":
+        ident = str(inverse.get("id") or "")
+        return ("location", ident) if ident else None
+    ident = str(inverse.get("name") or "")
+    return ("character", ident) if ident else None
+
+
+def note_create_undone(run_id: str, kind: str, target_id: str) -> None:
+    """The undo marked a creating entry of the element undone (reversed or
+    skipped as already gone). When no NOT-undone creating entry of the run
+    for that element is left, its baseline falls back to the first dict
+    baseline the create overrode (``wr.restore_prior_baseline``; nothing
+    when there is none — a fresh create stays NULL). Safe to call more often
+    than needed. Never raises: a failure only logs (the element then keeps
+    planning every step, the old behaviour)."""
+    if not run_id or not target_id or kind not in MEDIA_KINDS:
+        return
+    from app.core import world_dev_runs as wr
+    ident = str(target_id)
+    try:
+        for entry in wr.entries(run_id):
+            if create_target(entry.get("inverse")) == (kind, ident):
+                return
+        if wr.restore_prior_baseline(run_id, kind, ident):
+            logger.info("World Dev media: create of %s %s undone in run %s — its first "
+                        "baseline is back", kind, ident, run_id)
+    except Exception:  # noqa: BLE001 — bookkeeping never fails the undo
+        logger.exception("World Dev media: baseline of %s %s (run %s) not restored after "
+                         "its create was undone", kind, ident, run_id)
 
 
 #: Journal inverse ops of the steps that CREATE a catalog item (nobody wears it yet).
@@ -579,6 +658,8 @@ GATE_DISABLED = "media generation is disabled (image_generation.enabled)"
 GATE_SWITCH_UNREADABLE = "the media master switch could not be read ({error})"
 GATE_PAUSED = "automatic generation of {name} is paused — Retry media after Resume"
 GATE_PAUSE_UNREADABLE = "the pause of automatic generation of {name} could not be read ({error})"
+GATE_AUTO_RENDERS_OFF = "automatic outfit renders are off for this world"
+GATE_AUTO_RENDERS_UNREADABLE = "the world's automatic-render switch could not be read ({error})"
 GATE_AUTO_BUILD_OFF = "Build automatically is off for {name}"
 GATE_AUTO_BUILD_UNREADABLE = "the \"Build automatically\" switch of {name} could not be read ({error})"
 GATE_BUILT = "the figure is already built"
@@ -588,6 +669,7 @@ GATE_MANUAL = "{name}: {reason} (Characters → Figure)"
 GATE_ONLY_FAILED = ("{name}: only failed steps are left ({labels}) — a manual Build retries them "
                     "(Characters → Figure)")
 GATE_PLAN_UNREADABLE = "the Build plan of {name} could not be read ({error})"
+GATE_ROUTE_UNREADABLE = "the route of {occasion} could not be read ({error})"
 
 #: The Build mode of the media lane's ``build`` step: the producer (Task 7) asks for an AUTOMATIC
 #: Build (``figure_build.request``), so the gate reads the plan of the same mode and keeps only the
@@ -838,8 +920,9 @@ def step_gate(run: Any, kind: str, target_id: str, step: StepSpec) -> Optional[s
     """None = the step may run; else the note it is skipped with (never a
     retry). In order: the run's media switch, the media master switch
     (``image_generation.enabled``), for a character its pause of automatic
-    generation, for a Build "Build automatically", then ``route_check`` for
-    every occasion of ``step_occasions`` (the first failing one wins; a Build
+    generation, for a Build the world's automatic outfit renders
+    (``model_refs.auto_renders_enabled``) and then "Build automatically",
+    then ``route_check`` for every occasion of ``step_occasions`` (the first failing one wins; a Build
     with nothing to run gives ``build_gate``'s note). ``run`` is the run dict
     or its id. Never raises: a reader error is a note."""
     name = str(target_id)
@@ -871,6 +954,15 @@ def step_gate(run: Any, kind: str, target_id: str, step: StepSpec) -> Optional[s
             return GATE_PAUSED.format(name=name)
         if step.id == "build":
             try:
+                from app.core import model_refs
+                renders = model_refs.auto_renders_enabled()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("World Dev media: automatic-render switch not readable",
+                               exc_info=True)
+                return GATE_AUTO_RENDERS_UNREADABLE.format(error=_err(e))
+            if not renders:
+                return GATE_AUTO_RENDERS_OFF
+            try:
                 from app.core import figure_build
                 auto = figure_build.auto_build_on(name)
             except Exception as e:  # noqa: BLE001
@@ -888,7 +980,11 @@ def step_gate(run: Any, kind: str, target_id: str, step: StepSpec) -> Optional[s
     if note:
         return note
     for occasion in occasions or []:
-        note = route_check(occasion, character, chain_only=occasion in SOFT_OCCASIONS)
+        try:
+            note = route_check(occasion, character, chain_only=occasion in SOFT_OCCASIONS)
+        except Exception as e:  # noqa: BLE001 — never a render on an unread route
+            logger.warning("World Dev media: route of %s not readable", occasion, exc_info=True)
+            return GATE_ROUTE_UNREADABLE.format(occasion=occasion, error=_err(e))
         if note:
             return note
     return None
@@ -1403,35 +1499,70 @@ def _produce_gallery(ctx: ProduceCtx, kind: str, target_id: str, step: StepSpec)
     from app.core import world_ops
     from app.models.world import get_gallery_dir
     prompt_type, room_id = _gallery_target(step)
+    # get_gallery_dir creates nothing (it resolves the location to its dir):
+    # a dir that only exists after the core ran is the step's own and goes
+    # with its image.
+    gdir = get_gallery_dir(str(target_id))
+    existed = gdir.is_dir()
+
+    def created_dir(written=None) -> List[dict]:
+        # The dir the core actually wrote into must be the one checked before
+        # it ran: for any other dir it is unknown whether it existed then, so
+        # it is never claimed as the step's (it stays, like a foreign dir).
+        if written is not None and written != gdir:
+            return []
+        if existed or gdir.is_symlink() or not gdir.is_dir():
+            return []
+        # Path only: the removal never needs the location, and the step's
+        # target may be a name the core resolves (the image record carries
+        # the resolved id).
+        return [{"type": "gallery_dir", "path": _rel(gdir)}]
+
     try:
         result = asyncio.run(world_ops.generate_gallery_image_core(
             str(target_id), {"prompt_type": prompt_type, "room_id": room_id}))
     except Exception as e:  # noqa: BLE001 — the core writes its image only on success
-        raise _as_step_error(e, []) from e
+        raise _as_step_error(e, created_dir()) from e
     image = str((result or {}).get("image") or "")
     loc_id = str((result or {}).get("location_id") or target_id)
     if not image:
-        raise StepError("failed", "the gallery core returned no image")
-    path = get_gallery_dir(loc_id) / image
+        raise StepError("failed", "the gallery core returned no image", created_dir())
+    written = get_gallery_dir(loc_id)
+    path = written / image
     stat = _stat(path)
     if stat is None:
-        raise StepError("failed", f"the gallery image {image} is missing")
+        raise StepError("failed", f"the gallery image {image} is missing", created_dir())
     warnings = "; ".join(str(w) for w in (result or {}).get("warnings") or [])
     return warnings, [{"type": "gallery_image", "location_id": loc_id, "image": image,
-                       "path": _rel(path), "size": stat[0], "mtime_ns": stat[1]}]
+                       "path": _rel(path), "size": stat[0], "mtime_ns": stat[1]}] + created_dir(written)
 
 
 def _produce_location_mesh(ctx: ProduceCtx, kind: str, target_id: str,
                            step: StepSpec) -> Tuple[str, List[dict]]:
     """The building mesh through the improvements engine's routed, blocking
     path (``subjects.generate_building_model(loc, "")``, source =
-    ``building_source_image``); the model dir's diff is the output."""
+    ``building_source_image``); the model dir's diff is the output, plus
+    ``locations/<key>`` itself when the step created it (the diff only sees
+    below the model dir)."""
+    from app.core import location_model3d
     from app.core.improvements.types import subjects
+    parent = location_model3d.model_dir(str(target_id)).parent
+    existed = parent.is_dir()
+
+    def created_dir() -> List[dict]:
+        if existed or parent.is_symlink() or not parent.is_dir():
+            return []
+        return [{"type": "dir", "path": _rel(parent)}]
 
     def run() -> str:
         subjects.generate_building_model(str(target_id), "")
         return ""
-    return _captured(ctx, kind, target_id, run)
+    try:
+        note, arts = _captured(ctx, kind, target_id, run)
+    except StepError as e:
+        e.artefacts += created_dir()
+        raise
+    return note, arts + created_dir()
 
 
 def _produce_portrait(ctx: ProduceCtx, kind: str, target_id: str,
@@ -1559,15 +1690,16 @@ PRODUCERS: Dict[str, Callable[[ProduceCtx, str, str, StepSpec], Tuple[str, List[
 
 
 _TYPE_ORDER = {"profile_keys": 0, "gallery_image": 1, "character_image": 1, "file": 2, "sidecar": 3,
-               "modified": 4, "dir": 5}
+               "modified": 4, "dir": 5, "gallery_dir": 5}
 
 
 def _ordered_artefacts(artefacts: List[dict]) -> List[dict]:
     """Removal order: profile keys first (so ``delete_character_image`` no
     longer finds the portrait set and leaves the restored key alone), then
-    images and files, sidecars, the report-only records, dirs deepest first."""
+    images and files, sidecars, the report-only records, dirs (and gallery
+    dirs) deepest first."""
     def key(a):
-        depth = -str(a.get("path") or "").count("/") if a.get("type") == "dir" else 0
+        depth = -str(a.get("path") or "").count("/") if a.get("type") in ("dir", "gallery_dir") else 0
         return (_TYPE_ORDER.get(a.get("type"), 9), depth, str(a.get("path") or a.get("name") or ""))
     return sorted((a for a in artefacts if isinstance(a, dict)), key=key)
 
@@ -1597,20 +1729,28 @@ def _decide(artefacts: List[dict], apply: bool) -> Tuple[List[str], List[dict]]:
         if typ == "modified":
             keep(art, KEPT_MODIFIED)
             continue
-        if typ == "dir":
+        if typ in ("dir", "gallery_dir"):
+            # A gallery dir may still hold the gallery's own meta files at its
+            # top (the image deleter empties, never removes them); a plain
+            # dir must hold nothing but what this removal took away.
             if path.is_symlink() or not path.is_dir():
                 keep(art, KEPT_GONE)
                 continue
             try:
-                entries = [_rel(os.path.join(str(path), e)) for e in os.listdir(str(path))]
+                names = os.listdir(str(path))
             except OSError as e:
                 keep(art, KEPT_ERROR.format(error=_err(e)))
                 continue
-            if any(e not in gone for e in entries):
+            meta = [n for n in names if typ == "gallery_dir" and n in GALLERY_META_FILES
+                    and not os.path.islink(os.path.join(str(path), n))
+                    and os.path.isfile(os.path.join(str(path), n))]
+            if any(_rel(os.path.join(str(path), n)) not in gone for n in names if n not in meta):
                 keep(art, KEPT_NOT_EMPTY)
                 continue
             if apply:
                 try:
+                    for n in meta:
+                        os.unlink(os.path.join(str(path), n))
                     os.rmdir(str(path))
                 except OSError as e:
                     keep(art, KEPT_ERROR.format(error=_err(e)))
@@ -1933,10 +2073,12 @@ def _ensure_lane_locked() -> bool:
     return True
 
 
-def schedule(run_id: str) -> List[int]:
+def schedule(run_id: str, *, accepting: bool = False) -> List[int]:
     """Queue the standard media chains of the run's touched elements (M1):
-    under the global media lock, when the run is in review (``PLAN_STATUSES``,
-    M15), its media state is ``open`` and its media switch on, one ``queued``
+    under the global media lock, when the run waits for review
+    (``SCHEDULE_STATUSES``, M15) — or, only with ``accepting`` (the Accept
+    of an interrupted run, F1), when it is ``interrupted`` — its media state
+    is ``open`` and its media switch on, one ``queued``
     row per element of ``plan(run_id)`` with due steps (each with its planned
     fp; ``scheduled_turn`` = the run's turn), then — still under the lock —
     the one global lane is ensured (``_ensure_lane_locked``). Returns the new
@@ -1945,7 +2087,9 @@ def schedule(run_id: str) -> List[int]:
     added: List[int] = []
     with _media_lock():
         run = wr.get_run(run_id)
-        if (not run or run.get("status") not in PLAN_STATUSES
+        status = (run or {}).get("status")
+        schedulable = status in SCHEDULE_STATUSES or (accepting and status == "interrupted")
+        if (not run or not schedulable
                 or (run.get("media_state") or "open") != "open" or not run.get("media_enabled")):
             return []
         for kind, ident, steps in plan(run_id):
@@ -2462,8 +2606,9 @@ def media_status(run_id: str) -> Optional[Dict[str, Any]]:
     """The panel's view of the run's media, None for an unknown run:
     ``{"enabled", "state", "elements": [{"kind", "id", "name", "row_id",
     "status", "note", "steps": [{"id", "label", "status", "note"}],
-    "produced": <count>}]}`` — the NEWEST row per element, elements in
-    first-row order. Read-only."""
+    "produced": <count>}], "waiting": [...]}`` — the NEWEST row per
+    element, elements in first-row order. ``waiting`` (F1) lists what an
+    interrupted run will render once accepted (``_waiting``). Read-only."""
     from app.core import world_dev_runs as wr
     run = wr.get_run(run_id)
     if run is None:
@@ -2480,7 +2625,26 @@ def media_status(run_id: str) -> Optional[Dict[str, Any]]:
                       for step in row.get("steps") or [] if isinstance(step, dict)],
             "produced": len(row.get("produced") or [])})
     return {"enabled": bool(run.get("media_enabled")),
-            "state": str(run.get("media_state") or "open"), "elements": elements}
+            "state": str(run.get("media_state") or "open"), "elements": elements,
+            "waiting": _waiting(run_id, run)}
+
+
+def _waiting(run_id: str, run: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """What an ``interrupted`` run (media switch on, media state open)
+    renders after Accept: ``[{"kind", "id", "name", "steps": [{"id",
+    "label"}]}]`` from ``plan`` in first-touch order; [] in every other
+    case. A plan error is logged and reads as [] (the route never fails for
+    it)."""
+    if (run.get("status") != "interrupted" or not run.get("media_enabled")
+            or (run.get("media_state") or "open") != "open"):
+        return []
+    try:
+        return [{"kind": kind, "id": ident, "name": _element_name(kind, ident),
+                 "steps": [{"id": s.id, "label": s.label} for s in steps]}
+                for kind, ident, steps in plan(run_id)]
+    except Exception:  # noqa: BLE001 — the panel view only
+        logger.exception("World Dev media: the waiting plan of run %s not readable", run_id)
+        return []
 
 
 def _live_run_locked(run_id: str, *, media_open: bool = False) -> Dict[str, Any]:
@@ -2507,7 +2671,8 @@ def set_run_switch(run_id: str, on: bool) -> Dict[str, Any]:
     ``schedule`` adds a row after it), then ``cancel_queued`` cancels the
     queued rows and stops the running one after its current step. On — only
     in review (``PLAN_STATUSES``): MediaConflict while a turn runs (nothing
-    changes), else the switch goes on and ``schedule`` queues what is due.
+    changes), else the switch goes on and ``schedule`` queues what is due —
+    nothing for an interrupted run, whose media wait for Accept (F1).
     KeyError for an unknown run, MediaConflict for a closed one. Returns
     ``{"enabled", "cancelled", "queued"}``."""
     from app.core import world_dev_runs as wr
@@ -2527,8 +2692,9 @@ def set_run_switch(run_id: str, on: bool) -> Dict[str, Any]:
 
 
 def retry(run_id: str) -> List[int]:
-    """Retry what failed or was skipped, only in review (``PLAN_STATUSES``;
-    MediaConflict otherwise — running or closed; KeyError for an unknown
+    """Retry what failed or was skipped, only while the run waits for review
+    (``SCHEDULE_STATUSES``; MediaConflict otherwise — running, interrupted
+    (its media wait for Accept, F1) or closed; KeyError for an unknown
     run; MediaConflict too when the run's media switch is off or its media
     state is not ``open`` — checked under the media lock BEFORE any
     fingerprint is cleared, since ``schedule`` would add nothing and a
@@ -2543,7 +2709,10 @@ def retry(run_id: str) -> List[int]:
     marked = 0
     with _media_lock():
         run = _live_run_locked(run_id, media_open=True)
-        if run.get("status") not in PLAN_STATUSES:
+        if run.get("status") == "interrupted":
+            raise MediaConflict("run is interrupted: media can be retried only after "
+                                "Accept or while the run waits for review")
+        if run.get("status") not in SCHEDULE_STATUSES:
             raise MediaConflict(f"run is {run['status']}: media can be retried "
                                 "only while the run waits for review")
         if not run.get("media_enabled"):
@@ -2564,16 +2733,66 @@ def retry(run_id: str) -> List[int]:
     return schedule(run_id)
 
 
+def _held_at_boot(run: Dict[str, Any]) -> bool:
+    """A row of this run must not render at boot: the run is interrupted and
+    its media are still open (F1 — they render after Accept)."""
+    return run.get("status") == "interrupted" and (run.get("media_state") or "open") == "open"
+
+
+def _hold_row(row: Dict[str, Any], step_status: str) -> None:
+    """Boot (F1): the row -> ``cancelled`` with ``NOTE_WAIT_ACCEPT``, its
+    steps in ``step_status`` -> ``cancelled``; done steps stay done (they
+    keep holding their fingerprints)."""
+    from app.core import world_dev_runs as wr
+    steps = [dict(s, status="cancelled") if isinstance(s, dict) and s.get("status") == step_status
+             else s for s in row.get("steps") or []]
+    wr.update_media_row(row["id"], status="cancelled", steps=steps, note=NOTE_WAIT_ACCEPT)
+
+
+def hold_on_boot() -> int:
+    """Boot, BEFORE the task queue starts (F1): every ``running`` or
+    ``queued`` row of a run that is ``interrupted`` with its media open is
+    ``cancelled`` (note ``NOTE_WAIT_ACCEPT``) — an interrupted run renders
+    nothing before Accept, which re-plans it (the done steps keep holding).
+    It only writes rows and never submits, so it can run before the queue's
+    workers exist: ``TaskQueue.start()`` turns a lane task of the last
+    process back to pending, and a worker could otherwise pick a leftover of
+    an interrupted run up before ``reset_on_boot`` holds it. Returns the
+    number of held rows; idempotent (``reset_on_boot`` runs it again).
+    The lane's row pick deliberately does NOT repeat this hold: an Accept
+    calls ``schedule(run, accepting=True)`` while the run is still
+    ``interrupted`` (before ``_close``), so a pick-time check would cancel
+    exactly the rows that Accept just queued."""
+    from app.core import world_dev_runs as wr
+    held = 0
+    with _media_lock():
+        for status in ("queued", "running"):
+            for row in wr.media_rows_with_status((status,)):
+                if _held_at_boot(wr.get_run(str(row["run_id"])) or {}):
+                    _hold_row(row, status)
+                    held += 1
+    if held:
+        _notify_generation()
+    return held
+
+
 def reset_on_boot() -> Dict[str, int]:
     """Boot: a row left ``running`` by the last process becomes ``queued``
     again (its running step too; done steps are skipped by the lane) when its
     run's media state is open or accepted; for a closed run its produced
     artefacts are removed (status ``removed`` — the discard reported it
-    pending and its lane is gone). Then the one lane task is ensured when a
-    queued row exists. Called after the task queue started (its own stale
-    ``running`` tasks are pending again by then, so no duplicate is made)."""
+    pending and its lane is gone). A ``running`` or ``queued`` row of a run
+    that is ``interrupted`` with its media open is ``cancelled`` instead
+    (``held``, note ``NOTE_WAIT_ACCEPT``, F1): an interrupted run renders
+    nothing before Accept, which re-plans it (the done steps keep holding).
+    The server runs that hold pass (``hold_on_boot``) already BEFORE the task
+    queue starts; it is repeated here first (a no-op then), so the lane is
+    never ensured for an interrupted run. Then the one lane task is ensured
+    when a queued row exists. Called after the task queue started (its own
+    stale ``running`` tasks are pending again by then, so no duplicate is
+    made)."""
     from app.core import world_dev_runs as wr
-    counts = {"requeued": 0, "removed": 0, "submitted": 0}
+    counts = {"requeued": 0, "removed": 0, "held": hold_on_boot(), "submitted": 0}
     with _media_lock():
         _remove_with.clear()
         for row in wr.media_rows_with_status(("running",)):

@@ -389,11 +389,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="smoke_wd_tools_clips_")
+# Own instance + rig paths too: nothing may resolve to the repo's ./instance
+# or the shared rig while other smokes run beside this one.
+INSTANCE = Path(tempfile.mkdtemp(prefix="smoke_wd_tools_instance_"))
+os.environ["INSTANCE_DIR"] = str(INSTANCE)
+os.environ["ANIMATION_RIG_FILE"] = str(INSTANCE / "rig.fbx")
 
 from app.core import paths  # noqa: E402
 
 STORAGE = Path(tempfile.mkdtemp(prefix="smoke_wd_tools_"))
+os.environ["STORAGE_DIR"] = str(STORAGE)
 paths.init(STORAGE)
+paths.init_instance(INSTANCE)
 
 from app.core import db  # noqa: E402
 

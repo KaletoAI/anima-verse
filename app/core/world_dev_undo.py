@@ -70,7 +70,8 @@ Inverse ops (``inverse["op"]``):
   · delete_character{name, items:[ids]} · restore_character{name,
   profile:{k: before}, config:{k: before}} · restore_soul{name, file_id,
   before_text} (file_id = path relative to the character directory, as
-  ``soul_writer.read_text/write_text`` take it) · restore_home_schedule{name,
+  ``soul_writer.read_raw/write_raw`` take it; before_text = the RAW text,
+  byte-exact) · restore_home_schedule{name,
   before:{home_location, home_room, daily_schedule, known_locations}} ·
   restore_body_slots{name, before:{slot: {attribute: value}}, had_key,
   slots_present} · restore_status_effects{name, before:{stat: value},
@@ -133,8 +134,8 @@ restore_*_area — the full re-read row; restore_character —
 restore_status_effects — ``{"stats": {stat: value}}`` (the patched stats as
 re-read after the write); remove_known_places — ``{"known": [ids]}`` (the
 places the call added, as read back);
-remove_outfits — ``{"outfits": {id: row}, "inventory": {item id: entry}}``; restore_soul — the stored text as a
-plain string (or None when the write removed the file). A key that did not exist is recorded as :data:`ABSENT` (restoring it
+remove_outfits — ``{"outfits": {id: row}, "inventory": {item id: entry}}``; restore_soul — the stored RAW text as a
+plain string (``soul_writer.read_raw``; or None when the write removed the file). A key that did not exist is recorded as :data:`ABSENT` (restoring it
 removes the key again).
 
 A step that RAISES is reported as ``undo failed: ...`` and still marked
@@ -800,6 +801,15 @@ def _undo_remove_outfits(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_S
 
 
 def _undo_restore_soul(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    """Compare the file's RAW text (``soul_writer.read_raw``, no newline
+    translation) with what the step wrote and put the before text back byte
+    for byte (``write_raw``, no rstrip). A row journaled before the raw
+    readers existed recorded ``read_text`` (universal newlines), i.e.
+    LF-normalised text: when the file still equals that LF ``written`` text
+    (the old writer had already rewritten it as LF) the step restores the
+    recorded LF ``before_text`` — a CRLF original is not brought back;
+    when the file no longer equals it (for example it is still or again
+    CRLF) the step is skipped ``changed since``."""
     from app.core import soul_writer
     from app.models.character import character_row_exists
     name = str(inv.get("name") or "")
@@ -814,9 +824,9 @@ def _undo_restore_soul(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Ski
             # A done entry compares even when the agent's write removed the
             # file (written None); a pending one has nothing to compare.
             if entry.get("state") == "done":
-                if soul_writer.read_text(name, rel) != written:
+                if soul_writer.read_raw(name, rel) != written:
                     raise _Skip(REASON_CHANGED, keys=[rel])
-            soul_writer.write_text(name, rel, inv.get("before_text"))
+            soul_writer.write_raw(name, rel, inv.get("before_text"))
     return []
 
 
@@ -2173,8 +2183,28 @@ def apply_inverse(entry: Dict[str, Any]) -> List[Dict[str, Any]]:
 #: safe to repeat. While it stands it HOLDS the places and characters its
 #: written row names (:func:`held_names`): their creating delete in the same
 #: pass is skipped with :data:`REASON_HELD` and stays in the journal too,
-#: never leaving the row naming a missing place or character.
+#: never leaving the row naming a missing place or character. One level
+#: further (F6): a character held that way keeps the run-created place it
+#: stands in and the one it lives in (its home) — their creating delete is
+#: skipped the same way, labelled :data:`CHARACTER_HOLDER`, so the kept
+#: character is never left standing in, or living in, a missing run-created
+#: place OLDER than itself. A place the run created AFTER the character is
+#: not held (its delete was reached before the character's): when the
+#: character still stands or lives there it stays and the preview names it
+#: as a character to place anew. When the character's place or home cannot
+#: be read (undo: the live read; preview: the simulation), the character
+#: holds EVERY run-created place older than itself, with the same label —
+#: the conservative way, both sides alike. They can still disagree when the
+#: read fails on one side only (a transient error between preview and
+#: discard): the discard then reports what it really did.
+#: Limits, on purpose: a holding step still PENDING (no written row — it
+#: failed before or during its write) names nothing and so holds nothing;
+#: and only places and characters are held — an item named in a rule
+#: condition is not, its creating delete is not held back by the rule.
 _HOLDING_OPS = frozenset({"delete_secret", "delete_rule", "delete_event"})
+
+#: Holder label of a place a held character stands in or lives in (F6).
+CHARACTER_HOLDER = 'character "{name}"'
 
 #: Reason (behind it: the steps that hold it) of a delete_location /
 #: delete_character skipped because a rule, secret or event whose undo failed
@@ -2238,10 +2268,117 @@ def _held_key(inv: Dict[str, Any]) -> Optional[Tuple[str, str]]:
     return None
 
 
+def _character_place_keys(name: str, place: str, home: str) -> List[Tuple[str, str]]:
+    """The :func:`held_names` keys the held character ``name`` holds (F6):
+    ``("location", place)`` and ``("location", home)`` for each non-empty
+    id, deduplicated, place first (the label is :data:`CHARACTER_HOLDER`)."""
+    out: List[Tuple[str, str]] = []
+    for value in (place, home):
+        key = ("location", str(value or "").strip())
+        if key[1] and key not in out:
+            out.append(key)
+    return out
+
+
+def _is_character_holder(label: str) -> bool:
+    return label.startswith(CHARACTER_HOLDER.split("{", 1)[0])
+
+
+def _held_reason(labels: List[str]) -> str:
+    """undo()'s skip reason of a held delete_location / delete_character:
+    the steps whose undo failed (:data:`REASON_HELD`) kept apart from the
+    held characters standing or living there (F6, :data:`CHARACTER_HOLDER`)
+    — a character is not a failed step (same split as
+    :func:`_held_location_line`)."""
+    people = [h for h in labels if _is_character_holder(h)]
+    steps = [h for h in labels if not _is_character_holder(h)]
+    parts: List[str] = []
+    if steps:
+        parts.append(f"{REASON_HELD} ({', '.join(steps)})")
+    if people:
+        one = len(people) == 1
+        parts.append(", ".join(people) + (" stands or lives" if one else " stand or live")
+                     + " there and " + ("stays" if one else "stay"))
+    return ", and ".join(parts) + " — kept for a later discard"
+
+
+def _home_location_value(value: Any) -> str:
+    return "" if is_absent(value) or not isinstance(value, str) else value
+
+
+def _hold_character_places(held: Dict[Tuple[str, str], List[str]], name: str) -> bool:
+    """undo(): a delete_character skipped as held keeps the place the
+    character stands in and its home, read LIVE now — the newer entries
+    (the run's own placements and home changes) are already reversed.
+    Returns False on a read error (logged): the caller then holds every
+    older run-created place for the character (see :data:`_HOLDING_OPS`)."""
+    try:
+        from app.models.character import read_placement
+        prof = (read_placement(name) or {}).get("profile") or {}
+        place = prof.get("current_location")
+        home = home_schedule_state(name).get("home_location")
+    except Exception as e:  # noqa: BLE001 — undo() never stops on one read
+        logger.error("world-dev undo: places of held %s not readable: %s", name, e,
+                     exc_info=True)
+        return False
+    label = CHARACTER_HOLDER.format(name=name)
+    for key in _character_place_keys(name, place if isinstance(place, str) else "",
+                                     _home_location_value(home)):
+        labels = held.setdefault(key, [])
+        if label not in labels:
+            labels.append(label)
+    return True
+
+
+def simulated_home(entries: List[Dict[str, Any]], foreign: set, name: str) -> str:
+    """For :func:`discard_preview`: the character's ``home_location`` as the
+    undo leaves it ("" for none) — the live value, then the run's not-undone
+    ``restore_home_schedule`` entries of that character walked newest-first
+    the way :func:`_undo_restore_home_schedule` decides (:func:`_split_keys`):
+    an entry whose ``before`` has the key and whose ``written`` value equals
+    the SIMULATED one (or that has no written value: pending) puts
+    ``before.home_location`` back; one that does not match leaves it
+    (changed since). A foreign character keeps its live home."""
+    sim: Any = home_schedule_state(name).get("home_location")
+    if ("character", name) in foreign:
+        return _home_location_value(sim)
+    for entry in entries:  # newest-first, as undo() walks them
+        inv = entry.get("inverse") or {}
+        if inv.get("op") != "restore_home_schedule" or str(inv.get("name") or "") != name:
+            continue
+        before = inv.get("before") or {}
+        if "home_location" not in before:
+            continue
+        written = entry.get("written")
+        if (isinstance(written, dict) and "home_location" in written
+                and _norm(written["home_location"]) != _norm(sim)):
+            continue
+        sim = before["home_location"]
+    return _home_location_value(sim)
+
+
 def _holder_label(inv: Dict[str, Any]) -> str:
     kind = {"delete_rule": "rule", "delete_secret": "secret",
             "delete_event": "event"}.get(str(inv.get("op") or ""), "step")
     return f"{kind} {inv.get('id') or ''}".strip()
+
+
+def _note_create_undone(run_id: str, inv: Dict[str, Any],
+                        skips: List[Dict[str, Any]]) -> None:
+    """After marking a creating entry undone (a ``delete_location`` or a
+    CLAIMED ``delete_character`` inverse) that was reversed or skipped as
+    ``already gone`` — the created element is no longer there — let the
+    media lane give the element its first baseline back
+    (``world_dev_media.note_create_undone``, F4). Item and occupant records
+    beside it do not count; a refused or failed delete leaves the element
+    standing and changes nothing."""
+    own = [s for s in skips if "item" not in s and "occupant" not in s]
+    if any(s.get("reason") != REASON_GONE for s in own):
+        return
+    from app.core import world_dev_media
+    target = world_dev_media.create_target(inv)
+    if target is not None:
+        world_dev_media.note_create_undone(run_id, target[0], target[1])
 
 
 # ── Public entry points ──────────────────────────────────────────────────
@@ -2262,7 +2399,10 @@ def undo(run_id: str, turn: Optional[int] = None) -> Dict[str, Any]:
     later previews and the next undo retries it) and the delete_location /
     delete_character of a place or character that such a step still names
     (skipped with ``still named by a step whose undo failed (...)``, key
-    ``held_by``; see :data:`_HOLDING_OPS`). Occupant records of
+    ``held_by``; see :data:`_HOLDING_OPS`) — and, one level further, the
+    delete_location of a place such a held character stands in or lives in
+    (read live when the character is skipped; label
+    :data:`CHARACTER_HOLDER`). Occupant records of
     characters this undo deleted are dropped at the end, and so are the
     ``item still in use`` records of items a final cleanup pass deletes
     (held only by an older element of the run that the walk removed later).
@@ -2285,6 +2425,10 @@ def undo(run_id: str, turn: Optional[int] = None) -> Dict[str, Any]:
     # Places/characters (held_names keys) still named by a holding step whose
     # undo failed in this pass -> labels of those steps.
     held: Dict[Tuple[str, str], List[str]] = {}
+    # Held characters whose place/home could not be read: each holds every
+    # run-created place the walk reaches after it (= older), see _HOLDING_OPS.
+    unread_holders: List[str] = []
+    from app.models.world import get_location_by_id
     for entry in wr.entries(run_id, turn=turn):
         seq = int(entry["seq"])
         target = _target_of(entry.get("inverse") or {})
@@ -2302,13 +2446,38 @@ def undo(run_id: str, turn: Optional[int] = None) -> Dict[str, Any]:
             continue
         inv_now = entry.get("inverse") or {}
         hkey = _held_key(inv_now)
-        if hkey is not None and hkey in held:
+        labels = list(held.get(hkey) or []) if hkey is not None else []
+        if hkey is not None and hkey[0] == "location" and (
+                unread_holders or any(_is_character_holder(h) for h in labels)):
+            # A character holds only a place that still exists: a place gone
+            # since (deleted outside the run) falls through to apply_inverse
+            # and is marked undone as "already gone" — the preview shows no
+            # line for it either. A failed read counts as existing (held, as
+            # the preview holds it) and never stops the walk.
+            try:
+                place_exists = get_location_by_id(hkey[1]) is not None
+            except Exception as e:  # noqa: BLE001 — undo() never stops on one read
+                logger.error("world-dev undo %s#%s: place %s not readable: %s",
+                             run_id, seq, hkey[1], e, exc_info=True)
+                place_exists = True
+            if place_exists:
+                labels += [h for h in unread_holders if h not in labels]
+            else:
+                labels = [h for h in labels if not _is_character_holder(h)]
+        if labels:
             # Deleting it would leave the failed step's row naming a missing
             # place/character: skipped, and kept in the journal for a later
             # discard (not marked undone, like the holder).
             skipped.append(_skip_dict(entry, _Skip(
-                f"{REASON_HELD} ({', '.join(held[hkey])}) — kept for a later discard",
-                held_by=list(held[hkey]))))
+                _held_reason(labels), held_by=list(labels))))
+            if str(inv_now.get("op") or "") == "delete_character":
+                # F6: the kept character keeps the place it stands in and
+                # its home; an older delete_location of them is held too.
+                hname = str(inv_now.get("name") or "")
+                if not _hold_character_places(held, hname):
+                    label = CHARACTER_HOLDER.format(name=hname)
+                    if label not in unread_holders:
+                        unread_holders.append(label)
             continue
         try:
             skips = apply_inverse(entry)
@@ -2339,6 +2508,7 @@ def undo(run_id: str, turn: Optional[int] = None) -> Dict[str, Any]:
                     s["net_absent"] = True
         skipped.extend(skips)
         wr.mark_undone(run_id, seq)
+        _note_create_undone(run_id, inv_now, skips)
     # An item the walk reached while an OLDER holder of the run still had it
     # (a place or character created before the item, holding it through a
     # foreign placement or a give changed since) is skipped as in use; the
@@ -2915,6 +3085,52 @@ def _skill_preview_lines(entries: List[Dict[str, Any]], deleted: set) -> List[st
     return lines
 
 
+def _soul_preview_lines(entries: List[Dict[str, Any]], deleted: set) -> List[str]:
+    """The discard lines of the run's ``restore_soul`` entries, decided the
+    way :func:`_undo_restore_soul` decides them: newest-first over a
+    SIMULATED raw file text per (character, section file), the real one
+    (``soul_writer.read_raw``, no newline translation) first. A DONE entry
+    whose simulated text differs from what the step wrote -> one "was changed
+    since — the discard leaves it alone" line (the undo skips it — a rewrite
+    that only changed the line ends counts too); otherwise the simulated text
+    becomes the entry's ``before_text``. A section put back is no line. A
+    character that is gone, or that the discard deletes itself (DELETED),
+    gets no line; a file that cannot be decoded gets a "cannot be read" line
+    (the undo reports it as failed). Oldest line first."""
+    from app.core import soul_writer
+    from app.models.character import character_row_exists
+    lines: List[str] = []
+    sim: Dict[Tuple[str, str], Optional[str]] = {}
+    unreadable: set = set()
+    for entry in entries:  # newest-first
+        inv = entry.get("inverse") or {}
+        if inv.get("op") != "restore_soul":
+            continue
+        name = str(inv.get("name") or "")
+        rel = str(inv.get("file_id") or "")
+        if not name or name in deleted or not character_row_exists(name):
+            continue
+        key = (name, rel)
+        if key in unreadable:
+            continue
+        if key not in sim:
+            try:
+                sim[key] = soul_writer.read_raw(name, rel)
+            except (OSError, UnicodeDecodeError, ValueError):
+                unreadable.add(key)
+                lines.append(f'soul {rel} of "{name}" cannot be read; the '
+                             "discard will report it")
+                continue
+        if entry.get("state") == "done" and sim[key] != entry.get("written"):
+            lines.append(f'soul {rel} of "{name}" was changed since — the '
+                         "discard leaves it alone")
+            continue
+        before = inv.get("before_text")
+        sim[key] = None if before is None else str(before)
+    lines.reverse()
+    return lines
+
+
 #: Kinds whose discard_preview branch turns a read error into a line
 #: ("... cannot be read; the discard will report it") instead of raising —
 #: the same error the undo handler reports as "undo failed".
@@ -2948,7 +3164,64 @@ def _preview_held(entries: List[Dict[str, Any]], foreign: set
         except Exception:  # noqa: BLE001 — the undo reports it as "undo failed"
             for key in held_names(entry):
                 held.setdefault(key, []).append(_holder_label(inv))
+    # F6: a held character holds the place it stands in and its home, as
+    # undo() reads them when it skips the character — after the newer
+    # entries (the run's placements and home changes) are reversed:
+    # simulated_places / simulated_home. Only a place whose NEWEST creating
+    # entry is older than the character's is held: a newer one is deleted
+    # before the walk reaches the character.
+    holders = [entry for entry in entries
+               if (entry.get("inverse") or {}).get("op") == "delete_character"
+               and _target_of(entry.get("inverse") or {}) not in foreign
+               and _held_key(entry.get("inverse") or {}) in held]
+    if holders:
+        newest_loc: Dict[str, int] = {}
+        for entry in entries:
+            inv = entry.get("inverse") or {}
+            if (inv.get("op") == "delete_location" and inv.get("id")
+                    and _target_of(inv) not in foreign):
+                lid = str(inv.get("id"))
+                newest_loc[lid] = max(newest_loc.get(lid, -1), int(entry["seq"]))
+        try:
+            places: Optional[Dict[str, Tuple[str, str]]] = simulated_places(entries, foreign)
+        except Exception:  # noqa: BLE001 — held conservatively below, as undo() does
+            places = None
+        for entry in holders:  # newest-first, as undo() reaches them
+            name = str((entry.get("inverse") or {}).get("name") or "")
+            label = CHARACTER_HOLDER.format(name=name)
+            try:
+                if places is None:
+                    raise LookupError("places not readable")
+                keys = [k[1] for k in _character_place_keys(
+                    name, places.get(name, ("", ""))[0],
+                    simulated_home(entries, foreign, name))]
+            except Exception:  # noqa: BLE001 — undo() holds every older run place then
+                keys = list(newest_loc)
+            for lid in keys:
+                key = ("location", lid)
+                if key[1] in newest_loc and newest_loc[key[1]] < int(entry["seq"]):
+                    labels = held.setdefault(key, [])
+                    if label not in labels:
+                        labels.append(label)
     return held
+
+
+def _held_location_line(loc: Dict[str, Any], labels: List[str]) -> str:
+    """The preview line of a run-created place undo() holds: the unreadable
+    steps that name it, and/or the held characters standing or living there
+    (F6, :data:`CHARACTER_HOLDER`)."""
+    head = f'location {loc.get("id")} "{loc.get("name") or ""}"'
+    people = [h for h in labels if _is_character_holder(h)]
+    steps = [h for h in labels if not _is_character_holder(h)]
+    who = ""
+    if people:
+        one = len(people) == 1
+        who = (", ".join(people) + (" stands or lives" if one else " stand or live")
+               + " there and " + ("is" if one else "are") + " kept")
+    if not steps:
+        return f"{head} stays: {who} — the discard leaves it"
+    return (f"{head} is still named by {', '.join(steps)}, which cannot be read"
+            + (f", and {who}" if who else "") + " — the discard leaves it")
 
 
 def discard_preview(run_id: str) -> List[str]:
@@ -2988,7 +3261,11 @@ def discard_preview(run_id: str) -> List[str]:
     row changed since is one "was changed since" line; a key put back on a
     row that existed is no line (nothing goes). A skill switch
     (``restore_skill_config``) whose file changed since is one "was changed
-    since" line (:func:`_skill_preview_lines`); one put back is no line. The
+    since" line (:func:`_skill_preview_lines`); one put back is no line. A
+    soul section (``restore_soul``) whose raw file text differs from what
+    the step wrote is one ``soul <rel> of "<name>" was changed since`` line
+    (:func:`_soul_preview_lines`, a line-end-only rewrite included); one put
+    back is no line. The
     media lane's hairstyle (``remove_hairstyle``) follows
     :func:`_hairstyle_preview_lines`: ``hairstyle <id> of "<name>"`` when the
     undo deletes it (no line when the character itself goes), "was changed
@@ -3017,7 +3294,11 @@ def discard_preview(run_id: str) -> List[str]:
     still named by rule <id>, which cannot be read — the discard leaves it``
     (``character "<name>" ...`` likewise): undo() skips it
     (:data:`REASON_HELD`), and both stay in the journal, so a later preview
-    still lists them. A quest
+    still lists them. A place the run created that such a held character
+    stands in or lives in (as the undo leaves it: :func:`simulated_places`,
+    :func:`simulated_home`) is held too (F6): ``location <id> "<name>"
+    stays: character "<n>" stands or lives there and is kept — the discard
+    leaves it`` (:func:`_held_location_line`). A quest
     template the run created (``delete_quest_template``) is
     ``quest template <id> "<title>"``, or one "was changed since — the discard
     leaves it alone" line when its revision moved on or a run of it exists
@@ -3154,9 +3435,7 @@ def discard_preview(run_id: str) -> List[str]:
             hkey = _held_key(inv)
             if loc and hkey in held:
                 # undo() skips it (REASON_HELD): it stays, nobody is stranded.
-                lines.append(f'location {loc.get("id")} "{loc.get("name") or ""}" is '
-                             f"still named by {', '.join(held[hkey])}, which cannot be "
-                             "read — the discard leaves it")
+                lines.append(_held_location_line(loc, held[hkey]))
             elif loc:
                 created[str(loc.get("id"))] = str(loc.get("name") or "")
                 lines.append(f'location {loc.get("id")} "{loc.get("name") or ""}"')
@@ -3293,6 +3572,7 @@ def discard_preview(run_id: str) -> List[str]:
                         if holders else ""))
     lines.extend(_address_preview_lines(entries))
     lines.extend(_skill_preview_lines(entries, deleted_names))
+    lines.extend(_soul_preview_lines(entries, deleted_names))
     lines.extend(_hairstyle_preview_lines(entries, deleted_names))
     if created or removed_rooms:
         # Where everybody stands once the undo has put the run's placements

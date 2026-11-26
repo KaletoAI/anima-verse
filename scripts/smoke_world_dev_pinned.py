@@ -75,6 +75,18 @@ count among the newest 4.
     is parsed, and npc_spawn.normalize_slot must store count_min <hi>+1 as
     <hi> (min(20, ...) clamps 21 to 20) and count_min -1 as <lo> (max(0, ...)
     clamps to 0) — so a moved cap in the code no longer matches the text.
+(i) a pinned read is capped in the history (plan
+    docs/superpowers/plans/2026-11-25-world-dev-free-fixes.md, Task 8, F8a):
+    MAX_PINNED_CHARS = 16000 (the longest shipped manual is 12534 characters
+    — manual_map.md after this task — so every manual stays whole).
+    read_manual{map} with a line of 20000 "x" -> content ==
+    "[result read_manual] " (21 characters) + 16000 "x" +
+    "\n[cut — 16000 of 20000 characters kept]". A line of 12 399 characters
+    stays whole: content length 21 + 12 399 = 12 420. A non-pinned read
+    (world_overview, 20000 "y") is stored whole (21 + 2 = "[result
+    world_overview] " is 24 characters: 24 + 20000 = 20024). Every shipped
+    manual section (each of wt.MANUAL_SECTIONS, so a new section is covered
+    too), rendered through read_manual, is <= 16000 characters.
 """
 import os
 import sys
@@ -266,6 +278,28 @@ check("(h) map: area slots need a label, no room / radius_m",
 _chars = manual("characters")
 check("(h) characters: crowds point to npc_slots",
       "npc_slots" in _chars and "read_manual locations" in _chars)
+
+print("(i) pinned reads are capped in the history")
+check("(i) MAX_PINNED_CHARS 16000", getattr(wa, "MAX_PINNED_CHARS", None) == 16000,
+      getattr(wa, "MAX_PINNED_CHARS", None))
+st7 = wa._RunState()
+rm._add_result(st7, MAN, "x" * 20000, {"section": "map"})
+_want = "[result read_manual] " + "x" * 16000 + "\n[cut — 16000 of 20000 characters kept]"
+check("(i) a 20000-character manual is cut to 16000", contents(st7)[-1] == _want,
+      (len(contents(st7)[-1]), contents(st7)[-1][-60:]))
+rm._add_result(st7, MAN, "z" * 12399, {"section": "characters"})
+check("(i) a 12 399-character manual stays whole", len(contents(st7)[-1]) == 12420
+      and contents(st7)[-1] == "[result read_manual] " + "z" * 12399, len(contents(st7)[-1]))
+rm._add_result(st7, OV, "y" * 20000, {})
+check("(i) a non-pinned read is not capped", len(contents(st7)[-1]) == 20024,
+      len(contents(st7)[-1]))
+for _section in wt.MANUAL_SECTIONS:
+    try:
+        _len = len(manual(_section))
+    except Exception as exc:  # noqa: BLE001 - a missing section is reported, not raised
+        _len = repr(exc)
+    check(f"(i) manual {_section} fits MAX_PINNED_CHARS",
+          isinstance(_len, int) and _len <= 16000, _len)
 
 print()
 if failures:

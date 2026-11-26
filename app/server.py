@@ -1069,6 +1069,19 @@ async def lifespan(app: FastAPI):
     # Start task-queue workers only after all handlers are registered
     # Otherwise recovered persisted tasks fail during recovery.
     from app.core.task_queue import get_task_queue
+    # World Dev media (F1): rows of an interrupted run are held BEFORE the
+    # workers start — start() turns the last process's lane task back to
+    # pending, and that lane must not pick up a row waiting for Accept.
+    # Ordering assumption: nothing earlier in this lifespan submits to the
+    # task queue (a submit would start the workers before this hold);
+    # scripts/smoke_world_dev_media_interrupted.py (h4) pins hold < start < reset.
+    try:
+        from app.core.world_dev_media import hold_on_boot as _wdm_hold
+        _wdm_held = _wdm_hold()
+        if _wdm_held:
+            logger.info("World Dev media at boot: %d row(s) of interrupted runs held", _wdm_held)
+    except Exception as _wdmh:
+        logger.error("World Dev media boot hold failed: %s", _wdmh, exc_info=True)
     get_task_queue().start()
     logger.info("Task-Queue Worker gestartet")
 

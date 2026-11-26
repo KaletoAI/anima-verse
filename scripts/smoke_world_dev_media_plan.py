@@ -103,6 +103,20 @@ Step order of an element (world_dev_media.element_steps):
       setting base_body.dressed_side_views, shipped default False
       (config_schema). Unset -> False, False -> False, True -> True, and none
       of the three raises (the call named a function base_body never had).
+  (n) the portrait fingerprint ignores state image modifiers (fixes plan
+      2026-11-25-world-dev-free-fixes.md, F3). prompt_filters.
+      apply_image_modifiers is stubbed: for "Demo Lean" while the module flag
+      MOD_ON is set it appends " +MOD", otherwise it returns the text as is
+      (the generic state mechanism, no state name in the smoke). A fifth run
+      takes the baseline of "Demo Lean" (note_touch, restore inverse) with the
+      modifier off; then the modifier goes on (no look change) -> due [] for
+      "Demo Lean" (the portrait fp is resolve_face_prompt(...,
+      apply_modifiers=False), like the neutral mesh/reference inputs; with
+      the modifier applied it was ["portrait"]). Then face_appearance changes
+      to "a demo face" -> ["portrait"] (the face text is the fp input; the
+      build fp, the wanted figure, does not read it).
+      Deploy note: an open run whose baseline was taken WITH modifiers sees
+      its portrait due once after the change (harmless, one render).
 """
 from __future__ import annotations
 
@@ -417,6 +431,40 @@ finally:
         _bb["dressed_side_views"] = _old
     else:
         _bb.pop("dressed_side_views", None)
+
+# (n)
+print("(n) the portrait fp ignores state modifiers")
+from app.core import prompt_filters  # noqa: E402
+from app.models.character import get_character_profile  # noqa: E402
+
+MOD_ON = {"on": False}
+_orig_mod = prompt_filters.apply_image_modifiers
+
+
+def _mod(name, text, *a, **k):
+    return f"{text} +MOD" if name == "Demo Lean" and MOD_ON["on"] else text
+
+
+prompt_filters.apply_image_modifiers = _mod
+try:
+    wr.set_status(run_l2, "accepted")
+    run_n = wr.create_run("build", "m", "p", "u", 80, 300000)
+    wdm.note_touch(run_n, "character", "Demo Lean", {"op": "restore_character", "name": "Demo Lean"})
+    check("(n) a dict baseline", isinstance(wr.baselines(run_n).get(("character", "Demo Lean")), dict),
+          wr.baselines(run_n))
+    review(run_n)
+    check("(n) fixture: nothing due before", due(run_n, "character", "Demo Lean") == [],
+          due(run_n, "character", "Demo Lean"))
+    MOD_ON["on"] = True
+    check("(n) modifier on -> nothing due", due(run_n, "character", "Demo Lean") == [],
+          due(run_n, "character", "Demo Lean"))
+    _p = dict(get_character_profile("Demo Lean"))
+    _p["face_appearance"] = "a demo face"
+    check("(n) fixture: face saved", save_character_profile("Demo Lean", _p) is True)
+    check("(n) face change -> portrait due", due(run_n, "character", "Demo Lean") == ["portrait"],
+          due(run_n, "character", "Demo Lean"))
+finally:
+    prompt_filters.apply_image_modifiers = _orig_mod
 
 print("FAIL: " + ", ".join(failures) if failures else "ALL OK")
 sys.exit(1 if failures else 0)

@@ -9,9 +9,13 @@ what already lies in a box (add `"polygons": true` for outlines): a terrain line
 `· scatter <n>` / `· along <n>` / `· slots <n>` when the area grows props, has rows of props
 along its stroke or NPC slots; a place line ends `· outline (x0,z0)-(x1,z1) · on <kind>`.
 An outline too long for that list reads `polygon: <n> points — get_area{"id": …}`:
-`get_area{id}` returns one terrain or height area whole — for an area drawn as a stroke first
-the centre line and width to send back in an update, then its full polygon. A list too long
-for that result ends `,…]` with a `[cut — …]` line: never send a cut list back.
+`get_area{id, points?, offset?, limit?}` returns one terrain or height area whole — for an area
+drawn as a stroke first the centre line and width to send back in an update, then its full
+polygon. A list too long for that result ends `,…]` with a `[cut — …]` line that names the call
+reading on (`get_area{"id": …, "points": "stroke" | "polygon", "offset": <n>}`, `limit` caps the
+points of one page): each page reads `<part> points <a>…<b> of <n>: […]` and, while points
+follow, ends with `[more — …]` naming the next call. Never send a cut list back — join the pages
+into the whole list first.
 
 ## Terrain areas — the painted ground
 

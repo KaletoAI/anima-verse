@@ -37,6 +37,15 @@ Plan Task 10 (the routes) and Task 11 (the panel), by hand:
       (no setInterval in the file).
   (f) every t('<literal>') of the panel is a de.json key (smoke_i18n_orphans
       checks only the other direction: no key without a source).
+
+Plan docs/superpowers/plans/2026-11-25-world-dev-free-fixes.md, Task 1 (F1 —
+an interrupted run renders nothing before Accept):
+
+  (g) the panel's MediaStatus interface names "waiting", its MediaWaiting
+      type names kind, id, name, steps, and world_dev_media.media_status
+      returns a dict literal with the key "waiting" (AST of the return).
+  (h) both new t() literals — "Waiting for Accept" and the interrupted-run
+      hint — appear in the panel and are de.json keys.
 """
 from __future__ import annotations
 
@@ -132,6 +141,27 @@ check("setInterval(" not in panel, "(e) no polling loop")
 missing = sorted({s for s in re.findall(r"\bt\(\s*'((?:[^'\\]|\\.)*)'\s*\)", panel)
                   if s.replace("\\'", "'") not in de})
 check(not missing, f"(f) every t() literal has a de.json key (missing: {missing})")
+
+# (g)
+check(re.search(r"interface\s+MediaStatus\s*\{[^}]*\bwaiting\??\s*:", panel, re.S) is not None,
+      "(g) MediaStatus names waiting")
+wt_fields = interface_fields(panel, "MediaWaiting")
+check({"kind", "id", "name", "steps"} <= wt_fields,
+      f"(g) MediaWaiting names kind, id, name, steps (has {sorted(wt_fields)})")
+status_keys: set = set()
+for node in ast.walk(ast.parse(MEDIA.read_text(encoding="utf-8"))):
+    if isinstance(node, ast.FunctionDef) and node.name == "media_status":
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Return) and isinstance(sub.value, ast.Dict):
+                status_keys |= {k.value for k in sub.value.keys if isinstance(k, ast.Constant)}
+check("waiting" in status_keys, f"(g) media_status returns the key waiting (keys {sorted(status_keys)})")
+
+# (h)
+for lit in ("Waiting for Accept",
+            "This run was interrupted: its media are rendered after Accept; "
+            "Discard drops them."):
+    check(f"t('{lit}')" in panel, f"(h) the panel shows t({lit!r})")
+    check(lit in de, f"(h) {lit!r} is a de.json key")
 
 if failures:
     print(f"\n{len(failures)} FAILED")

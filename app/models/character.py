@@ -1527,20 +1527,32 @@ def can_view_gallery(viewer: str, owner: str) -> bool:
 
 
 def add_known_location(character_name: str, location_id: str) -> List[str]:
-    """Add a location ID to known_locations idempotently and return the list.
+    """Add a location ID to known_locations idempotently and return the stored list.
 
-    Create the field if absent, enabling strict mode for this character."""
+    An already-known ID writes nothing. A failed save is logged and returns
+    the list as it was before (what is actually stored).
+    Create the field if absent, enabling strict mode for this character.
+    The read-modify-write runs under ``keyed_lock("character_profile", name)``
+    (re-entrant, so a caller may already hold it; a caller holding a places
+    lock keeps the order places -> profile): discovery, rules and the World
+    Dev known-places tool write the same list from different threads."""
     if not character_name or not location_id:
         return []
-    cfg = get_character_config(character_name) or {}
-    existing = cfg.get("known_locations")
-    if not isinstance(existing, list):
-        existing = []
-    known = [str(v) for v in existing if v]
-    if location_id not in known:
-        known.append(location_id)
-    cfg["known_locations"] = known
-    save_character_config(character_name, cfg)
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", character_name):
+        cfg = get_character_config(character_name) or {}
+        existing = cfg.get("known_locations")
+        if not isinstance(existing, list):
+            existing = []
+        stored = [str(v) for v in existing if v]
+        if location_id in stored:
+            return stored
+        known = stored + [location_id]
+        cfg["known_locations"] = known
+        if not save_character_config(character_name, cfg):
+            logger.warning("add_known_location: saving %r for %s failed",
+                           location_id, character_name)
+            return stored
     return known
 
 
@@ -1660,7 +1672,7 @@ def set_movement_target(character_name: str, location_id: str) -> bool:
     # Read AND write under the per-character profile lock (DATA-3): ``journey``
     # is a profile_json key and the save writes the whole blob, so a stale read
     # here revives a cancelled journey or drops a running one. Leaf block — it
-    # calls nothing that takes this (non-re-entrant) lock again.
+    # calls nothing that takes this lock again (keyed_lock is re-entrant anyway).
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name)
         new_target = (location_id or "").strip()
@@ -2905,7 +2917,9 @@ def clear_pose_intent(character_name: str, *, arriving: bool = False) -> None:
     from app.core.keyed_lock import keyed_lock
     # Read AND write under the per-character profile lock (DATA-3): the save
     # writes the whole profile_json blob out. ``stand_up`` stays OUTSIDE — it
-    # writes the profile itself and keyed_lock is a plain, non-re-entrant Lock.
+    # does its own profile read-modify-write and composes room geometry;
+    # keyed_lock is re-entrant, so nesting would not deadlock, but the held
+    # block stays short.
     stored = False
     changed = False
     old_display = ""

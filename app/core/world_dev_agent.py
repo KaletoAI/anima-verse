@@ -44,10 +44,13 @@ world had before the run.
 Media (plan docs/superpowers/plans/2026-11-25-world-dev-free-media.md,
 Task 9): a follow-up turn's start cancels the run's queued media rows
 (`world_dev_media.cancel_queued`, "turn N started"); every turn end that
-leaves the run in review (final, budget cut, a rolled-back later turn) or
-interrupted releases the turn's deferral WITHOUT a replay and queues the
-media of every touched element (`world_dev_media.schedule`, which re-plans
-what a cancel left open). Discard closes and removes the run's media BEFORE
+leaves the run in review (final, budget cut, a rolled-back later turn)
+releases the turn's deferral WITHOUT a replay and queues the media of every
+touched element (`world_dev_media.schedule`, which re-plans what a cancel
+left open). An interrupted run renders nothing before Accept (F1): its
+turn end only releases the deferral, its Accept schedules once
+(`schedule(run, accepting=True)`) before the close, a Discard drops the
+plan. Discard closes and removes the run's media BEFORE
 the journal undo (`close_run_media`: the run's characters deferred again,
 a running render waited for at most `DISCARD_WAIT_S`, then `pending`),
 and after it sweeps the orphan dirs and replays the triggers the undo
@@ -99,6 +102,12 @@ MAX_BAD_CALLS = 3
 #: Read results kept whole in the history; older ones become a stub (pinned
 #: reference reads excepted — they stay whole until the same read repeats).
 KEEP_RESULTS = 4
+#: Longest pinned read kept in the history. Every shipped manual stays
+#: whole (smoke_world_dev_pinned.py (i) checks each one); a longer pinned
+#: result (a world override of a manual, a huge template schema) is cut
+#: with a closing note so it cannot fill every later turn's prompt. The
+#: step row / panel line keeps the whole text — only the history is capped.
+MAX_PINNED_CHARS = 16000
 BAD_BODY_LINE = "error: body is not a JSON object"
 SYSTEM_TEMPLATE = "world_dev_free/system.md"
 
@@ -219,6 +228,17 @@ def _display_cut(text: str) -> int:
     if lt >= 0 and "<tool".startswith(text[lt:]):
         return lt
     return len(text)
+
+
+def _seq_of(item: Any) -> int:
+    """The journal seq of a skip record (its `seq`) or of a reversed entry
+    (a bare number); 0 when it names none or cannot be read — never raises
+    (used in the discard's `finally`)."""
+    raw = item.get("seq") if isinstance(item, dict) else item
+    try:
+        return int(raw or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _tokens(run: Dict[str, Any]) -> int:
@@ -393,14 +413,18 @@ class RunManager:
             logger.error("world-dev %s: releasing the media deferral failed: %s",
                          run_id, e, exc_info=True)
 
-    async def _schedule_media(self, run_id: str, st: _RunState) -> None:
-        """A turn returned the run to review (or left it interrupted): queue
-        the media of every element the run touched (``world_dev_media.schedule``
-        re-plans ALL of them, so rows a turn start cancelled come back by
-        themselves). A failure is logged and shown as one text event; the
-        turn's outcome stands."""
+    async def _schedule_media(self, run_id: str, st: _RunState, *,
+                              accepting: bool = False) -> None:
+        """A turn returned the run to review — or an interrupted run is being
+        accepted (`accepting`, F1): queue the media of every element the run
+        touched (``world_dev_media.schedule`` re-plans ALL of them, so rows a
+        turn start cancelled come back by themselves). A failure is logged and
+        shown as one text event; the turn's outcome (the Accept) stands."""
         try:
-            await asyncio.to_thread(wdm.schedule, run_id)
+            if accepting:
+                await asyncio.to_thread(wdm.schedule, run_id, accepting=True)
+            else:
+                await asyncio.to_thread(wdm.schedule, run_id)
         except Exception as e:  # noqa: BLE001
             logger.error("world-dev %s: scheduling the media failed: %s", run_id, e,
                          exc_info=True)
@@ -573,6 +597,11 @@ class RunManager:
                 run = await asyncio.to_thread(self._get, run_id)
                 if run["status"] not in ("awaiting_review", "interrupted"):
                     raise RunStateError(f"run is {run['status']}, cannot accept", run_id)
+                if run["status"] == "interrupted":
+                    # F1: an interrupted run rendered nothing so far; its
+                    # Accept queues what plan() lists, before the close
+                    # turns the media state to accepted.
+                    await self._schedule_media(run_id, st, accepting=True)
                 await self._close(run_id, "accepted")
         finally:
             self._drop_if_idle(run_id, st)
@@ -603,10 +632,19 @@ class RunManager:
                              exc_info=True)
                 report["skipped"] = [{"seq": 0, "line": "undo", "reason": f"undo failed: {e}"}]
             finally:
-                earlier = list(run.get("skipped") or [])
-                skipped = earlier + list(report.get("skipped") or [])
+                # F7: an earlier skip record (a failed turn rollback) survives
+                # only when its seq is 0 (a crashed undo) or this undo neither
+                # reversed nor re-skipped that seq — a re-skipped seq keeps the
+                # fresh record only (one record per seq).
+                fresh = list(report.get("skipped") or [])
+                done = {_seq_of(s) for s in report.get("reversed") or []}
+                done |= {_seq_of(s) for s in fresh}
+                done.discard(0)
+                earlier = [s for s in run.get("skipped") or []
+                           if _seq_of(s) == 0 or _seq_of(s) not in done]
+                skipped = earlier + fresh
                 complete = bool(report.get("complete")) and wu.is_complete(earlier)
-                if report.get("skipped"):
+                if skipped != list(run.get("skipped") or []):
                     try:
                         await asyncio.to_thread(wr.set_skipped, run_id, skipped)
                     except Exception as e:  # noqa: BLE001 — the close must still run
@@ -742,8 +780,9 @@ class RunManager:
         try:
             run = await asyncio.to_thread(wr.get_run, run_id)
             if run is not None and run["status"] == "running":
+                # No media scheduling (F1): an interrupted run renders
+                # nothing before Accept.
                 await asyncio.to_thread(wr.set_status, run_id, "interrupted", note)
-                await self._schedule_media(run_id, st)
                 await self._emit(st, {"type": "status", "status": "interrupted",
                                       "note": note})
         except Exception as e:  # noqa: BLE001 — the boot sweep is the backstop
@@ -820,10 +859,14 @@ class RunManager:
         same tool with the same args (`_key`) turns its older copy into a
         stub (its text kept in `_orig` for _restore_superseded). Only an ok
         result is pinned — a refused one follows the normal rule. Pinned
-        results still count among the newest KEEP_RESULTS."""
+        results still count among the newest KEEP_RESULTS; one longer than
+        MAX_PINNED_CHARS is stored cut, with a note naming the cut."""
         spec = wt.TOOLS.get(tool)
         pinned = bool(spec is not None and spec.pinned and ok)
         key = tool + json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+        if pinned and len(line) > MAX_PINNED_CHARS:
+            line = (line[:MAX_PINNED_CHARS]
+                    + f"\n[cut — {MAX_PINNED_CHARS} of {len(line)} characters kept]")
         if pinned:
             for m in st.history:
                 if m.get("_pinned") and m.get("_key") == key and not m.get("_superseded"):

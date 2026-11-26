@@ -379,6 +379,13 @@ def _enabled() -> bool:
     return bool(True if val is None else val)
 
 
+def auto_renders_enabled() -> bool:
+    """The world switch of the automatic outfit renders
+    (``model_ref_renders_enabled``, absent = on) — the public reader for
+    callers outside this module (the World Dev media gate)."""
+    return _enabled()
+
+
 def _tpose_size() -> tuple:
     """(width, height) of the mesh-input pose render — square by default. The
     arms held away from the body widen the figure, and the portrait outfit

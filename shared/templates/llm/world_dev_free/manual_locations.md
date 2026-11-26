@@ -37,7 +37,9 @@ moves a place on the map.
   `footprint`, `style`, `color`, `storey_height_m`, `ground_corridor`. Leave it out unless the
   task needs it. Stairs, plot openings and the building outline are part of the floor plan —
   `set_room_layout` (`read_manual layout`); the other editor keys (elevator, wall kinds, area
-  model, hull openings) are set in the floor-plan editor. Both are refused here.
+  model, hull openings) are set in the floor-plan editor. Both are refused here — except in
+  `update_location`, where a value equal to the stored one (the `map3d` you read, sent back) is
+  dropped. `plan_width_m` is derived from the boundary; an unchanged echo is dropped too.
 - Every place with rooms needs a floor plan (`set_room_layout`), or it cannot be drawn in 3D.
 - `null` means "not given"; it never clears a field.
 
@@ -147,8 +149,10 @@ item that reveals a secret is refused.
   rooms and the rest follow with `update_location` / `set_room_layout`.
 - `boundary` — the ground the place covers, `[[x, z], …]` in metres measured FROM ITS OWN PIN
   (`[0, 0]` is the pin, `[8, 0]` is 8 m east of it), 3–24 points, the ring closes itself, it
-  turns with `yaw`. Without one the place is a plain 10 × 10 m square. Draw it when the land has
-  a shape (a shore along the lake edge, a yard between two woods).
+  turns with `yaw`. Without one the place gets a 10 × 10 m square outline, stored like a drawn
+  one (the map shows it; redraw it with `update_location`). Draw it when the land has a shape (a
+  shore along the lake edge, a yard between two woods). A place made elsewhere without an outline
+  has no area on the map: the checks judge it by its pin.
 - Two places must not share ground; leave streets and squares between them. An outline that
   overlaps another place's is stored, but the result ends
   `; warnings: '<new>' overlaps place <id> "<name>"` — move one of them (`place_location`) unless the overlap is meant (a stall on a square).

@@ -17,6 +17,7 @@ SCHEMA_VERSION = 13  # 13: quest system tables (quest_templates, quest_runs, que
 #                     (ALTER only, no bump): world_dev_runs.bounds (a free-mode run's build box)
 #                     (ALTER only, no bump): world_dev_runs.media_enabled / media_state
 #                     (+ CREATE IF NOT EXISTS world_dev_media, world_dev_media_baseline)
+#                     (ALTER only, no bump): world_dev_media_baseline.prior_json
 
 POSE_CANDIDATES_TABLE_SQL = """CREATE TABLE IF NOT EXISTS pose_candidates (
         axis TEXT NOT NULL CHECK(axis IN ('pose','expression')),
@@ -1227,6 +1228,10 @@ ALTER_MIGRATIONS = [
     # closed = discarded, nothing new is rendered).
     ("world_dev_runs", "media_enabled", "INTEGER NOT NULL DEFAULT 1"),
     ("world_dev_runs", "media_state", "TEXT NOT NULL DEFAULT 'open'"),
+    # world_dev_media_baseline: the first dict baseline a mark_created
+    # overrode (JSON {step_id: fp}); NULL = none. A rolled-back create gives
+    # it back (world_dev_runs.restore_prior_baseline).
+    ("world_dev_media_baseline", "prior_json", "TEXT"),
     ("chat_upload_owners", "purpose", "TEXT NOT NULL DEFAULT 'chat'"),
     ("chat_upload_owners", "created_at", "TEXT NOT NULL DEFAULT ''"),
     ("user_sessions", "ttl_hours", "INTEGER"),
