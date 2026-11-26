@@ -12,6 +12,7 @@ interface Reading {
   item_name: string
   index: number
   total: number
+  can_speak?: boolean
   page: {
     heading: string
     date_label?: string
@@ -67,6 +68,9 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
   const [preparedImage, setPreparedImage] = useState<PreparedImage | null>(null)
   const [imageError, setImageError] = useState('')
   const [imageJob, setImageJob] = useState<QueuedImage | null>(null)
+  const [speakState, setSpeakState] = useState<'idle' | 'loading' | 'playing'>('idle')
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const speakVersion = useRef(0)
   const imageStatusPoll = useRef<number | null>(null)
   const pageRequestVersion = useRef(0)
   const pageRef = reading?.page?.image_ref
@@ -97,9 +101,23 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
     return false
   }, [toast])
 
+  const stopAudio = useCallback(() => {
+    speakVersion.current += 1
+    const audio = audioRef.current
+    if (audio) {
+      audioRef.current = null
+      audio.onended = null
+      audio.onerror = null
+      audio.pause()
+      audio.src = ''
+    }
+    if (mounted.current) setSpeakState('idle')
+  }, [])
+
   const endSession = useCallback(() => {
     if (closed.current) return
     closed.current = true
+    stopAudio()
     if (imageStatusPoll.current !== null) window.clearTimeout(imageStatusPoll.current)
     imageStatusPoll.current = null
     lightboxClose.current?.()
@@ -109,7 +127,7 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
       .then(() => apiPost<SessionResult>('/play/read/close', { item_id: itemId }))
       .then(notify)
       .catch((error: Error) => toast(error.message, 'error'))
-  }, [itemId, notify, toast])
+  }, [itemId, notify, stopAudio, toast])
 
   const close = useCallback(() => {
     if (closed.current) return
@@ -133,11 +151,12 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
     }, 5000)
     return () => {
       mounted.current = false
+      stopAudio()
       window.clearInterval(heartbeat)
       // StrictMode replays setup immediately; only a real unmount ends the session.
       queueMicrotask(() => { if (!mounted.current) endSession() })
     }
-  }, [itemId, close, endSession, notify, toast])
+  }, [itemId, close, endSession, notify, stopAudio, toast])
 
   useEffect(() => {
     let active = true
@@ -305,8 +324,68 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
     }
   }
 
+  async function toggleSpeak() {
+    if (closed.current || !reading?.page || !reading.can_speak) return
+    if (speakState === 'playing') {
+      stopAudio()
+      return
+    }
+    if (speakState === 'loading') return
+    const version = speakVersion.current + 1
+    speakVersion.current = version
+    const pageVersion = pageRequestVersion.current
+    const index = reading.index
+    setSpeakState('loading')
+    const call = apiPost<{ audio_url?: string } & SessionResult>(
+      '/play/read/speak', { item_id: itemId, index },
+    )
+    pending.current.add(call)
+    try {
+      const result = await call
+      if (!mounted.current || closed.current || speakVersion.current !== version
+        || pageRequestVersion.current !== pageVersion) return
+      if (result.caught_by) {
+        notify(result)
+        close()
+        return
+      }
+      if (result.error) {
+        notify(result)
+        setSpeakState('idle')
+        return
+      }
+      if (!result.audio_url) {
+        setSpeakState('idle')
+        return
+      }
+      const audio = new Audio(result.audio_url)
+      audioRef.current = audio
+      const finish = () => {
+        if (audioRef.current === audio) audioRef.current = null
+        if (mounted.current && speakVersion.current === version) setSpeakState('idle')
+      }
+      audio.onended = finish
+      audio.onerror = finish
+      setSpeakState('playing')
+      try {
+        await audio.play()
+      } catch {
+        finish()
+      }
+    } catch (error) {
+      if (mounted.current && !closed.current && speakVersion.current === version
+        && pageRequestVersion.current === pageVersion) {
+        toast(error instanceof Error ? error.message : String(error), 'error')
+        setSpeakState('idle')
+      }
+    } finally {
+      pending.current.delete(call)
+    }
+  }
+
   function flip(index: number) {
     if (closed.current || pageLocked || !reading || index < 0 || index >= reading.total) return
+    stopAudio()
     pageRequestVersion.current += 1
     setBusy(true)
     setRequest({ index, opening: false })
@@ -323,6 +402,7 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
         else if (!closed.current && !pageLocked && reading) {
           const index = reading.index + (event.key === 'ArrowLeft' ? -1 : 1)
           if (index >= 0 && index < reading.total) {
+            stopAudio()
             pageRequestVersion.current += 1
             setBusy(true)
             setRequest({ index, opening: false })
@@ -345,7 +425,7 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
     }
     window.addEventListener('keydown', keydown, true)
     return () => window.removeEventListener('keydown', keydown, true)
-  }, [pageLocked, preparedImage, reading, close])
+  }, [pageLocked, preparedImage, reading, close, stopAudio])
 
   return createPortal(
     <>
@@ -373,10 +453,21 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
           style={{ display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0, minWidth: 0, overflow: 'hidden', gap: 16 }}>
           {reading ? <>
             {reading.page && reading.total > 0 && <div style={{ flexShrink: 0, minWidth: 0 }}>
-              <h3 title={reading.page.heading}
-                style={{ margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {reading.page.heading}
-              </h3>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, minWidth: 0 }}>
+                <h3 title={reading.page.heading}
+                  style={{ margin: 0, minWidth: 0, flex: '1 1 auto', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {reading.page.heading}
+                </h3>
+                {reading.can_speak && <button type="button" className="ga-btn"
+                  style={{ flexShrink: 0, padding: '2px 8px', lineHeight: 1.2 }}
+                  title={speakState === 'playing' ? t('Stop reading aloud') : t('Read aloud')}
+                  aria-label={speakState === 'playing' ? t('Stop reading aloud') : t('Read aloud')}
+                  aria-busy={speakState === 'loading'}
+                  disabled={speakState === 'loading'}
+                  onClick={() => { void toggleSpeak() }}>
+                  {speakState === 'playing' ? '⏹' : speakState === 'loading' ? '⏳' : '🔊'}
+                </button>}
+              </div>
               {reading.page.date_label && <div style={{ marginTop: 4, color: 'var(--text-muted, #8b949e)', overflowWrap: 'anywhere' }}>
                 {reading.page.date_label}
               </div>}

@@ -3342,6 +3342,29 @@ def _play_read_sync(body: Any):
                      opening=bool(body.get("opening", False)))
 
 
+@router.post("/play/read/speak")
+async def play_read_speak(request: Request, user=Depends(get_current_user)):
+    """Generate TTS audio for the current readable page in its owner's voice."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_play_read_speak_sync, body)
+
+
+def _play_read_speak_sync(body: Any):
+    from app.models.account import get_active_character
+    from app.core.item_reading import speak_page
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="object required")
+    try:
+        index = int(body.get("index", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="invalid index")
+    return speak_page(avatar, str(body.get("item_id") or ""), index)
+
+
 @router.post("/play/read/image-prepare")
 async def play_read_image_prepare(request: Request, user=Depends(get_current_user)):
     """Prepare only an authorized selected page's existing image scene."""
