@@ -283,6 +283,14 @@ SHAFT_CUT_GATES: Tuple[str, ...] = ("shaft_poke", "collar_conform_m", "collar_fl
 #: The gates a split fit does not carry: they read the foot before the cut, and under a boot the cut takes the whole
 #: foot (CUT_VERSION 5) — nothing of it can show (recorded in the side's diagnostics).
 HIDDEN_UNDER_BOOT: Tuple[str, ...] = ("deep_outside", "toe_conform_m")
+#: Gates recorded with their value and limit but never refusing a fit (``gating`` False, 2026-11-25): ``deep_outside``
+#: reads the foot BEFORE the cut — vertices the cut then removes — through a voxel fill of the shoe's outside that
+#: leaks through every opening of a mesher hull (a heel tab, lace holes, a heel window). Measured on every stored shoe
+#: on every body (72 fits): the value is bimodal, 0 – 0.016 or 0.33 – 0.55, the high mode spread evenly over heel,
+#: middle and toes, and it flips between the modes for a 2 % length step with no visible change; the fits refused at
+#: 0.546 and 0.342 look right from every side. What is SEEN is ``visible_poke`` (and ``toe_conform_m``), which refused
+#: the one fit that really showed skin through a hole of the mesh.
+REPORTED_ONLY: Tuple[str, ...] = ("deep_outside",)
 #: Gates whose value may be None (no shin vertex in the shaft's height range): recorded, not judged.
 POKE_OPTIONAL: Tuple[str, ...] = ("shaft_poke", "collar_flex_poke")
 GATE_LABELS = {
@@ -1742,20 +1750,23 @@ def cut_gates(body_after: Prim, parts: Dict[str, Dict[str, glb_mesh.GarmentMesh]
         return max(values) if values else None
 
     metrics = {key: worst(key) for key in active}
-    table = {name: (kind, limit, GATE_LABELS[name]) for name, (kind, limit) in active.items()}
-    ok, reasons = check_gates(metrics, table, optional=POKE_OPTIONAL)
+    table = {name: (kind, limit, GATE_LABELS[name]) for name, (kind, limit) in active.items()
+             if name not in REPORTED_ONLY}
+    ok, reasons = check_gates({k: v for k, v in metrics.items() if k in table}, table, optional=POKE_OPTIONAL)
     gates = {}
     for name, (kind, limit) in active.items():
         passed: Optional[bool] = None if metrics[name] is None and name in POKE_OPTIONAL else \
             check_gates({name: metrics[name]}, {name: (kind, limit, GATE_LABELS[name])})[0]
         gates[name] = {"value": metrics[name], "limit": limit, "ok": passed}
+        if name in REPORTED_ONLY:
+            gates[name]["gating"] = False   # recorded, never refusing (absent = gating, as every other gate table)
     picked = {"deep": before, "visible": body_after}
     parts_p, parts_j, parts_w = [], [], []
     for side in sides.values():
         found = side.pop("_marks", None) or {}
         for key, gate in (("deep", "deep_outside"), ("visible", "visible_poke")):
             idx = np.asarray(found.get(key, ()), np.int64)
-            if (gates.get(gate) or {}).get("ok") is False and len(idx):
+            if (gates.get(gate) or {}).get("ok") is False and gates[gate].get("gating", True) and len(idx):
                 prim = picked[key]
                 parts_p.append(np.asarray(prim.positions, np.float64)[idx])
                 parts_j.append(np.asarray(prim.joints, np.int64)[idx])

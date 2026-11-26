@@ -83,12 +83,12 @@ import type { ViewerDeform } from './Model3DViewer'
 import { FitBodySwitch } from './FitBodySwitch'
 import { RefitStoppedOffer } from './RefitStoppedOffer'
 import { FootwearAllowance } from './FootwearAllowance'
-import { applyInPlace, bindMap, cutMap, isShown, resolved, shoeSide } from './footwearAllowanceModel'
-import type { AllowanceSetting, ShoeFrame } from './footwearAllowanceModel'
+import { MANUAL_NONE, applyInPlace, bindMap, isShown, previewMap, resolved, shoeSide } from './footwearAllowanceModel'
+import type { AllowanceSetting, ManualAdjust, ShoeFrame } from './footwearAllowanceModel'
 import { FitSettings } from './FitSettings'
 import { ModelSteps } from './ModelSteps'
 import type { ModelStep } from './ModelSteps'
-import { footwearOf, garmentRunning, useGarment, useGarmentRun } from './useGarment'
+import { footwearOf, garmentRunning, runSlot, useGarment, useGarmentRun } from './useGarment'
 import type {
   CutoutOpeningChoice, CutoutOpeningInfo, GarmentItemInfo, GhostTextChoice, GarmentView, ItemWearers, PieceMaterial,
   PieceMaterialInfo, PieceStatus, PieceViewChoice, PieceViewInfo,
@@ -999,14 +999,21 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
   useEffect(() => {
     if (savedAllow) setAllowDraft({ width: savedAllow.width, length: savedAllow.length })
   }, [itemId, savedAllow?.width, savedAllow?.length])  // eslint-disable-line react-hooks/exhaustive-deps
+  // 2026-11-25: the manual adjustment previewed (the sliders of the Adjust shoe box), relative to the shown fit's own
+  const savedManual = allowView?.manual ?? MANUAL_NONE
+  const [manualDraft, setManualDraft] = useState<ManualAdjust>(MANUAL_NONE)
+  const savedManualKey = JSON.stringify(savedManual)
+  useEffect(() => { setManualDraft(JSON.parse(savedManualKey) as ManualAdjust) }, [itemId, savedManualKey])
   const shoeFrame: ShoeFrame | null = (showsBody ? shownBody?.shoe_frame : allowView?.frame) ?? null
   const previewW = resolved(allowView, 'width', allowDraft.width)
   const previewL = resolved(allowView, 'length', allowDraft.length)
+  const manualKey = JSON.stringify(manualDraft)
   const shoeDeform = useMemo<ViewerDeform | null>(() => {
-    if (!shoeFrame || isShown(shoeFrame, previewW, previewL)) return null
-    const T = cutMap(shoeFrame, previewW, previewL)
+    if (!shoeFrame || isShown(shoeFrame, previewW, previewL, manualDraft)) return null
+    const T = previewMap(shoeFrame, previewW, previewL, manualDraft)
     return {
-      key: `shoe:${previewW}:${previewL}:${shoeFrame.width_pct}:${shoeFrame.length_pct}`,
+      key: `shoe:${previewW}:${previewL}:${shoeFrame.width_pct}:${shoeFrame.length_pct}:${manualKey}:${
+        JSON.stringify(shoeFrame.manual ?? MANUAL_NONE)}`,
       map: () => {},
       skinned: {
         owns: (name) => shoeSide(name, itemId) !== null,
@@ -1017,7 +1024,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
         },
       },
     }
-  }, [shoeFrame, previewW, previewL, itemId])
+  }, [shoeFrame, previewW, previewL, itemId, manualKey])  // eslint-disable-line react-hooks/exhaustive-deps
   const pieceView = viewed({ url: garment?.preview_url, builtAt: garment?.preview_built_at })
   // Ruling A136: an out-of-date fit is not shown as if worn — only on request, and then marked as old.
   const [showOld, setShowOld] = useState(false)
@@ -1048,6 +1055,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             </div>
           ) : null}
           <FootwearSteps info={footwear} limits={info.limits || {}} busy={busy} feedback={feedback} onRun={onRun}
+            character={character} itemId={itemId} onChanged={() => startPoll(0)}
             onWidthCap={(cap) => { void onWidthCap(cap) }} meshFetchUrl={meshFetchUrl} meshBackendsUrl={meshBackendsUrl}
             onMeshFetched={onMeshFetched} />
         </div>
@@ -1089,7 +1097,9 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
           )}
           {allowView ? (
             <FootwearAllowance character={character} itemId={itemId} view={allowView} draft={allowDraft}
-              onDraft={setAllowDraft} busy={busy} onSaved={() => startPoll(0)} />
+              onDraft={setAllowDraft} manual={manualDraft} onManual={setManualDraft} busy={busy}
+              onSaved={() => startPoll(0)}
+              onRefit={noRunAll ? undefined : () => onRun({ step: 'fit', force: true, chain: true }, runSlot({ step: 'fit' }))} />
           ) : null}
           {info.steps?.length ? <ModelSteps steps={info.steps} /> : null}
           <GarmentFailure garment={footwear} stepLabels={FOOTWEAR_STEP_LABELS} />

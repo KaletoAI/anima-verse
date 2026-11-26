@@ -30,9 +30,11 @@ Expected, derived by hand:
 [3] ``figure_build._plain_fit_refusal``: the same status -> (``PIECE_SOURCE_REFUSED``, "insole — No insole found in
     the shoe mesh"); a refused FIT (failure {step "fit", error "visible_poke 0.02 > 0.005"}, no source failure) ->
     (``PIECE_REFUSED_PLAIN``, "visible_poke 0.02 > 0.005"); neither -> ("", "").
-[4] UI (static): ``FootwearAllowance.tsx`` renders the ``blocked`` branch (``data-footwear-allowance-blocked``) BEFORE
-    the sliders; ``FootwearSteps.tsx`` warns on the mesh row when the mesh is accepted and the insole refused
-    (``data-footwear-mesh-refused-by="insole"``); every new string is in ``shared/languages/de.json``.
+[4] UI (static): ``FootwearAllowance.tsx`` marks the ``blocked`` state (``data-footwear-allowance-blocked``) and names
+    the refused step BEFORE the slider rows (since 2026-11-25 "Adjust shoe" the sliders stay below it: what is saved
+    applies to the first fit, and the step can be accepted anyway); ``FootwearSteps.tsx`` warns on the mesh row when the
+    mesh is accepted and the insole refused (``data-footwear-mesh-refused-by="insole"``); every string is in
+    ``shared/languages/de.json``.
 
 Fails on the old code (commit 9c73e57cf): ``allowance_view`` has no ``blocked`` key, the body row's reason_detail is
 "", ``_plain_fit_refusal`` returns the bare error string (the figure called a refused shoe step "Its fit on the base
@@ -122,14 +124,14 @@ def main() -> int:
     allowance = (chars / "FootwearAllowance.tsx").read_text(encoding="utf-8")
     steps = (chars / "FootwearSteps.tsx").read_text(encoding="utf-8")
     blocked_at = allowance.find("data-footwear-allowance-blocked")
-    check("blocked branch returns before the slider rows", 0 < blocked_at < allowance.find("{row('width')}"), True)
+    check("blocked state named before the slider rows", 0 < blocked_at < allowance.find("{row('width')}"), True)
     check("mesh row warning", 'data-footwear-mesh-refused-by="insole"' in steps, True)
     de = json.loads((ROOT / "shared/languages/de.json").read_text(encoding="utf-8"))
     de = de.get("translations", de)
-    for key in ("Nothing to adjust yet: the shoe itself was refused at its “{step}” step, so it has no fit.",
-                "Regenerate that step in the steps beside (the mesh: 1 mesh job). Width and Length apply to the first fit.",
+    for key in ("No fit yet: the shoe itself was refused at its “{step}” step. Accept that step anyway or regenerate "
+                "it in the steps beside; what you save here applies to the first fit.",
                 "This mesh passed its own checks, but the Insole step refused it — no fit can be made from it. "
-                "Regenerate the mesh (1 mesh job).",
+                "Regenerate the mesh (1 mesh job), or accept the insole anyway.",
                 fb.PIECE_SOURCE_REFUSED):
         check(f"de.json {key[:40]}…", key in de, True)
 

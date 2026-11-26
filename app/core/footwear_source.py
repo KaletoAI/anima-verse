@@ -638,6 +638,27 @@ def _restore_prepared(iid: str, ssig: str, d: Path) -> bool:
     return True
 
 
+def _strip_cap_of(prepared: Path) -> Tuple[Dict[str, Any], int, Optional[bytes], Any, Any]:
+    """The insole analysis of ``prepared`` with a mesher cap taken off the shaft (``footwear_insole.cap_faces``):
+    ``(analysis, removed faces, stripped GLB bytes or None, positions, faces)`` — the analysis and arrays are the
+    stripped mesh's when a cap was found (the count in ``shaft.cap_removed``), else the file's own. Writes nothing."""
+    import numpy as np
+    from app.core import footwear_insole, glb_mesh
+    positions, faces, uvs, image, mime, material = glb_mesh.static_arrays(prepared.read_bytes())
+    res = footwear_insole.analyse_arrays(positions, faces)
+    cap = footwear_insole.cap_faces(positions, faces, res)
+    removed = int(cap.sum())
+    if not removed:
+        return res, 0, None, positions, faces
+    F = np.asarray(faces, np.int64)
+    used, inverse = np.unique(F[~cap].reshape(-1), return_inverse=True)
+    P2, F2 = np.asarray(positions, np.float64)[used], inverse.reshape(-1, 3)
+    blob = glb_mesh.static_glb(P2, F2, np.asarray(uvs, np.float64)[used], image=image, mime=mime, material=material)
+    res = footwear_insole.analyse_arrays(P2, F2)
+    res["shaft"]["cap_removed"] = removed
+    return res, removed, blob, P2, F2
+
+
 def _step_insole(iid: str, ssig: str, seed: int, d: Path) -> None:
     from app.core import footwear_insole
     from app.core.garment_store import write_record
@@ -645,24 +666,19 @@ def _step_insole(iid: str, ssig: str, seed: int, d: Path) -> None:
     if not prepared.is_file():
         raise FileNotFoundError("the prepared shoe mesh is missing — run the mesh step first")
     restored = _restore_prepared(iid, ssig, d)
-    import numpy as np
-    from app.core import glb_mesh
-    positions, faces, uvs, image, mime, material = glb_mesh.static_arrays(prepared.read_bytes())
-    res = footwear_insole.analyse_arrays(positions, faces)
-    cap = footwear_insole.cap_faces(positions, faces, res)
-    removed = int(cap.sum())
+    res, removed, stripped, positions, faces = _strip_cap_of(prepared)
+    cap_pending = 0
     if removed:
-        # A mesher cap on the shaft: prepared.glb goes on without it (the fit and the viewer read this file;
-        # raw.glb keeps the delivery), measured again as it is served, the count carried over.
-        F = np.asarray(faces, np.int64)
-        used, inverse = np.unique(F[~cap].reshape(-1), return_inverse=True)
-        P2, F2 = np.asarray(positions, np.float64)[used], inverse.reshape(-1, 3)
-        _write_bytes(prepared, glb_mesh.static_glb(P2, F2, np.asarray(uvs, np.float64)[used], image=image,
-                                                   mime=mime, material=material))
-        res = footwear_insole.analyse_arrays(P2, F2)
-        res["shaft"]["cap_removed"] = removed
-        logger.info("Shoe source %s/%s: shaft cap of %d faces removed from prepared.glb", iid, ssig, removed)
-        positions, faces = P2, F2
+        if res["gates"]["ok"]:
+            # A mesher cap on the shaft: prepared.glb goes on without it (the fit and the viewer read this file;
+            # raw.glb keeps the delivery), measured again as it is served, the count carried over.
+            _write_bytes(prepared, stripped)
+            logger.info("Shoe source %s/%s: shaft cap of %d faces removed from prepared.glb", iid, ssig, removed)
+        else:
+            # 2026-11-25: the cap is cut only after the analysis passes — a refused shoe keeps prepared.glb as the
+            # mesh step made it; "Accept anyway" (``accept_step``) cuts the cap then, so the file matches insole.json
+            cap_pending = removed
+            res["shaft"]["cap_pending"] = True
     # the mesh against its own image (INSOLE_VERSION 8): the fit names the mesh as the defect only when it is not the
     # shoe the image shows (footwear_gates.image_agreement, footwear_fit.too_flat_reason)
     cutout = d / "cutout.png"
@@ -677,7 +693,9 @@ def _step_insole(iid: str, ssig: str, seed: int, d: Path) -> None:
     _set_step(d, "insole", _entry(accepted=bool(gates["ok"]), gates=gates, version=footwear_insole.INSOLE_VERSION,
                                   nominal=res["nominal"], shaft_class=shaft.get("class"),
                                   shoe_kind=res.get("kind") or "closed",
-                                  cap_removed=int(shaft.get("cap_removed") or 0), prepared_restored=restored,
+                                  cap_removed=0 if cap_pending else int(shaft.get("cap_removed") or 0),
+                                  prepared_restored=restored,
+                                  **({"cap_pending": cap_pending} if cap_pending else {}),
                                   **({} if gates["ok"] else {"failure": GATE})))
     logger.info("Shoe source %s/%s: insole %s (%s shoe, cover %.3f, vamp %.3f, shaft %s)", iid, ssig,
                 "accepted" if gates["ok"] else "refused", res.get("kind") or "closed", gates["insole_cover"],
@@ -778,6 +796,14 @@ def run_source(item_id: str, *, steps: Optional[List[str]] = None, force: bool =
             _drop_from(d, step)
             try:
                 _RUNNERS[step](iid, ssig, seed, d)
+            except StepRefused as e:
+                if e.failure == GATE and step in CARRY_STEPS and _carry_acceptance(iid, ssig, d, step, record):
+                    ran.append(step)  # the user's acceptance carried over to the same refusal, no worse
+                    continue
+                logger.warning("Shoe source %s/%s: step %s failed: %s", iid, ssig, step, e)
+                cause = e.__cause__ if e.__cause__ is not None else e
+                return {"ok": False, "ssig": ssig, "step": step, "error": str(e) or type(e).__name__,
+                        "gates": e.gates, "error_type": type(cause).__name__, "failure": e.failure, "ran": ran}
             except Exception as e:  # noqa: BLE001 — the caller gets the step, the error and the gates
                 logger.warning("Shoe source %s/%s: step %s failed: %s", iid, ssig, step, e)
                 cause = e.__cause__ if isinstance(e, StepRefused) and e.__cause__ is not None else e
@@ -789,6 +815,161 @@ def run_source(item_id: str, *, steps: Optional[List[str]] = None, force: bool =
                         "ran": ran, **({"outcome": ended} if oc.is_retryable(ended) else {})}
             ran.append(step)
         return {"ok": True, "ssig": ssig, "ran": ran}
+
+
+# --- "Accept anyway" (2026-11-25) ------------------------------------------------------------------------------------
+#: The steps a gate can refuse and the user can accept anyway: the empty shoe, the mesh, the insole. ``source`` and
+#: ``cutout`` have no gate (they only fail when a backend fails — nothing to accept).
+ACCEPTABLE_STEPS: Tuple[str, ...] = ("empty", "mesh", "insole")
+#: The steps whose acceptance a re-run takes over (``_carry_acceptance``): the insole is measured again on the SAME
+#: mesh when the analysis version changes; a new mesh or a new empty shoe is a new delivery — its acceptance ends.
+CARRY_STEPS: Tuple[str, ...] = ("insole",)
+NOT_REFUSED = "The {step} step is not refused by its gates — there is nothing to accept"
+NOT_ACCEPTED_BY_YOU = "The {step} step is not accepted by you — there is nothing to undo"
+NOTHING_KEPT = "The refused {step} result is not kept on disk — regenerate the step"
+
+
+def _limits_of(step: str) -> Dict[str, Tuple[str, Any]]:
+    """``{gate: (kind, limit)}`` of a step's gate tables (``footwear_gates`` / ``footwear_insole``)."""
+    from app.core import footwear_gates, footwear_insole
+    if step == "empty":
+        table = footwear_gates.EMPTY_GATES
+    elif step == "mesh":
+        table = footwear_gates.mesh_gates()
+    else:
+        table = {**footwear_insole.INSOLE_GATES, **footwear_insole.SHAFT_GATES, **footwear_insole.OPEN_GATES}
+    return {key: (spec[0], spec[1]) for key, spec in table.items()}
+
+
+def _refused_values(step: str, gates: Dict[str, Any]) -> Optional[Dict[str, Tuple[str, float]]]:
+    """``fit_attempts.refused_values`` of a refused step's gates (its reasons name the gate first)."""
+    from app.core.fit_attempts import refused_values
+    gates = gates if isinstance(gates, dict) else {}
+    metrics = {k: v for k, v in gates.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
+    return refused_values(gates.get("reasons"), {"limits": _limits_of(step), "metrics": metrics})
+
+
+def _carry_acceptance(iid: str, ssig: str, d: Path, step: str, before: Dict[str, Any]) -> bool:
+    """A re-run of ``step`` refused again: when the record before it was accepted by the user (``user_accepted``)
+    and the new refusal names the same gates, none worse (``fit_attempts.carries``), the acceptance holds for the new
+    result — recorded accepted with ``user_accepted.carried`` — and True. Else False (the refusal stands)."""
+    from app.core.fit_attempts import carries
+    block = before.get("user_accepted") if isinstance(before, dict) else None
+    if not isinstance(block, dict):
+        return False
+    new = step_record(iid, ssig, step)
+    if new.get("accepted") is not False or not carries(_refused_values(step, block.get("gates") or {}),
+                                                       _refused_values(step, new.get("gates") or {})):
+        return False
+    _accept_record(iid, ssig, d, step, new, carried_from=str(block.get("at") or ""))
+    logger.info("Shoe source %s/%s: the user's acceptance of the %s step carried over (same refusal, no worse)",
+                iid, ssig, step)
+    return True
+
+
+def _accept_record(iid: str, ssig: str, d: Path, step: str, record: Dict[str, Any], *, carried_from: str = "") -> None:
+    """Make the refused result of ``step`` the step's output and record it accepted by the user."""
+    from app.core.timeutils import utc_now_iso
+    gates = record.get("gates") or {}
+    extra: Dict[str, Any] = {}
+    if step == "empty":
+        attempts = [a for a in record.get("attempts") or [] if isinstance(a, dict) and isinstance(a.get("attempt"), int)
+                    and (d / f"empty.try{a['attempt']}.png").is_file()]
+        if not attempts:
+            raise FileNotFoundError(NOTHING_KEPT.format(step=step))
+        last = attempts[-1]
+        shutil.copyfile(d / f"empty.try{last['attempt']}.png", d / "empty.png")
+        gates = last.get("gates") or gates
+        extra["attempt"] = last["attempt"]
+    elif step == "mesh":
+        raw = d / "raw.glb"
+        if not raw.is_file() or not (d / "cutout.png").is_file():
+            raise FileNotFoundError(NOTHING_KEPT.format(step=step))
+        candidate = d / ".prepared.candidate.glb"
+        try:
+            entry = _prepare_mesh(raw, candidate, _cutout_alpha(d / "cutout.png"), 1,
+                                  {"backend": record.get("backend", ""), "routing": record.get("routing") or {}})
+            os.replace(candidate, d / "prepared.glb")
+        finally:
+            candidate.unlink(missing_ok=True)
+        gates = entry.get("gates") or gates
+        extra["prepared_sha256"] = _sha256(d / "prepared.glb")
+    else:  # insole: the analysis is insole.json as written; a pending cap is cut now (file and analysis agree)
+        if not (d / "insole.json").is_file():
+            raise FileNotFoundError(NOTHING_KEPT.format(step=step))
+        if record.get("cap_pending"):
+            from app.core.garment_store import read_record, write_record
+            res, removed, stripped, _p, _f = _strip_cap_of(d / "prepared.glb")
+            if removed and stripped is not None:
+                _write_bytes(d / "prepared.glb", stripped)
+                old = read_record(d / "insole.json")
+                res["image"] = old.get("image")
+                write_record(d / "insole.json", res)
+                extra["cap_removed"] = removed
+    reasons = list(gates.get("reasons") or []) if isinstance(gates, dict) else []
+    block = {"at": utc_now_iso(), "ssig": ssig, "gates": gates, "reasons": reasons,
+             "error": str(record.get("error") or "; ".join(reasons))}
+    if carried_from:
+        block["carried"] = {"from": carried_from}
+    entry = {k: v for k, v in record.items() if k not in ("failure", "cap_pending", "error")}
+    _set_step(d, step, {**entry, **extra, "accepted": True, "gates": gates, "user_accepted": block})
+
+
+def accept_step(item_id: str, step: str) -> Dict[str, Any]:
+    """"Accept anyway" (2026-11-25): the refused result of ``step`` (``ACCEPTABLE_STEPS``) of the item's CURRENT
+    source becomes the step's output, accepted by the user — the record keeps its gates and reasons and gains
+    ``user_accepted {at, ssig, gates, reasons, error}``. The mesh: ``raw.glb`` decimated as the mesh step does (CPU);
+    the empty shoe: its last kept attempt; the insole: ``insole.json`` as measured (a cap held back is cut now). The
+    later steps are dropped — the chain runs them from it (the insole and the fit on the CPU, 0 hub jobs). One per
+    item: every wearer's fit reads it. ValueError for an unknown step or one that is not refused by its gates;
+    FileNotFoundError when the refused result is not kept. ``{item_id, ssig, step, user_accepted}``."""
+    if step not in ACCEPTABLE_STEPS:
+        raise ValueError(f"step must be one of {', '.join(ACCEPTABLE_STEPS)}")
+    iid = item_dir(item_id).name
+    with _lock(iid):
+        ssig = current_ssig(iid)
+        d = source_dir(iid, ssig)
+        record = step_record(iid, ssig, step)
+        if record.get("accepted") is not False or str(record.get("failure") or GATE) != GATE:
+            raise ValueError(NOT_REFUSED.format(step=step))
+        later = ITEM_STEPS[ITEM_STEPS.index(step) + 1:]
+        if later:
+            _drop_from(d, later[0])
+        _accept_record(iid, ssig, d, step, record)
+        logger.info("Shoe source %s/%s: %s accepted by the user (refused: %s)", iid, ssig, step,
+                    record.get("error") or "; ".join((record.get("gates") or {}).get("reasons") or []))
+        return {"item_id": iid, "ssig": ssig, "step": step,
+                "user_accepted": step_record(iid, ssig, step).get("user_accepted")}
+
+
+def undo_accept_step(item_id: str, step: str) -> Dict[str, Any]:
+    """Undo "Accept anyway" of ``step``: the step is refused again as it was (``failure`` gate, its reasons), its output
+    goes (the empty shoe's ``empty.png``, the mesh's ``prepared.glb`` — ``raw.glb`` stays —, the insole's held-back cap
+    restored from ``raw.glb``) and so do the later steps. The fits made from it become outdated (``fit_state``).
+    ValueError when the step is not accepted by the user. ``{item_id, ssig, step}``."""
+    if step not in ACCEPTABLE_STEPS:
+        raise ValueError(f"step must be one of {', '.join(ACCEPTABLE_STEPS)}")
+    iid = item_dir(item_id).name
+    with _lock(iid):
+        ssig = current_ssig(iid)
+        d = source_dir(iid, ssig)
+        record = step_record(iid, ssig, step)
+        block = record.get("user_accepted")
+        if record.get("accepted") is not True or not isinstance(block, dict):
+            raise ValueError(NOT_ACCEPTED_BY_YOU.format(step=step))
+        later = ITEM_STEPS[ITEM_STEPS.index(step) + 1:]
+        if later:
+            _drop_from(d, later[0])
+        if step == "empty":
+            (d / "empty.png").unlink(missing_ok=True)
+        elif step == "mesh":
+            (d / "prepared.glb").unlink(missing_ok=True)
+        elif record.get("cap_removed") and (d / "prepared.glb").is_file():
+            _restore_prepared(iid, ssig, d)
+        entry = {k: v for k, v in record.items() if k not in ("user_accepted", "cap_removed", "prepared_sha256")}
+        _set_step(d, step, {**entry, "accepted": False, "failure": GATE, "error": block.get("error") or ""})
+        logger.info("Shoe source %s/%s: the user's acceptance of the %s step undone", iid, ssig, step)
+        return {"item_id": iid, "ssig": ssig, "step": step}
 
 
 def regenerate(item_id: str, step: str) -> str:

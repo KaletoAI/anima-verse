@@ -495,6 +495,10 @@ export interface FootwearStepInfo {
   backend: string
   created_at: string | null
   error: string | null
+  /** "Accept anyway" (2026-11-25): the refusal the user accepted — its reasons stay visible; null otherwise. */
+  user_accepted?: { at: string; ssig: string; reasons: string[]; error: string; carried?: { from: string } } | null
+  /** Whether a refusal of this step can be accepted anyway (empty / mesh / insole). */
+  acceptable?: boolean
 }
 
 /** One empty-shoe edit attempt (`empty.try{n}`). */

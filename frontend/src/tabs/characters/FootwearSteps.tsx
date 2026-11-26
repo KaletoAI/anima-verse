@@ -37,10 +37,18 @@
  * gates refused the result; "Failed (backend)" — the backend failed, with
  * the backend's own words; "Waiting — retry later" — the backend was busy or
  * media generation is off.
+ *
+ * "Accept anyway" (2026-11-25): a step its gates refused (empty shoe, mesh, insole) can be accepted by the user after
+ * an in-app confirmation (POST …/footwear/steps/{step}/accept, spends no job; the chain goes on from it on the CPU —
+ * after the empty shoe the mesh is due, one mesh job). The step then reads "Accepted by you" with the refusal's
+ * reasons kept beside it, and "Undo accept" brings the refusal back (…/unaccept).
  */
 import { Fragment, useEffect, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
+import { ConfirmDialog } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
+import { apiPost } from '../../lib/api'
+import { useToast } from '../../lib/Toast'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import { FreshnessBadge } from './FreshnessBadge'
 import { GateChips, RunBadge, RunButton } from './GarmentSteps'
@@ -167,8 +175,100 @@ const SHAFT_CLASS_TEXT: Record<string, string> = {
   overknee: 'Over-knee boot',
 }
 
+/** What accepting a refused step anyway leads to (the confirm dialog's message). */
+const ACCEPT_NEXT: Record<string, string> = {
+  empty: 'The refused empty shoe becomes the input of the cut-out and the mesh. Nothing is spent now; the mesh is then due (1 mesh job).',
+  mesh: 'The refused mesh is used as it is: the insole is measured and the shoe fitted on the CPU, 0 hub jobs. The gates still judge the fit.',
+  insole: "The refused insole analysis is used as it is: the shoe is fitted on the CPU, 0 hub jobs, and the fit's own gates judge the result.",
+}
+/** The step that runs after an acceptance (CPU only); empty: nothing runs (the mesh would be a hub job). */
+const ACCEPT_RUN: Record<string, string | null> = { empty: null, mesh: 'insole', insole: 'fit' }
+
+/** "Accept anyway" / "Accepted by you" + "Undo accept" of one source step (module docstring). */
+function StepAcceptAnyway({ character, itemId, step, label, s, busy, onRun, onChanged }: {
+  character: string
+  itemId: string
+  step: string
+  label: string
+  s: FootwearStepInfo | undefined
+  busy: boolean
+  onRun: (body: GarmentRunBody, slot?: string) => void
+  onChanged?: () => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [ask, setAsk] = useState(false)
+  const [working, setWorking] = useState(false)
+  if (!s || !s.acceptable || !character) return null
+  const accepted = !!s.user_accepted
+  if (s.status !== 'refused' && !accepted) return null
+  const url = `/characters/${encodeURIComponent(character)}/garments/${encodeURIComponent(itemId)}/footwear/steps/${step}`
+  const call = async (action: 'accept' | 'unaccept') => {
+    setWorking(true)
+    try {
+      await apiPost(`${url}/${action}`, {})
+      toast(action === 'accept' ? `${label}: ${t('Accepted by you')} · ${t('nothing spent')}`
+        : `${label}: ${t('Acceptance undone — the refusal is back')}`, 'success')
+      const next = ACCEPT_RUN[step]
+      if (action === 'accept' && next) {
+        onRun(next === 'fit' ? { step: 'fit', force: true, chain: true } : { step: next, chain: true },
+          runSlot({ step: next }))
+      }
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setWorking(false)
+      onChanged?.()
+    }
+  }
+  const reasons = accepted ? (s.user_accepted?.reasons || []) : (s.gates?.reasons || [])
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }} data-footwear-accept-anyway={step}>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        {accepted ? (
+          <>
+            <span className="ga-run-badge" style={{ borderColor: 'var(--success, #3fb950)', color: 'var(--success, #3fb950)' }}
+              title={t('Its gates refused this result; you accepted it anyway')}>
+              {t('Accepted by you')}
+            </span>
+            {s.user_accepted?.carried ? (
+              <span className="ga-hint">{t('carried over: the same refusal, no worse')}</span>
+            ) : null}
+            <button type="button" className="ga-btn ga-btn-sm" disabled={busy || working}
+              onClick={() => { void call('unaccept') }}
+              title={t('The refusal is back; the later steps and the fits made from them go')}>
+              {t('Undo accept')}
+            </button>
+          </>
+        ) : (
+          <button type="button" className="ga-btn ga-btn-sm" disabled={busy || working} onClick={() => setAsk(true)}
+            title={t('Use this refused result anyway — nothing is spent')}>
+            {t('Accept anyway…')}
+          </button>
+        )}
+      </div>
+      {reasons.length ? (
+        <span style={accepted ? WARN_STYLE : ERROR_STYLE} title={t('Why its gates refused it')}>
+          {`${accepted ? t('Refused by its gates') + ': ' : ''}${reasons.join('; ')}`}
+        </span>
+      ) : null}
+      <ConfirmDialog open={ask} title={`${t('Accept anyway')} · ${label}`}
+        message={`${t(ACCEPT_NEXT[step] || '')} ${t('You can undo it.')}`}
+        confirmLabel={t('Accept anyway')}
+        onConfirm={() => { setAsk(false); void call('accept') }} onClose={() => setAsk(false)}>
+        {reasons.length ? <div className="ga-hint">{`${t('Why its gates refused it')}: ${reasons.join('; ')}`}</div> : null}
+      </ConfirmDialog>
+    </div>
+  )
+}
+
 export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap, meshFetchUrl = null,
-  meshBackendsUrl = null, onMeshFetched }: {
+  meshBackendsUrl = null, onMeshFetched, character = '', itemId = '', onChanged }: {
+  /** The wearer and item (the "Accept anyway" routes); '' hides those buttons. */
+  character?: string
+  itemId?: string
+  /** After an accept / undo: poll the panel again. */
+  onChanged?: () => void
   info: FootwearInfo
   limits: GarmentLimits
   busy: boolean
@@ -302,6 +402,8 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
         />
         <AttemptThumbs attempts={emptyAttempts} label={label('empty')} chips={EMPTY_CHIPS} limits={limits.empty}
           view="side" />
+        <StepAcceptAnyway character={character} itemId={itemId || info.item_id} step="empty" label={label('empty')}
+          s={empty} busy={busy} onRun={onRun} onChanged={onChanged} />
       </div>
     </>, 'empty')
 
@@ -376,9 +478,11 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
           }} />
         <MeshJobFetch url={meshBlocked ? null : meshFetchUrl} disabled={busy} onDone={() => onMeshFetched?.()} />
       </div>
+      <StepAcceptAnyway character={character} itemId={itemId || info.item_id} step="mesh" label={label('mesh')}
+        s={mesh} busy={busy} onRun={onRun} onChanged={onChanged} />
       {insoleRefused ? (
         <span style={WARN_STYLE} data-footwear-mesh-refused-by="insole">
-          {t('This mesh passed its own checks, but the Insole step refused it — no fit can be made from it. Regenerate the mesh (1 mesh job).')}
+          {t('This mesh passed its own checks, but the Insole step refused it — no fit can be made from it. Regenerate the mesh (1 mesh job), or accept the insole anyway.')}
         </span>
       ) : null}
       {info.mesh_url ? (
@@ -464,6 +568,8 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
         </>
       ) : null}
       {refusal ? <span style={ERROR_STYLE}>{t(refusal)}</span> : null}
+      <StepAcceptAnyway character={character} itemId={itemId || info.item_id} step="insole" label={label('insole')}
+        s={insoleStep} busy={busy} onRun={onRun} onChanged={onChanged} />
       <span>{t('Local, no hub job')}</span>
     </div>, 'insole')
 

@@ -13269,6 +13269,24 @@ null); penetration counts every footwear node. Numbers in
 `--json` (`boot`, `still.boot`, `clips.<kind>.boot`, `per_frame[].boot`); the fixture run is
 `scripts/smoke_footwear_assembly.py` [K] (a one-key `--clip-json` clip and a control file with known answers).
 
+**Accept anyway and Adjust shoe (2026-11-25; server only — the payload is unchanged).** A refused source step
+(empty shoe, mesh, insole: `footwear_source.ACCEPTABLE_STEPS`) can be accepted by the admin
+(`POST /characters/{c}/garments/{item}/footwear/steps/{step}/accept`, undone by `…/unaccept`): the refused result
+becomes the step's output, the record keeps its gates and gains `user_accepted {at, ssig, gates, reasons, error}`, the
+later steps are dropped and run again from it (insole and fit on the CPU, 0 hub jobs). A re-measured insole (a new
+`INSOLE_VERSION`) that is refused for the same gates, none worse, keeps the acceptance (`user_accepted.carried`).
+A refused FIT keeps its attempt as before (`fit_attempts`, accepted per body). The shoe's manual adjustment
+(`POST …/footwear/manual`, profile key `footwear_manual` per item: `offset_mm` [forward, up, outward] ≤ 40 mm,
+`rotate_deg` [toe out, toe up, tilt in] ≤ 25°, `scale_pct` −20 … +25) is a map `T` in the fit's cut frame about the
+heel end of the sole (`footwear_fit.manual_matrix`; outward and tilt in mirrored per side), applied in the fit
+before the cut and the gates, so both renderers receive the adjusted shoe as ordinary fit output; it enters the
+fit fingerprint only when it changes something. The Wardrobe viewer previews it with the same map
+(`footwearAllowanceModel.ts` `manualMap`, proof `scripts/smoke_footwear_manual.py` [M6]).
+General rules of the same day (`scripts/smoke_footwear_general_rules.py`): a class-`none` shoe is a boot only when one
+wall stands above 10 cm (`footwear_insole.ONE_WALL_SHAFT_M`), the open seed is searched behind the middle of the
+shoe, `deep_outside` is recorded but never refuses (`footwear_cut.REPORTED_ONLY`), `strap_push_max_mm` 50, and a
+shaft cap is cut from `prepared.glb` only once the insole passes.
+
 ### P2 runtime contract: secondary motion
 
 Both `client3d/src/scene/figures.ts` and the admin `Model3DViewer.tsx` use

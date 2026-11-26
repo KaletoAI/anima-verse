@@ -157,7 +157,7 @@ def main() -> int:
     print("[A] the flip needs a clear rise")
     PA, FA = build([(0.0, -1), (lambda x: 0.01 + 0.0016 * x / L, 1)], 0.05, 0.06, 0.05)
     a = fi.analyse_arrays(PA, FA)
-    check("FLIP_MIN_SHARE / INSOLE_VERSION / MAX_HITS", (fi.FLIP_MIN_SHARE, fi.INSOLE_VERSION, fi.MAX_HITS), (0.01, 10, 48))
+    check("FLIP_MIN_SHARE / INSOLE_VERSION / MAX_HITS", (fi.FLIP_MIN_SHARE, fi.INSOLE_VERSION, fi.MAX_HITS), (0.01, 11, 48))
     check("A not flipped", a["frame"]["flipped"], False)
     check("A profile[24]", a["profile"][24], 0.01 + 0.0016 * 24 / 239, 1e-6)
     check("A profile[215]", a["profile"][215], 0.01 + 0.0016 * 215 / 239, 1e-6)

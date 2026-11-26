@@ -197,6 +197,17 @@ a closed tube (``closed_share`` at the shaft gate's 0.9, its ring above the topl
 world (sneakers, pumps, loafers, sandals, four boots incl. the knee-highs) gives a byte-identical analysis apart from
 the version: on a real boot the topline's collar stands at or above its ring (11.9 / 11.4, 32.1 / 31.5, 21.8 / 21.7,
 11.5 / 11.1 cm), and a low shoe has no closed ring at all.
+
+**One wall above 10 cm, seed behind the opening (INSOLE_VERSION 11, 2026-11-25).** Two general rules replace the per-shoe
+patches of versions 6 – 10 (measured on every stored shoe of the world on a copy, nine sources on eight bodies):
+(1) a shoe of class ``none`` has a shaft only when its higher side stands above ``ONE_WALL_SHAFT_M`` 10 cm
+(``has_shaft_of``; before: the class bound 7 cm) — a low shoe whose heel tab or tongue stands above 7 cm (Kai's
+sneakers ``item_3c60cf62``: collar 6.4 cm, higher side 8.8 cm) was judged as a boot: the shaft gate
+read the tongue's rings (closed share 0.571, refused), the cap rule cut 68 faces out of the tongue and the fit kept the
+boot width cap ×1.10 although the foot needed ×1.18; (2) the open seed is searched behind ``SEED_BEHIND_SHARE`` of the
+shoe first — under the closed toe box of a hollow sole plate the floor of the cavity is "open" (the rim stands 29 mm
+there) and was taken for the footbed (2 mm instead of 22 mm). On the copy: Kai's insole passes (footbed 22.5 mm, no
+cap), the Fur-Lined Boots' cap goes from 21 to 26 faces, every other source keeps its insole.
 """
 import math
 from dataclasses import dataclass
@@ -223,7 +234,11 @@ from app.core.footwear_gates import check_gates
 #: 10: a closed tube gives the collar when its ring stands above the topline's (``collar_source`` "slab_ring") — a
 #:    platform sole wider than the shaft no longer reads a boot as a low shoe (module docstring, "Platform soles");
 #:    stored insoles re-run on the CPU.
-INSOLE_VERSION = 10
+#: 11: the general rules of 2026-11-25 (module docstring, "One wall above 10 cm, seed behind the opening"): one wall alone
+#:    is a shaft only above ``ONE_WALL_SHAFT_M`` (``has_shaft_of``), and the open seed is searched behind the middle
+#:    of the shoe first
+#:    (``SEED_BEHIND_SHARE``); stored insoles re-run on the CPU.
+INSOLE_VERSION = 11
 
 #: Shoe length the per-item (nominal) numbers are given at.
 NOMINAL_LENGTH_M = 0.26
@@ -239,6 +254,16 @@ UP_MIN = 0.3
 #: opening (``_seed_open``; a mesher cap still on the shaft): the forepart, its lowest candidate (the spike's rule).
 SEED_SHARE = 0.55
 #: The open seed (``_seed_open``) needs at least this many open cells at its station; fewer is the spike's seed.
+#: The open seed is searched first among the stations behind this share of the shoe (INSOLE_VERSION 11): only there does
+#: one look down through the collar onto the footbed. Under a closed toe box the rim stands low (Kai's sneakers: 29 mm at
+#: 0.77 L), so the floor of a hollow sole plate counts as open there and won the station count (the footbed at 22 mm read
+#: as 2 mm). Every stored low shoe and boot has its opening behind 0.5 L; without an open station there, all stations.
+SEED_BEHIND_SHARE = 0.5
+#: A low shoe (class ``none``) whose HIGHER side stands above this is one boot wall alone — a mesher hole, a shaft the
+#: shaft gate refuses (INSOLE_VERSION 11). The distribution of every stored shoe (2026-11-25): low shoes' higher side
+#: 3.7 – 8.8 cm (a heel tab, a tongue: Kai's sneakers 8.8), real boots' collar 11.5 – 32 cm; 10 cm lies between with
+#: room on both sides (8.8 x 1.14, 11.5 / 1.15). The ``none`` class bound (7 cm) it replaces read Kai's tongue as a boot.
+ONE_WALL_SHAFT_M = 0.10
 SEED_OPEN_MIN = 3
 #: Recorded hits per ray. 12 (the spike's) truncated the column of a multi-layer sole: the live sneakers'
 #: (``item_3c60cf62``) sole stacks 9–13 surfaces and the vamp roof above them is the 10th–14th hit (module docstring,
@@ -581,8 +606,9 @@ def _seed_open(cand_mask: np.ndarray, hz: np.ndarray, above: np.ndarray, top: Op
     above it reaches up to the topline: nothing above it, or the next hit at most ``air`` under the topline — the
     footbed seen through the collar, or under a vamp whose underside is the roof. The floor of a hollow sole plate
     is a candidate too (its sheet above is more than ``air`` higher), but the footbed's underside closes it far under
-    the walls' top: it is not open. The seed station is the one with the most open cells (ties: the one nearest
-    ``SEED_SHARE``); per column the HIGHEST open candidate there, else the candidate nearest the station's median open
+    the walls' top: it is not open. The seed station is the one with the most open cells behind
+    ``SEED_BEHIND_SHARE`` of the shoe (INSOLE_VERSION 11; any station when none there has ``SEED_OPEN_MIN``; ties: the
+    one nearest ``SEED_SHARE``); per column the HIGHEST open candidate there, else the candidate nearest the station's median open
     height within 2 ``tol`` (a column whose ray hits a lace or a strap first), else -1: ``_track`` gives that
     column the spike's seed (its lowest candidate)."""
     if top is None:
@@ -592,6 +618,10 @@ def _seed_open(cand_mask: np.ndarray, hz: np.ndarray, above: np.ndarray, top: Op
     with np.errstate(invalid="ignore"):
         is_open = cand_mask & (hz <= t - air) & (np.isnan(above) | (above >= t - air))
     counts = is_open.any(axis=2).sum(axis=1)
+    behind = counts.copy()
+    behind[int(SEED_BEHIND_SHARE * nx):] = 0
+    if int(behind.max()) >= SEED_OPEN_MIN:
+        counts = behind  # INSOLE_VERSION 11: the footbed seen through the opening, never the floor under a toe box
     if int(counts.max()) < SEED_OPEN_MIN:
         return None
     best = np.nonzero(counts == counts.max())[0]
@@ -927,7 +957,8 @@ def _shaft_block(pf: np.ndarray, F: np.ndarray, used: np.ndarray, gx: np.ndarray
         rounded = _r(nominal)
         cls = next((name for name, limit in SHAFT_CLASS_M.items() if rounded <= limit), "overknee")
     # a low shoe has no shaft and so no cap: the closed rings above its slab floor are the tongue or the counter's
-    # lip (INSOLE_VERSION 6); a wall that stands on ONE side only is still a shaft (a mesher hole, refused)
+    # lip (INSOLE_VERSION 6); a wall that stands on ONE side only above ONE_WALL_SHAFT_M is still a shaft (a mesher
+    # hole, refused; the bound from the distribution since INSOLE_VERSION 11)
     has_shaft = has_shaft_of(cls, upper)
     cap_removed = int(_cap_mask(pf, F, top_raw, vamp_top).sum()) if has_shaft else 0
     return {"collar_h_raw": collar, "collar_h_nominal": nominal, "collar_source": collar_source, "class": cls,
@@ -937,12 +968,14 @@ def _shaft_block(pf: np.ndarray, F: np.ndarray, used: np.ndarray, gx: np.ndarray
 
 
 def has_shaft_of(cls: Optional[str], upper_nominal: Optional[float]) -> bool:
-    """Whether a shoe has a shaft the shaft gates judge and the cap rule reads (INSOLE_VERSION 6): its class is not
-    ``none``, or its HIGHER side's collar (``upper_collar_h_nominal``) stands above the ``none`` bound — one wall
-    standing alone is a boot with a mesher hole, not a low shoe."""
+    """Whether a shoe has a shaft the shaft gates judge, the cap rule reads and the boot width cap applies to: its
+    shaft class is not ``none``, or its HIGHER side's collar (``upper_collar_h_nominal``) stands above
+    ``ONE_WALL_SHAFT_M`` — one wall standing alone that high is a boot with a mesher hole (refused by the shaft gate).
+    Until INSOLE_VERSION 10 the bound was the ``none`` class's 7 cm; measured on every stored shoe (2026-11-25) a low
+    shoe's higher side is a heel tab or a tongue up to 8.8 cm (Kai's sneakers), a real boot's collar 11.5 – 32 cm."""
     if cls not in (None, "none"):
         return True
-    return upper_nominal is not None and _r(upper_nominal) > SHAFT_CLASS_M["none"]
+    return upper_nominal is not None and _r(upper_nominal) > ONE_WALL_SHAFT_M
 
 
 # --- analysis ---------------------------------------------------------------------------------------------------------

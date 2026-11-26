@@ -393,6 +393,54 @@ ALLOW_M = 0.005
 #: A174: negative steps make the shoe tighter (narrower / shorter, the heel contact that much further back); the
 #: fit's gates still refuse a shoe the foot pokes out of — a negative step is never clamped.
 ALLOWANCE_STEPS: Tuple[int, ...] = (-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10, 12, 15, 20)
+#: The manual adjustment of a fit (2026-11-25, ``garment_footwear.MANUAL_KEY``): ``{"offset_mm": [forward, up,
+#: outward], "rotate_deg": [toe_out, toe_up, tilt_in], "scale_pct": size}`` in the fit's CUT FRAME (metres; x from the
+#: shoe's heel end toward the toe, y up from the shoe's ground, z across — ``footwear_cut.cut_description``'s
+#: ``frame``), about its origin (the heel end of the sole on the ground, on the shoe's midline). ``manual_matrix``
+#: is the map ``T = Translate(offset) · Ry(toe out) · Rz(toe up) · Rx(tilt in) · Scale(1 + size)``; both sides use the
+#: same numbers in their own (mirrored) frames, so the pair stays mirror-symmetric. The fit places the shoe with it
+#: (``_fit``'s ``placed``: a cut-frame point c of the unadjusted shoe goes to T·c) BEFORE the root lift, the width
+#: taper, the cut and every gate — the gates judge the adjusted shoe. The 3D preview applies the same T
+#: (``footwearAllowanceModel.ts`` ``manualMap``). Offsets in millimetres, rotations in degrees, size in percent:
+MANUAL_OFFSET_MM = 40.0
+MANUAL_ROTATE_DEG = 25.0
+MANUAL_SCALE_PCT = (-20.0, 25.0)
+#: The cut frame's z runs INWARD on both sides (``placed``: the left side's z is ``forward x up`` = the body's right,
+#: the right side mirrored = the body's left), so "outward" is −z and "toe out" a rotation about +y.
+MANUAL_NONE: Dict[str, Any] = {"offset_mm": [0.0, 0.0, 0.0], "rotate_deg": [0.0, 0.0, 0.0], "scale_pct": 0.0}
+
+
+def manual_matrix(manual: Optional[Dict[str, Any]]) -> np.ndarray:
+    """The cut-frame map ``T`` (4x4) of a manual adjustment (``MANUAL_OFFSET_MM`` docstring); identity for None or
+    ``MANUAL_NONE``. ``offset_mm`` = [forward, up, outward], ``rotate_deg`` = [toe out (about up), toe up (about the
+    across axis), tilt in (about the forward axis)], ``scale_pct`` = the size change."""
+    m = manual or MANUAL_NONE
+    fx, fy, out = (float(v) / 1000.0 for v in m.get("offset_mm") or (0.0, 0.0, 0.0))
+    yaw, pitch, roll = (math.radians(float(v)) for v in m.get("rotate_deg") or (0.0, 0.0, 0.0))
+    size = 1.0 + float(m.get("scale_pct") or 0.0) / 100.0
+    # toe out: x (forward) turns toward -z (outward) — a rotation about +y by +yaw
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    Ry = np.array([[cy, 0.0, sy], [0.0, 1.0, 0.0], [-sy, 0.0, cy]])
+    # toe up: x turns toward +y — a rotation about +z by +pitch
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    Rz = np.array([[cp, -sp, 0.0], [sp, cp, 0.0], [0.0, 0.0, 1.0]])
+    # tilt in: the top (+y) leans inward (+z) — a rotation about +x by +roll
+    cr, sr = math.cos(roll), math.sin(roll)
+    Rx = np.array([[1.0, 0.0, 0.0], [0.0, cr, -sr], [0.0, sr, cr]])
+    T = np.eye(4)
+    T[:3, :3] = Ry @ Rz @ Rx * size
+    T[:3, 3] = [fx, fy, -out]
+    return T
+
+
+def is_manual(manual: Optional[Dict[str, Any]]) -> bool:
+    """Whether ``manual`` changes anything (``manual_matrix`` is not the identity)."""
+    if not manual:
+        return False
+    return any(abs(float(v)) > 1e-12 for v in list(manual.get("offset_mm") or []) + list(manual.get("rotate_deg") or [])
+               + [manual.get("scale_pct") or 0.0])
+
+
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).
 BLEND_M = 0.015
 #: The largest width factor a fit may apply (spec § 5.5), also the default cap — the cap of a boot (an item whose
@@ -648,7 +696,11 @@ STRAP_INSIDE_M = -0.0005
 #: sole that stands on the insole, and how deep the foot's sole lies under the insole surface (95th percentile).
 OPEN_GATES: Dict[str, Tuple[str, Any]] = {
     "strap_inside_share": ("max", 0.02),
-    "strap_push_max_mm": ("max", 30.0),
+    # 50 mm since 2026-11-25, from the distribution: the Braided Leather Sandals on all eight stored bodies pushed their
+    # straps 25.2 – 27.8 mm (accepted at the old 30) and 30.8 – 42.2 mm (refused) — every one of those looks right from
+    # front, side, back and above (the straps follow a wider foot; 42.2 mm on Rosi). The largest right-looking value
+    # plus 20 %: 42.2 x 1.2 = 50.6 -> 50. ``strap_inside_share`` (always 0 there) stays the check of what is seen.
+    "strap_push_max_mm": ("max", 50.0),
     "sole_cover": ("min", 0.90),
     "sole_sink_mm": ("max", 8.0),
 }
@@ -893,21 +945,24 @@ class _Insole:
     def arc_at(self, x: float) -> float:
         return float(np.interp(x, self.px, self.arc))
 
-    def chord_to(self, xh: float, d: float, k: float) -> float:
+    def chord_to(self, xh: float, d: float, k: float, forced: bool = False) -> float:
         """The first x >= xh whose insole point lies ``d`` metres from the insole point at ``xh`` (linear
-        between dense samples); _Refused when the insole ends first."""
+        between dense samples); _Refused when the insole ends first — ``forced``: the insole's end then."""
         xs = np.linspace(xh, self.x1, 8000)
         dd = np.hypot((xs - xh) * k, (self.z(xs) - self.z(xh)) * k)
         hit = np.nonzero(dd >= d)[0]
         if not len(hit) or hit[0] == 0:
+            if forced and xh < self.x1:
+                return float(self.x1)
             raise _Refused("The foot is longer than the shoe's insole")
         i = int(hit[0])
         f = (d - dd[i - 1]) / (dd[i] - dd[i - 1])
         return float(xs[i - 1] + f * (xs[i] - xs[i - 1]))
 
 
-def _scale(ins: _Insole, foot_len: float, toe_h: float) -> Tuple[float, float]:
-    """``(k, x_end)``: the spike's fixed point k = (foot + ALLOW) / arc(cavity end at k)."""
+def _scale(ins: _Insole, foot_len: float, toe_h: float, forced: bool = False) -> Tuple[float, float]:
+    """``(k, x_end)``: the spike's fixed point k = (foot + ALLOW) / arc(cavity end at k). ``forced``: a toe box lower
+    than the toes everywhere ends the foot at the insole's end instead of refusing (``fit_pair``'s ``force``)."""
     k = foot_len / ins.arc_at(0.9 * ins.length)
     x_end = ins.x1
     for _ in range(SCALE_ITERATIONS):
@@ -915,7 +970,9 @@ def _scale(ins: _Insole, foot_len: float, toe_h: float) -> Tuple[float, float]:
                         ins.cav) * k
         xs_ok = ins.gx[(room >= toe_h) & ins.ok]
         if not len(xs_ok):
-            raise _Refused("The toe box is lower than the toes everywhere")
+            if not forced:
+                raise _Refused("The toe box is lower than the toes everywhere")
+            xs_ok = ins.gx[ins.ok]
         x_end = float(xs_ok.max())
         k = (foot_len + ALLOW_M) / ins.arc_at(x_end)
     return k, x_end
@@ -961,7 +1018,8 @@ def _local_axis(J: np.ndarray, axis_w: np.ndarray) -> np.ndarray:
 
 def fit_pair(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.BodyMesh,
              joints: Dict[str, np.ndarray], *, width_cap: Optional[float] = None,
-             fit_height: bool = False, allowance: Optional[Dict[str, Any]] = None) -> FootwearFit:
+             fit_height: bool = False, allowance: Optional[Dict[str, Any]] = None,
+             manual: Optional[Dict[str, Any]] = None, force: bool = False) -> FootwearFit:
     """Fit one shoe source (``shoe`` in its mesher coordinates, ``insole`` its analysis) to both feet of
     ``body`` (module docstring). A shoe that cannot be put on at all returns ``ok False`` with the reason
     and no parts; a fit that ran returns everything, ``ok`` = every gate of ``FIT_GATES`` (and, for a boot, the
@@ -973,14 +1031,32 @@ def fit_pair(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.
     to the foot's height (step 4b) where ``scale.height_ready`` holds; False (the default) only measures it — the
     first attempt of ``garment_footwear.fit_compute``, byte-identical to fit version 13. ``allowance`` (Ruling A82):
     ``{"width": percent, "length": percent}`` of ``ALLOWANCE_STEPS`` (``ALLOWANCE_STEPS`` docstring); None / zeros =
-    none."""
+    none. ``manual`` (2026-11-25): the user's adjustment (``manual_matrix``), recorded as ``scale.manual``.
+
+    ``force`` (2026-11-25): a shoe that cannot be put on the usual way (``_Refused``: "The foot is longer than the
+    shoe's insole", "The toe box is lower than the toes everywhere") is placed anyway — the toes at the insole's end —
+    so the refusal keeps a fitted, cut attempt the user can look at, adjust and accept (``fit_attempts.accept``). Such
+    a fit is never accepted on its own: ``ok`` False, the reason first, ``record.forced`` names it."""
     applied = applied_width_cap(insole, width_cap)
     width_cap = WIDTH_CAP if width_cap is None else min(WIDTH_CAP, max(WIDTH_CAP_MIN, float(width_cap)))
     feet = measure_feet(body, joints)
     try:
-        return _fit(insole, shoe, body, joints, feet, width_cap, applied, fit_height, allowance_shares(allowance))
+        return _fit(insole, shoe, body, joints, feet, width_cap, applied, fit_height, allowance_shares(allowance),
+                    manual=manual)
     except _Refused as exc:
         reason = str(exc)
+        if force:
+            try:
+                fit = _fit(insole, shoe, body, joints, feet, width_cap, applied, fit_height,
+                           allowance_shares(allowance), manual=manual, forced=True)
+            except _Refused:
+                fit = None
+            if fit is not None:
+                fit.ok = False
+                fit.reasons = [reason] + list(fit.reasons)
+                fit.record["forced"] = reason
+                fit.record.pop("cut", None)
+                return fit
         return FootwearFit(ok=False, reasons=[reason], record={"version": FOOTWEAR_FIT_VERSION, "error": reason},
                            parts={}, foot_pose={})
 
@@ -1447,7 +1523,8 @@ def _sole_contact(pl: np.ndarray, ins: "_Insole", imap: np.ndarray, k: float) ->
 def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.BodyMesh,
          joints: Dict[str, np.ndarray], feet: Dict[str, FootMeasure], width_cap: float,
          cap_applied: float, fit_height: bool = False,
-         allow: Tuple[float, float] = (0.0, 0.0)) -> FootwearFit:
+         allow: Tuple[float, float] = (0.0, 0.0), *, manual: Optional[Dict[str, Any]] = None,
+         forced: bool = False) -> FootwearFit:
     from app.core.footwear_insole import BALL_SHARE, HEEL_SEAT_M, PITCH_HEEL_SHARE, insole_map, topline_stations
     ins = _Insole(insole)
     P = np.asarray(body.positions, np.float64)
@@ -1469,7 +1546,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     def _size(length: float) -> Tuple[float, float]:
         if open_kind:
             return (length + OPEN_ALLOW_M) / ins.arc_at(ins.x1), ins.x1
-        return _scale(ins, length, toe_h)
+        return _scale(ins, length, toe_h, forced)
     k, x_end = _size(foot_len)
     # Ruling A82 (``ALLOWANCE_STEPS``): the length allowance is heel room — the scale of the longer foot, the heel
     # contact that much further in; ``size`` = the scale ratio the width factor is divided by
@@ -1496,7 +1573,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
         # the pose on the chord to that ball: a fixed point, started from the rigid solve (the chord of
         # the bind heel–ball distance minus the rest pitch) and converged in a few turns
         # (|correction| < BALL_SOLVE_TOL_RAD, at most BALL_SOLVE_STEPS).
-        xb = ins.chord_to(xh, fm.heel_ball_m, k)
+        xb = ins.chord_to(xh, fm.heel_ball_m, k, forced)
         chord = math.atan2(float(ins.z(xh) - ins.z(xb)) * k, (xb - xh) * k)
         theta = chord - math.radians(fm.rest_pitch_deg)
         # an open shoe shows the toes: they turn from where they point in the bind pose onto the sole (module
@@ -1511,7 +1588,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             Bs = _skin(P, body, fm.ball_ids, mats)
             B1 = Bs.mean(0)
             B1[1] = Bs[:, 1].min()
-            xb = ins.chord_to(xh, float(np.linalg.norm(B1 - H1)), k)
+            xb = ins.chord_to(xh, float(np.linalg.norm(B1 - H1)), k, forced)
             chord = math.atan2(float(ins.z(xh) - ins.z(xb)) * k, (xb - xh) * k)
             pitch = math.atan2(float(H1[1] - B1[1]), float(np.hypot(B1[0] - H1[0], B1[2] - H1[2])))
             if abs(chord - pitch) < BALL_SOLVE_TOL_RAD:
@@ -1558,6 +1635,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
                           toe_turn=toe_turn, H1=H1, B1=B1, P4=P4, ball_err=ball_err, sl=sl, off=off, xc=xc,
                           fw_ball=fw_ball, iw_ball=iw_ball, Xf=Xf, mirror=mirror)
 
+    manual_T = manual_matrix(manual) if is_manual(manual) else None
     # one width factor for the pair
     needed = {s: w["fw_ball"] / w["iw_ball"] for s, w in work.items()}
     width_factor = min(cap_applied, max(1.0, max(needed.values()) * size))
@@ -1571,7 +1649,11 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
         R4[:3, :3] = [[c, 0.0, -s_], [0.0, 1.0, 0.0], [s_, 0.0, c]]
         D4 = np.diag([1.0, 1.0, wf, 1.0])
         A = _translation([w["xc"], 0.0, w["off"] + w["sl"] * w["xc"]]) @ R4 @ _translation([-w["xc"], 0.0, 0.0]) @ D4
-        return w["P4"] @ A                        # shoe frame -> posed body (before the root lift)
+        if manual_T is None:
+            return w["P4"] @ A                    # shoe frame -> posed body (before the root lift)
+        # the manual adjustment in the cut frame c = Dm q (``MANUAL_OFFSET_MM``): q -> Dm^-1 T Dm q
+        Dm = np.diag([k, k, k * wf, 1.0])
+        return w["P4"] @ A @ np.linalg.inv(Dm) @ manual_T @ Dm
 
     open_widened = 1.0
     if open_kind:
@@ -2078,6 +2160,9 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             "insole_arc_m": ins.arc_at(x_end) * k, "foot_len_m": foot_len, "toe_h_m": toe_h,
             **({"allowance": {"width_pct": round(width_share * 100.0, 6), "length_pct": round(length_share * 100.0, 6),
                               "heel_room_m": heel_room, "size": size}} if width_share or heel_room else {}),
+            **({"manual": {"offset_mm": [float(v) for v in manual["offset_mm"]],
+                           "rotate_deg": [float(v) for v in manual["rotate_deg"]],
+                           "scale_pct": float(manual["scale_pct"])}} if manual_T is not None else {}),
             **({"open": {"allow_m": OPEN_ALLOW_M, "edge_m": OPEN_EDGE_M, "widened": open_widened,
                          "height_factor": open_height, "height_needed": open_height_needed,
                          "height_cap": OPEN_HEIGHT_CAP}} if open_kind else {}),
