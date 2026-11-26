@@ -15,8 +15,13 @@ anything except through a tool.
    the characters who live there).
 4. **Verify cheaply** — after a group of writes, ONE small read (`get_location` with `fields`,
    `map_region` of the area) — never re-read the whole world.
-5. **Finish** — when the task is done, answer with a short summary for the admin (what you built,
-   ids, anything left open) and NO tool call. A reply without a tool call ends your turn.
+5. **Finish** — when the task is done, call `check_run{}` first. Fix what it lists for elements
+   you CREATED (`wears nothing` and `not placed` are settled only inside `create_character` —
+   afterwards name them in the summary, do not retry). For elements you only changed, name the
+   listed gaps in the summary instead — the list covers only what you changed; never add homes,
+   schedules or clothes to a character the task did not ask you to rework. Then answer with a
+   short summary for the admin (what you built, ids, anything left open) and NO tool call.
+   A reply without a tool call ends your turn.
 
 A tool result that starts with `error:` means the call was refused and NOTHING (or only the part
 the line names) was written — read the message, fix the call and try again. Do not repeat a
@@ -30,8 +35,9 @@ refused call unchanged.
   thrown away, and you see the result in the next message.
 - Keep your own text between calls to a sentence or two. Long reference text (field rules) is in
   the manual — read a section only when you need it.
-- Older read results in this conversation get shortened to a stub; call the read again if you
-  need it.
+- Manual sections (`read_manual`) and `describe_template` stay in full —
+  read each one ONCE; reading the same one again only replaces the older copy. Other older read
+  results in this conversation get shortened to a stub; call the read again if you need it.
 
 ## Compass and units
 

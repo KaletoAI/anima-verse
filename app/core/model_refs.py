@@ -1383,20 +1383,51 @@ def cancel_build_timer(character_name: str) -> None:
     _cancel_timers(character_name, (BUILD_TIMER,))
 
 
+def cancel_character_timers(character_name: str) -> None:
+    """Disarm EVERY debounce timer of the character (every reference kind and
+    the Build timer) — for ``delete_character``: a character that is gone
+    must not get a render its deletion (or a World Dev undo) cannot take
+    back. ``_fire_kind`` also re-checks the row, for a timer whose body had
+    already started."""
+    with _lock:
+        for key in [k for k in _pending_timers if k[0] == character_name]:
+            old = _pending_timers.pop(key, None)
+            if old:
+                old.timer.cancel()
+
+
+def _character_still_exists(character_name: str) -> bool:
+    """Whether the character's row still exists. Only a CONFIRMED missing row
+    means gone: a read error (a transiently locked DB, say) fires as before —
+    the popped timer is not re-armed, so treating it as gone would drop the
+    render of a character that exists."""
+    try:
+        from app.models.character import character_row_exists
+        return character_row_exists(character_name)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Model ref timer for %s: row check failed, firing anyway: %s",
+                       character_name, e)
+        return True
+
+
 def _fire_kind(character_name: str, kind: str) -> None:
     """Timer body. Fires only if THIS timer is still the armed one: a timer
     cancelled a moment too late (its body already started) must not render —
     the newer timer, or the manual trigger that cancelled it, covers the
-    latest state. The auto toggle is re-read: switched off since arming means
-    nothing to render. The Build timer asks the Build (``figure_build.request``
-    re-reads "Build automatically" itself). While the character's automatic
-    generation is paused the render is held (Ruling A42, ``generation_pause``)."""
+    latest state. A character deleted since arming (an undo of the create
+    included) gets nothing. The auto toggle is re-read: switched off since
+    arming means nothing to render. The Build timer asks the Build
+    (``figure_build.request`` re-reads "Build automatically" itself). While
+    the character's automatic generation is paused the render is held
+    (Ruling A42, ``generation_pause``)."""
     key = (character_name, kind)
     with _lock:
         entry = _pending_timers.get(key)
         if entry is None or entry.timer is not threading.current_thread():
             return
         _pending_timers.pop(key, None)
+    if not _character_still_exists(character_name):
+        return
     if kind == BUILD_TIMER:
         from app.core import figure_build
         figure_build.request(character_name, "outfit_change")

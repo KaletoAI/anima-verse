@@ -149,7 +149,7 @@ Run 8 (a create_character left PENDING by a crash, without written). The
          and the piece P (held by Demo Crash only) exist (the crash came after
          the save) -> Demo Crash deleted, then P is held nowhere -> deleted.
   discard_preview lists only Demo Crash (0 chat, 0 memory rows, and the
-  "1 outfit pieces it brought" of its items [P], P still in the catalog).
+  "1 outfit piece it brought" of its items [P], P still in the catalog).
   => reversed [3], skipped [(2, already gone), (1, not written)],
      complete True.
 
@@ -180,7 +180,7 @@ Run 9 (a created character standing in a created place — the usual free-mode
 
 Run 10 (the snapshot of a cross-turn character delete mirrors the sweep):
   every literal "DELETE FROM <table> WHERE <clause>" in the source of
-  delete_character equals the set CHARACTER_SWEEP_SPECIAL (9 entries, copied
+  delete_character equals the set CHARACTER_SWEEP_SPECIAL (11 entries, copied
   by hand from its step 1); the dynamic sweep is the character_name column.
 
 Usage:
@@ -695,7 +695,7 @@ check("(8) three entries pending without written",
 check("(8) preview lists only Demo Crash",
       wu.discard_preview(run8) == ['character "Demo Crash" — 0 chat messages, '
                                    "0 memory rows of other characters name it, "
-                                   "1 outfit pieces it brought"],
+                                   "1 outfit piece it brought"],
       wu.discard_preview(run8))
 rep = wu.undo(run8)
 check("(8) reversed [3]", rep["reversed"] == [3], rep)
@@ -795,12 +795,15 @@ found = set(re.findall(r'"DELETE FROM (\w+) WHERE ([^"]+)"', src))
 check("(10) delete_character's literal sweeps == CHARACTER_SWEEP_SPECIAL",
       found == set(wu.CHARACTER_SWEEP_SPECIAL), (found, wu.CHARACTER_SWEEP_SPECIAL))
 # 10 since quest stage 1 added "DELETE FROM quest_facts WHERE mind=? OR
-# subject=?" to delete_character.
-check("(10) the hand list has the 10 special sweeps",
+# subject=?" to delete_character; 11 since T12 added "DELETE FROM
+# notifications WHERE title=? AND kind<>'room_furnish'" (a deleted
+# character's notices; room_furnish keeps a room label in title).
+check("(10) the hand list has the 11 special sweeps",
       {t for t, _w in wu.CHARACTER_SWEEP_SPECIAL} == {
           "characters", "relationships", "llm_call_stats", "chat_messages",
           "chat_stat_evaluations", "parties", "party_invites",
-          "interaction_invites", "intents", "quest_facts"}, wu.CHARACTER_SWEEP_SPECIAL)
+          "interaction_invites", "intents", "quest_facts", "notifications"},
+      wu.CHARACTER_SWEEP_SPECIAL)
 check("(10) the dynamic sweep is the character_name column",
       'DELETE FROM {tbl} WHERE character_name=?' in src)
 

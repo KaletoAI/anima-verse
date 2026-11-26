@@ -73,7 +73,9 @@ Inverse ops (``inverse["op"]``):
   ``soul_writer.read_text/write_text`` take it) · restore_home_schedule{name,
   before:{home_location, home_room, daily_schedule, known_locations}} ·
   restore_body_slots{name, before:{slot: {attribute: value}}, had_key,
-  slots_present} · remove_outfits{name, outfits:[ids], inventory:[item ids],
+  slots_present} · restore_status_effects{name, before:{stat: value},
+  had_key} · remove_known_places{name, ids:[place ids the call added],
+  had_key} · remove_outfits{name, outfits:[ids], inventory:[item ids],
   items:[created piece ids]} (pending: {names, outfits_before,
   inventory_before, refs, items}) · recreate_location{row} · recreate_terrain_area{row} ·
   recreate_height_area{row} (row = the reader's full record) ·
@@ -85,6 +87,9 @@ Written shapes: restore_location / restore_home_schedule — the written map of
 restore_*_area — the full re-read row; restore_character —
 ``{"profile": {...}, "config": {...}}``; restore_body_slots —
 ``{"slots": {slot: {attribute: value}}}`` (:func:`body_slot_diff`);
+restore_status_effects — ``{"stats": {stat: value}}`` (the patched stats as
+re-read after the write); remove_known_places — ``{"known": [ids]}`` (the
+places the call added, as read back);
 remove_outfits — ``{"outfits": {id: row}, "inventory": {item id: entry}}``; restore_soul — the stored text as a
 plain string (or None when the write removed the file). A key that did not exist is recorded as :data:`ABSENT` (restoring it
 removes the key again).
@@ -575,6 +580,67 @@ def _undo_restore_body_slots(entry: Dict[str, Any], inv: Dict[str, Any]) -> List
     return []
 
 
+def _undo_restore_status_effects(entry: Dict[str, Any],
+                                 inv: Dict[str, Any]) -> List["_Skip"]:
+    """Per stat of ``before``: restored when it still holds what the agent
+    wrote (a pending entry restores every stat of its before map — never any
+    other stat), ``changed since`` (key ``status_effects.<stat>``)
+    otherwise. Restoring ABSENT removes the stat; the profile's
+    ``status_effects`` key goes only when it did not exist before
+    (``had_key`` False) and is empty again."""
+    from app.core.world_dev_tools import _template_fields
+    from app.models.character import (character_row_exists, get_character_profile,
+                                      remove_state_meta_key, save_character_profile)
+    name = str(inv.get("name") or "")
+    before = inv.get("before") or {}
+    written = entry.get("written")
+    w_stats = written.get("stats") if isinstance(written, dict) else None
+    changed: List[str] = []
+    with keyed_lock("character_profile", name):
+        if not name or not character_row_exists(name):
+            raise _Skip(REASON_GONE)
+        if not before:
+            return []
+        prof = copy.deepcopy(get_character_profile(name) or {})
+        vals = prof.get("status_effects")
+        vals = copy.deepcopy(vals) if isinstance(vals, dict) else {}
+        touched = False
+        for stat, bval in before.items():
+            if isinstance(w_stats, dict) and stat in w_stats:
+                now = vals[stat] if stat in vals else ABSENT
+                if _norm(now) != _norm(w_stats[stat]):
+                    changed.append(f"status_effects.{stat}")
+                    continue
+            if is_absent(bval):
+                vals.pop(stat, None)
+            else:
+                vals[stat] = copy.deepcopy(bval)
+            touched = True
+        if touched:
+            drop_key = not vals and not inv.get("had_key")
+            if drop_key:
+                prof.pop("status_effects", None)
+            else:
+                prof["status_effects"] = vals
+            # Soul values are injected on read; they never go back through a
+            # profile save.
+            for key, field in _template_fields(str(prof.get("template") or "")).items():
+                if field.get("source_file"):
+                    prof.pop(key, None)
+            if not save_character_profile(name, prof):
+                raise RuntimeError(f"profile of {name} was not stored")
+            # status_effects lives in character_state.meta, which a profile
+            # save merges: leaving the key out does not remove it.
+            if drop_key and not remove_state_meta_key(name, "status_effects"):
+                raise RuntimeError(f"status_effects of {name} was not removed")
+    if touched:
+        from app.core import sync_topics
+        sync_topics.changed_at(name, topics=("presence", "self"))
+    if changed:
+        raise _Skip(REASON_CHANGED, keys=changed)
+    return []
+
+
 def _undo_remove_outfits(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
     """Remove the outfit sets an update_character added, take back the
     inventory entries it added and delete the catalog pieces it created
@@ -702,6 +768,41 @@ def _undo_restore_home_schedule(entry: Dict[str, Any], inv: Dict[str, Any]) -> L
         raise _Skip(REASON_CHANGED, keys=changed)
     return []
 
+def _undo_remove_known_places(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    """Removes exactly the places of ``ids`` from the character's known
+    places — none of them was known before the call (a pending entry names
+    every place the call was about to add, so removing them is exact too).
+    A place already gone is fine (it is unknown again either way); places
+    added by anybody else (in-game discovery) stay, so a foreign change never
+    makes this undo incomplete. A later discovery of one of the SAME places
+    was a no-op (the place was already known), so the undo still removes it
+    — an add-only list carries no provenance. The ``known_locations`` key
+    goes only when it did not exist before (``had_key`` False) and the list
+    is empty again."""
+    from app.models.character import (character_row_exists, get_character_config,
+                                      save_character_config)
+    name = str(inv.get("name") or "")
+    ids = {str(i) for i in inv.get("ids") or [] if i}
+    with keyed_lock("character_profile", name):
+        if not name or not character_row_exists(name):
+            raise _Skip(REASON_GONE)
+        if not ids:
+            return []
+        cfg = copy.deepcopy(get_character_config(name) or {})
+        raw = cfg.get("known_locations")
+        if not isinstance(raw, list):
+            return []
+        keep = [v for v in raw if str(v) not in ids]
+        if len(keep) == len(raw):
+            return []
+        if keep or inv.get("had_key"):
+            cfg["known_locations"] = keep
+        else:
+            cfg.pop("known_locations", None)
+        if not save_character_config(name, cfg):
+            raise RuntimeError(f"config of {name} was not stored")
+    return []
+
 # ── Cross-turn deletes: exact snapshots and their re-creation ──────────
 #
 # delete_created of something the run created in an EARLIER turn journals a
@@ -736,6 +837,7 @@ CHARACTER_SWEEP_SPECIAL: Tuple[Tuple[str, str], ...] = (
     ("interaction_invites", "inviter=? OR invitee=?"),
     ("intents", "owner=?"),
     ("quest_facts", "mind=? OR subject=?"),
+    ("notifications", "title=? AND kind<>'room_furnish'"),
 )
 
 _ROWID = "$rowid"
@@ -1026,6 +1128,8 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any], Dict[str, Any]], List[_Skip]]] = 
     "restore_soul": _undo_restore_soul,
     "restore_home_schedule": _undo_restore_home_schedule,
     "restore_body_slots": _undo_restore_body_slots,
+    "restore_status_effects": _undo_restore_status_effects,
+    "remove_known_places": _undo_remove_known_places,
     "remove_outfits": _undo_remove_outfits,
     "recreate_location": _undo_recreate_location,
     "recreate_terrain_area": _undo_recreate_terrain_area,
@@ -1136,6 +1240,8 @@ _TARGET_KEYS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "restore_soul": ("character", ("name",)),
     "restore_home_schedule": ("character", ("name",)),
     "restore_body_slots": ("character", ("name",)),
+    "restore_status_effects": ("character", ("name",)),
+    "remove_known_places": ("character", ("name",)),
     "remove_outfits": ("character", ("name",)),
     "recreate_character": ("character", ("name",)),
 }
@@ -1187,7 +1293,7 @@ def discard_preview(run_id: str) -> List[str]:
     owns it (deleted and created again by the run): then it goes, decided
     by the same newest-first walk as :func:`undo`. A created character's
     line also counts the outfit pieces it brought that are still in the
-    catalog (", N outfit pieces it brought", left out at 0)."""
+    catalog (", N outfit pieces it brought" — "piece" for 1 — left out at 0)."""
     from app.core.world_dev_tools import _rooms_removed_by
     from app.models.character import character_row_exists, list_character_places
     from app.models.chat import count_messages_involving
@@ -1293,7 +1399,8 @@ def discard_preview(run_id: str) -> List[str]:
                              if get_item(iid) is not None)
                 lines.append(f'character "{name}" — {chats} chat messages, '
                              f"{mems} memory rows of other characters name it"
-                             + (f", {pieces} outfit pieces it brought" if pieces else ""))
+                             + (f", {pieces} outfit piece{'' if pieces == 1 else 's'} it brought"
+                                if pieces else ""))
     if created or removed_rooms:
         for name, (lid, room) in sorted(list_character_places().items()):
             if name in deleted_names:

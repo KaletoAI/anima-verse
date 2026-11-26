@@ -317,7 +317,7 @@ Open points 1-3 of the plan (runs 17-21):
        re-creation finds it absent and re-creates it, the oldest create
        deletes it again -> Demo Again goes, nothing is foreign. So
        discard_preview = exactly ['character "Demo Again" — 0 chat
-       messages, 0 memory rows of other characters name it, 1 outfit pieces
+       messages, 0 memory rows of other characters name it, 1 outfit piece
        it brought'] (one line for the two creating entries, the piece still
        in the catalog, NO "exists again" line); undo reverses all 3 rows,
        skipped [], complete True; afterwards Demo Again and the scarf are
@@ -1690,7 +1690,8 @@ res = wt.run_tool(w1, "update_character",
 # the add in detail); the undo of run 21 below takes it back.
 check("(al) update_character outfits on human-roleplay -> added",
       res.ok and res.line == 'updated character "Demo Other": outfits added: Daily '
-      "(0 new piece(s), 0 existing)", res)
+      # Task 9: only the outfits group was touched, and it has one now.
+      "(0 new piece(s), 0 existing); complete", res)
 res = wt.run_tool(w1, "create_character",
                   {"data": {"character_name": "Demo Nope", "template": "npc-temporary"}})
 check("(al) the template refusal says per template whether it has outfits",
@@ -1730,7 +1731,7 @@ check("(am) the scarf is a new catalog piece", SCARF and _get_item(SCARF) is not
 prev22 = wu.discard_preview(run22)
 check("(am) preview: Demo Again goes with its piece, no 'exists again' line",
       prev22 == ['character "Demo Again" — 0 chat messages, 0 memory rows of '
-                 "other characters name it, 1 outfit pieces it brought"], prev22)
+                 "other characters name it, 1 outfit piece it brought"], prev22)
 rep = wu.undo(run22)
 check("(am) discard complete, 3 reversed, nothing skipped",
       rep["complete"] and len(rep["reversed"]) == 3 and rep["skipped"] == [], rep)
@@ -1788,7 +1789,8 @@ res = wt.run_tool(d1, "update_character", {"name": "Demo Ragna", "patch": {"outf
     {"name": "Festive"}]}})
 check("(an) outfits added", res.ok and res.wrote and res.line
       == 'updated character "Demo Ragna": outfits added: Work, Festive '
-      "(1 new piece(s), 2 existing)", res)
+      # Task 9: only the outfits group was touched, and it has outfits now.
+      "(1 new piece(s), 2 existing); complete", res)
 rows23 = wr.entries(run23)
 inv23 = (rows23[0].get("inverse") or {}) if rows23 else {}
 NEW23 = (inv23.get("items") or [None])[0]
@@ -1945,7 +1947,10 @@ check("(ap) refusals wrote nothing", wr.entries(run26) == []
 res = wt.run_tool(g1, "update_character", {"name": "Demo Slots", "patch": {
     "body_slots": {"hair": {"color": "copper-red", "length": "long"}}}})
 check("(ap) hair merged: copper-red (custom allowed) + long",
+      # Task 9: the body_slots group was touched; the eyes slot of the fake
+      # package applies to Demo Slots and its color is still unset.
       res.ok and res.line == 'updated character "Demo Slots": body slots hair.color, hair.length'
+      "; missing: body slots unset: eyes.color"
       and get_character_profile("Demo Slots")["body_slots"]
       == {"hair": {"color": "copper-red", "length": "long"}}, res)
 bs_row = wr.entries(run26)[0]
@@ -1972,17 +1977,19 @@ res = wt.run_tool(g1, "create_character", {"data": {
     "character_name": "Demo Born", "gender": "female",
     "body_slots": {"hair": {"color": "blonde"}}}})
 check("(ap) create_character names the unset slots",
-      res.ok and "; body slots not set: hair.length, eyes.color — set them with "
-      "update_character{patch: {body_slots}}" in res.line
+      res.ok and "; body slots unset: hair.length, eyes.color" in res.line
       and get_character_profile("Demo Born").get("body_slots") == {"hair": {"color": "blonde"}},
       res)
 rep = wu.undo(run26)
+# characters.updated_at is the SYSTEM stamp of the restoring save ("now"):
+# compared, it failed whenever the undo crossed a second boundary. Every
+# other column (profile_json, config_json, ...) is still compared exactly.
 check("(ap) undo complete, nothing skipped", rep["complete"] and rep["skipped"] == [], rep)
 check("(ap) undo exact: every table as before (Demo Slotless without body_slots key, "
-      "female; Demo Slots hair red)", dump_diff(dump26, db_dump()) == []
+      "female; Demo Slots hair red)", dump_diff(dump26, db_dump(), ("characters",)) == []
       and "body_slots" not in get_character_profile("Demo Slotless")
       and get_character_profile("Demo Slots")["body_slots"] == {"hair": {"color": "red"}},
-      dump_diff(dump26, db_dump()))
+      dump_diff(dump26, db_dump(), ("characters",)))
 wr.set_status(run26, "rolled_back")
 run27 = wr.create_run("body2", "m", "p", "u", 40, 300000)
 h1 = wt.ToolCtx(run_id=run27, turn=1)

@@ -65,12 +65,37 @@ def _get_generable_fields(template_name: str) -> tuple[set, set]:
     return profile_fields, config_fields
 
 
+def status_field_keys(template_name: str) -> set:
+    """Keys of the template's stat fields (``store == "status_effects"``):
+    their values live in ``profile["status_effects"]``, never at the top
+    level of the profile."""
+    from app.models.character_template import get_template
+    keys: set = set()
+    for section in (get_template(template_name) or {}).get("sections", []) or []:
+        for field in section.get("fields", []) or []:
+            if field.get("store") == "status_effects" and field.get("key"):
+                keys.add(str(field["key"]))
+    return keys
+
+
+def _stat_number(value: Any) -> bool:
+    """A stat value the apply takes: a finite WHOLE number 0-100 (no bool) —
+    a fractional value is skipped with a warning like any other, never
+    truncated (the free-mode tool refuses it the same way)."""
+    import math
+    # Range before any float(): a huge JSON integer (10**400) would make
+    # float() raise OverflowError; NaN fails the range comparison.
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and 0 <= value <= 100 and float(value).is_integer())
+
+
 def apply_character(char_data: Dict[str, Any],
                     selected_template: str = "",
                     created_by: str = "",
                     must_be_new: bool = False,
                     on_claim: Optional[Callable[[], None]] = None,
-                    on_item: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
+                    on_item: Optional[Callable[[str], None]] = None,
+                    place_compliance: bool = True) -> Dict[str, Any]:
     """Apply character JSON in-process (profile + soul MD + outfits + config).
 
     Used by /apply-character (HTTP), /apply-json (smart import), the temp-NPC
@@ -90,6 +115,10 @@ def apply_character(char_data: Dict[str, Any],
     ``on_item(item_id)`` is called right after ``add_item`` stored a new
     catalog piece for an outfit, before it is handed to the character — the
     caller can record the id durably before anything else happens.
+    ``place_compliance=False``: a new character placed at its home is not
+    run through the outfit compliance here — a caller that dresses it
+    afterwards (the World Dev free mode's starting outfit) runs it once
+    itself, on the outfit actually worn.
 
     Returns {status, character, template, outfits, warnings, created_items};
     ``created_items`` are the catalog item ids the outfits created via
@@ -133,6 +162,8 @@ def apply_character(char_data: Dict[str, Any],
         raise ValueError(f"Character '{char_name}' already exists")
 
     profile_fields, config_fields = _get_generable_fields(template)
+    stat_keys = status_field_keys(template)
+    stat_warnings: List[str] = []
 
     from app.models.character_template import get_template
     from app.models.character import get_character_dir
@@ -161,10 +192,24 @@ def apply_character(char_data: Dict[str, Any],
                         soul_field_map[fk] = sf
 
         for key in profile_fields:
-            if key in soul_field_map:
+            if key in soul_field_map or key in stat_keys:
                 continue
             if key in char_data:
                 profile[key] = char_data[key]
+
+        # Stats live in status_effects (where the hourly tick, the prompt and
+        # the stat bars read them), never at the top level.
+        status: Dict[str, Any] = {}
+        if stat_keys:
+            cur_status = profile.get("status_effects")
+            status = dict(cur_status) if isinstance(cur_status, dict) else {}
+            for key, value in char_data.items():
+                if key not in stat_keys:
+                    continue
+                if _stat_number(value):
+                    status[key] = int(value)
+                else:
+                    stat_warnings.append(f"{key}: {value} is not a whole number 0-100 — skipped.")
 
         if tmpl:
             for section in tmpl.get("sections", []):
@@ -175,12 +220,18 @@ def apply_character(char_data: Dict[str, Any],
                         continue
                     if key in soul_field_map:
                         continue
+                    if key in stat_keys:
+                        status.setdefault(key, default)
+                        continue
                     if key not in profile:
                         profile[key] = default
                     elif key == "roleplay_instructions" and isinstance(default, str) and default:
                         current = str(profile[key])
                         if default not in current:
                             profile[key] = default + "\n\n" + current
+
+        if stat_keys and (status or "status_effects" in profile):
+            profile["status_effects"] = status
 
         for k in list(profile.keys()):
             if k in soul_field_map:
@@ -270,8 +321,8 @@ def apply_character(char_data: Dict[str, Any],
     created_items: List[str] = []
     # After the profile save: the slots that apply depend on the stored
     # template and gender.
-    apply_warnings: List[str] = _apply_body_slots(char_name,
-                                                  char_data.get("body_slots"))
+    apply_warnings: List[str] = stat_warnings + _apply_body_slots(
+        char_name, char_data.get("body_slots"))
     raw_outfits = char_data.get("outfits", []) or []
     if raw_outfits and not _template_has_wardrobe(template):
         apply_warnings.append(
@@ -287,7 +338,8 @@ def apply_character(char_data: Dict[str, Any],
         outfits_applied.append(applied)
     # After the outfits: placing a new character at home runs the outfit
     # compliance of that place, which needs the wardrobe to exist.
-    apply_warnings.extend(_apply_home_and_schedule(char_name, char_data, _is_new))
+    apply_warnings.extend(_apply_home_and_schedule(char_name, char_data, _is_new,
+                                                   compliance=place_compliance))
 
     logger.info("WorldDev: Character '%s' (template=%s) applied", char_name, template)
     return {"status": "success", "character": char_name, "template": template,
@@ -409,14 +461,20 @@ def _home_schedule_for_edit(char_name: str) -> Dict[str, Any]:
 
 
 def _apply_home_and_schedule(char_name: str, data: Dict[str, Any],
-                             is_new: bool) -> List[str]:
+                             is_new: bool, compliance: bool = True) -> List[str]:
     """Home, daily schedule and known places from a World-Dev draft.
 
     Writes only what the draft carries. ``known_locations`` gains the home and
     every schedule place — for a NEW character that is the whole list, an edit
     only adds. Only a new character is placed at its home; an edit never moves
     anybody. A temporary NPC is left alone (its home and rhythm come from its
-    slot; ``npc_ops`` places it). Returns warnings for everything skipped."""
+    slot; ``npc_ops`` places it). Returns warnings for everything skipped.
+
+    The first placement of a new character is SILENT: no movement narration
+    (it never left anywhere — the lines would also land in the perception of
+    everyone already in that room) and no compliance run per step, which
+    would judge a half-placed character and leave a notification behind.
+    With ``compliance`` the compliance runs once, after the placement."""
     from app.models.character import (add_known_location, is_temporary_npc,
                                       save_character_current_location,
                                       save_character_current_room,
@@ -518,9 +576,18 @@ def _apply_home_and_schedule(char_name: str, data: Dict[str, Any],
                 add_known_location(char_name, loc_id)
 
     if is_new and home is not None:
-        save_character_current_location(char_name, home["id"])
+        save_character_current_location(char_name, home["id"],
+                                        _skip_compliance=True)
         if home_room:
-            save_character_current_room(char_name, home_room)
+            save_character_current_room(char_name, home_room,
+                                        _initial_placement=True)
+        if compliance:
+            try:
+                from app.core.outfit_compliance import apply_outfit_compliance
+                apply_outfit_compliance(char_name)
+            except Exception as e:  # noqa: BLE001 — placement is stored
+                logger.warning("WorldDev: outfit compliance for %s failed: %s",
+                               char_name, e)
     return warnings
 
 

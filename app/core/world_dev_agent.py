@@ -76,12 +76,13 @@ logger = get_logger("world_dev_agent")
 
 #: Per-TURN budgets (each turn of a run gets them in full).
 DEFAULT_MAX_STEPS = 40
-DEFAULT_MAX_TOKENS_TOTAL = 300_000
+DEFAULT_MAX_TOKENS_TOTAL = 600_000
 #: Start of the note of a turn cut off by its budget (work kept).
 BUDGET_NOTE_PREFIX = "budget reached ("
 #: Consecutive replies with an unparseable tool call that fail the turn.
 MAX_BAD_CALLS = 3
-#: Read results kept whole in the history; older ones become a stub.
+#: Read results kept whole in the history; older ones become a stub (pinned
+#: reference reads excepted — they stay whole until the same read repeats).
 KEEP_RESULTS = 4
 BAD_BODY_LINE = "error: body is not a JSON object"
 SYSTEM_TEMPLATE = "world_dev_free/system.md"
@@ -614,6 +615,7 @@ class RunManager:
         # Truthful history: drop what this turn added after its user message
         # (results of writes that are gone) and say so once.
         del st.history[mark + (1 if turn else 0):]
+        self._restore_superseded(st)
         hist = (f"[turn {turn} was rolled back: {note} — every write of that turn "
                 "was undone")
         if not_reversed:
@@ -628,16 +630,46 @@ class RunManager:
         return ([{"role": "system", "content": st.system}]
                 + [{"role": m["role"], "content": m["content"]} for m in st.history])
 
-    def _add_result(self, st: _RunState, tool: str, line: str) -> None:
+    def _add_result(self, st: _RunState, tool: str, line: str,
+                    args: Optional[Dict[str, Any]] = None, ok: bool = True) -> None:
+        """Append one tool result to the history and shrink older reads.
+
+        A pinned reference read is never shrunk; only a newer result of the
+        same tool with the same args (`_key`) turns its older copy into a
+        stub (its text kept in `_orig` for _restore_superseded). Only an ok
+        result is pinned — a refused one follows the normal rule. Pinned
+        results still count among the newest KEEP_RESULTS."""
         spec = wt.TOOLS.get(tool)
+        pinned = bool(spec is not None and spec.pinned and ok)
+        key = tool + json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+        if pinned:
+            for m in st.history:
+                if m.get("_pinned") and m.get("_key") == key and not m.get("_superseded"):
+                    m["_orig"] = m["content"]
+                    m["content"] = f"[result {tool}] (superseded — see the later copy)"
+                    m["_superseded"] = True
         st.history.append({"role": "user", "content": f"[result {tool}] {line}",
-                           "_result": True, "_tool": tool,
+                           "_result": True, "_tool": tool, "_pinned": pinned, "_key": key,
                            "_read": bool(spec is not None and not spec.write)})
         results = [m for m in st.history if m.get("_result")]
         for m in results[:-KEEP_RESULTS]:
-            if m.get("_read") and not m.get("_shrunk"):
+            if m.get("_read") and not m.get("_pinned") and not m.get("_shrunk"):
                 m["content"] = f"[result {m['_tool']}] (shrunk — call again if needed)"
                 m["_shrunk"] = True
+
+    @staticmethod
+    def _restore_superseded(st: _RunState) -> None:
+        """After a rollback cut the history: a superseded pinned copy whose
+        newer copy was cut away gets its whole text back. The history is
+        walked newest first, so in a chain of copies the NEWEST surviving
+        one is restored and the older ones stay stubs."""
+        live = {m.get("_key") for m in st.history
+                if m.get("_pinned") and not m.get("_superseded")}
+        for m in reversed(st.history):
+            if m.get("_superseded") and m.get("_key") not in live:
+                m["content"] = m.pop("_orig", m["content"])
+                m["_superseded"] = False
+                live.add(m.get("_key"))
 
     async def _call_llm(self, run_id: str, st: _RunState, pattern) -> str:
         """One streamed LLM call; returns the reply up to the end of its first
@@ -804,7 +836,8 @@ class RunManager:
                                               body if m else reply, line)
                 await self._emit(st, {"type": "step", "tool": name, "ok": False,
                                       "line": line, "kind": "refused", "seq": seq})
-                self._add_result(st, name, line)
+                self._add_result(st, name, line, args if isinstance(args, dict) else None,
+                                 ok=False)
                 if bad >= MAX_BAD_CALLS:
                     return "fail", (f"{MAX_BAD_CALLS} tool calls in a row had a body that is "
                                     "not a JSON object")
@@ -822,7 +855,7 @@ class RunManager:
                 return "fail", f"tool {name} failed: {e}"
             await self._emit(st, {"type": "step", "tool": name, "ok": res.ok,
                                   "line": res.line, "wrote": res.wrote, "seq": res.seq})
-            self._add_result(st, name, res.line)
+            self._add_result(st, name, res.line, args, ok=res.ok)
             if st.stop:
                 return "fail", "stopped by the admin"
 

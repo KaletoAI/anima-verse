@@ -19,10 +19,29 @@ the field names a character has; `find_characters{query?, location?}` finds them
 {%- for t in character_templates %}
   - `{{ t.name }}` ({{ t.label }}) — {{ "outfits" if t.outfits else "no outfits" }}
 {%- endfor %}
-- every other key is a field of that template (`get_character` on a similar character shows
-  them). Unknown keys are refused.
-- `outfits` — list of outfits (below); `body_slots` — see "Body slots" below.
+- every other key is a field of that template: `describe_template{"template": …, "gender": …}`
+  lists them with where they are stored, the values they take and their defaults, plus the body
+  slots for that gender. Read it once before creating. Every field it lists is accepted at
+  creation, except those marked `editor only`; unknown keys are refused.
+- `outfits` — list of outfits, `wear` — the one it starts in (both below); `body_slots` — see
+  "Body slots" below.
 - home and schedule — see `read_manual homes`.
+
+## What is still missing
+
+Every `create_character` / `update_character` result ends with `; complete` or
+`; missing: …` — what the character still lacks: `no home — not in the world`,
+`home <id> is unplaced (no x/z)` (place it with `place_location`), `not placed`,
+`no outfits`, `wears nothing`, `no daily schedule`, `soul sections without content: <keys>`,
+`body slots unset: <slot.attribute, …>`, `knows only its home` (add `known_places` or
+schedule places). For a character you created, all of these are listed — fix them with
+`update_character`, except two that only `create_character` can settle: `wears nothing`
+(give `outfits` there — it wears the first one) and `not placed` (give `home` there — it
+starts at its home; a home added later by `update_character` does not place the character).
+On a character that already exists, name these two in the summary and do not retry — no tool
+changes what it wears or where it stands. For a character you only changed, only the parts
+your calls touched (home and schedule, known places, outfits, soul, body slots) are checked.
+`check_run{}` lists the gaps of everything the run created or changed.
 
 ## Field values
 
@@ -32,6 +51,8 @@ the field names a character has; `find_characters{query?, location?}` finds them
   - `chat_mode`: `""` = single (the chat model calls the tools itself), `"rp_first"` = role-play
     model plus a separate tool model (for RP fine-tunes).
   - on/off fields of this kind are the STRINGS `"true"` / `"false"`, never true/false.
+- A new character defaults to `chat_mode` `"rp_first"`; send `chat_mode: ""` for a
+  tool-capable chat model.
 - A season-day field takes `"<season>:<day>"` of this world's calendar (e.g. `"spring:14"`).
 - `character_appearance`, `face_appearance`, `body_appearance` are ENGLISH comma-separated
   attribute lists for image generation, never a sentence with the name ("young woman, slim, long
@@ -45,8 +66,8 @@ Some templates get body slots from installed packages (hair, eyes, skin, build, 
 and attributes a character has, and the values they take, depend on its template and gender:
 `get_character{"name": …, "fields": ["body_slots"]}` lists them as
 `slot: attribute=value [allowed values]` (`-` = unset, `|other` = another short English value
-is allowed, `[text]` = free short English text). For a new character, create it first (the
-result names the slots it left unset), then fill them.
+is allowed, `[text]` = free short English text). For a new character, send `body_slots` in
+`create_character` — `describe_template` with the gender shows them.
 
 - `body_slots` is `{"<slot>": {"<attribute>": "<value>"}}`, values in English.
 - Set EVERY slot and attribute that applies to the character. Hair, eyes, skin, build etc. go
@@ -80,20 +101,24 @@ Only for a template with outfits (see `template` above). `create_character` take
 `patch.outfits` (same shape). An outfit name the character has already is refused — outfits
 are never replaced or removed here; `get_character` lists the outfit names.
 
-`{"name": "Daily", "pieces": [...], "locations": [], "activities": [], "excluded_locations": []}`
+`{"name": "Daily", "pieces": [...]}` — only these keys. Outfits are not bound to places or
+activities: `locations` / `activities` / `excluded_locations` are refused.
 
 A piece is EITHER an existing catalog piece `{"item_id": "<id>"}` (the id alone) OR a new piece:
 
-- `slots` (required) — every slot it occupies, from `head, neck, underwear_top,
-  underwear_bottom, legs, feet, top, bottom, outer` (a dress is `["top", "bottom"]`; do not add
-  a second piece for the extra slot).
+- `slots` (required) — every slot it occupies; `describe_template` lists the clothing slots
+  of the template (line `outfit slots:`), a slot not listed there is refused (a dress is
+  `["top", "bottom"]`; do not add a second piece for the extra slot).
 - `name` (required) — short ENGLISH item name, 2–4 words.
 - `prompt_fragment` — concrete ENGLISH description for the image, no name, no pose.
 - `description`, `covers`, `partially_covers` — optional.
 
 A complete everyday outfit has at least underwear top and bottom, top, bottom and feet. Give a
-new character 2–3 outfits. `locations` / `activities` (empty = everywhere / always) and
-`excluded_locations` name places by name.
+new character 2–3 outfits.
+
+A new character starts DRESSED: `data.wear` names the outfit it wears (one of `data.outfits`,
+case-insensitive); without `wear` it wears the first outfit. `wear` exists only in
+`create_character` — the worn outfit of an existing character is changed in the wardrobe.
 
 ## delete_created
 

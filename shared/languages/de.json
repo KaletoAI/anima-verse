@@ -7445,6 +7445,8 @@
     "The clip did not open (no scene or no figures in time).": "Der Clip ließ sich nicht öffnen (keine Szene oder keine Figuren rechtzeitig).",
     "Switch “Real heights” off to save: the dials and the measured values belong to 1.70 m figures.": "„Echte Größen“ ausschalten, um zu speichern: die Regler und Messwerte gehören zu 1,70-m-Figuren.",
     "Switch “Real heights” off: Auto-align measures and stores the arrangement of 1.70 m figures.": "„Echte Größen“ ausschalten: Auto-Ausrichten misst und speichert die Anordnung von 1,70-m-Figuren.",
-    "the contact heights go to the sidecar (the game closes the vertical gap of figures of other heights from them)": "die Kontakthöhen gehen in die Sidecar-Datei (das Spiel schließt damit die vertikale Lücke bei Figuren anderer Größe)"
+    "the contact heights go to the sidecar (the game closes the vertical gap of figures of other heights from them)": "die Kontakthöhen gehen in die Sidecar-Datei (das Spiel schließt damit die vertikale Lücke bei Figuren anderer Größe)",
+    "{name} leaves {old} (towards {new}).": "{name} verlässt {old} (Richtung {new}).",
+    "{name} enters {place}.": "{name} betritt {place}."
   }
 }

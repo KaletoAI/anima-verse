@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
 from app.core.timeutils import utc_now_iso
@@ -322,6 +322,46 @@ def entries(run_id: str, turn: Optional[int] = None, writes_only: bool = True,
             f"SELECT * FROM world_dev_journal WHERE {' AND '.join(where)} "
             "ORDER BY seq DESC", params).fetchall()
     return [_entry_dict(r) for r in rows]
+
+
+def _json_truthy(jtype: Optional[str], value: Any) -> bool:
+    """Python truthiness of a JSON value read by json_type/json_extract
+    (arrays and objects arrive as JSON text)."""
+    if jtype in (None, "null", "false"):
+        return False
+    if jtype in ("array", "object"):
+        return bool(_load(value))
+    if jtype == "true":
+        return True
+    return bool(value)
+
+
+def entry_digests(run_id: str, keys: Tuple[str, ...] = ()) -> List[Dict[str, Any]]:
+    """A slim view of the same rows as ``entries(run_id)`` (live write rows,
+    newest-first): seq, turn, tool, target_kind, target_id, state, the
+    inverse's ``op`` and, under ``changed``, whether each inverse key of
+    ``keys`` holds a truthy value. The inverses themselves (whole snapshots
+    of a recreate_* row, soul texts) are never loaded."""
+    for key in keys:
+        if not key.replace("_", "").isalnum():
+            raise ValueError(f"bad inverse key: {key!r}")
+    cols = "".join(f", json_type(inverse_json, '$.{k}') AS t_{k}, "
+                   f"json_extract(inverse_json, '$.{k}') AS v_{k}" for k in keys)
+    with _Db() as conn:
+        rows = conn.execute(
+            "SELECT seq, turn, tool, target_kind, target_id, state, "
+            "inverse_json IS NOT NULL AS has_inverse, "
+            "json_extract(inverse_json, '$.op') AS op" + cols
+            + " FROM world_dev_journal WHERE run_id=? AND kind='write' "
+            "AND undone_at IS NULL ORDER BY seq DESC", (run_id,)).fetchall()
+    out = []
+    for r in rows:
+        d = {k: r[k] for k in ("seq", "turn", "tool", "target_kind", "target_id",
+                               "state", "op")}
+        d["has_inverse"] = bool(r["has_inverse"])
+        d["changed"] = {k: _json_truthy(r[f"t_{k}"], r[f"v_{k}"]) for k in keys}
+        out.append(d)
+    return out
 
 
 def steps(run_id: str) -> List[Dict[str, Any]]:

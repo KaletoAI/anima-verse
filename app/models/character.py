@@ -1184,6 +1184,13 @@ def delete_character(character_name: str) -> bool:
                 # quests and what others did with it (quests.delete_facts_about,
                 # as raw SQL in this transaction). quest_runs stay: a run whose
                 # bindings name the character is the quest engine's to break.
+                # notifications(title = the character the notice is about):
+                # a deleted character's notices point at nobody. room_furnish
+                # stores the ROOM label in title — a room named like the
+                # character keeps its notices.
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE name='notifications'").fetchone():
+                    conn.execute("DELETE FROM notifications WHERE title=? AND kind<>'room_furnish'",
+                                 (character_name,))
                 if conn.execute("SELECT 1 FROM sqlite_master WHERE name='quest_facts'").fetchone():
                     conn.execute("DELETE FROM quest_facts WHERE mind=? OR subject=?",
                                  (character_name, character_name))
@@ -1195,6 +1202,14 @@ def delete_character(character_name: str) -> bool:
 
         from app.core import sync_topics
         if stored_tx_1:
+            # A debounced outfit render / Build of the deleted character
+            # must not fire (it would spend a render no undo takes back).
+            try:
+                from app.core.model_refs import cancel_character_timers
+                cancel_character_timers(character_name)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("delete_character: render timers of %s not "
+                               "cancelled: %s", character_name, e)
             linked_characters.invalidate()
             _notify_prop_presence(old_loc, old_room)
             sync_topics.moved(character_name, old_loc, "")
@@ -1883,10 +1898,16 @@ def save_character_current_location(character_name: str = "", location: str = ""
             from app.models.world import get_location_name as _gln
             _ol = _gln(old_location) or old_location
             _nl = _gln(location) or location
+            from app.core.i18n import t as _t
+            _lang = get_character_language(character_name) or "de"
             _movement_trace(character_name, old_location, old_room,
-                            f"{character_name} verlässt {_ol} (Richtung {_nl}).", sync_stored=stored)
+                            _t("{name} leaves {old} (towards {new}).", _lang).format(
+                                name=character_name, old=_ol, new=_nl),
+                            sync_stored=stored)
             _movement_trace(character_name, location, "",
-                            f"{character_name} betritt {_nl}.", sync_stored=stored)
+                            _t("{name} enters {place}.", _lang).format(
+                                name=character_name, place=_nl),
+                            sync_stored=stored)
             _suggest_follow_after_move(character_name, old_location, old_room,
                                        location, "", _nl)
             # at_location intents (plan-intents-unified.md): fire the
@@ -2727,12 +2748,18 @@ def get_character_current_room(character_name: str,
 
 
 def save_character_current_room(character_name: str, room_id: str,
-                                _party_drag: bool = False):
+                                _party_drag: bool = False,
+                                _initial_placement: bool = False):
     """Store the current room (room id) and check the outfit-type compliance
     for the room (overrides the location's requirement).
 
     _party_drag: True only for a party follower dragged along (recursion
-    guard, like save_character_current_location)."""
+    guard, like save_character_current_location).
+    _initial_placement: True only for the first placement of a just-created
+    character — it did not walk in from anywhere, so no movement narration
+    (storyteller lines other characters perceive), no follow suggestion and
+    no compliance run (the creator runs it once when the character is
+    dressed)."""
     # A linked family has ONE place: a dormant member's place is the place of
     # the member standing in the world (linked_characters.placement_owner).
     from app.core.linked_characters import placement_owner
@@ -2838,13 +2865,19 @@ def save_character_current_room(character_name: str, room_id: str,
         # location. Guard: both rooms belong to the current location, so the
         # room reset during a cross-location move (the old room belongs to the
         # old location then) is NOT mistaken for a room change.
-        if old_room and _room_in_location(old_room, cur_loc) \
+        if not _initial_placement and old_room \
+                and _room_in_location(old_room, cur_loc) \
                 and _room_in_location(room_id, cur_loc):
             _old_rn = _room_name_for(old_room, cur_loc, _lang)
+            from app.core.i18n import t as _t
             _movement_trace(character_name, cur_loc, old_room,
-                            f"{character_name} verlässt {_old_rn} (Richtung {room_name}).", sync_stored=stored)
+                            _t("{name} leaves {old} (towards {new}).", _lang).format(
+                                name=character_name, old=_old_rn, new=room_name),
+                            sync_stored=stored)
             _movement_trace(character_name, cur_loc, room_id,
-                            f"{character_name} betritt {room_name}.", sync_stored=stored)
+                            _t("{name} enters {place}.", _lang).format(
+                                name=character_name, place=room_name),
+                            sync_stored=stored)
             _suggest_follow_after_move(character_name, cur_loc, old_room,
                                        cur_loc, room_id, room_name)
 
@@ -2854,7 +2887,7 @@ def save_character_current_room(character_name: str, room_id: str,
             _drag_party_followers_to_room(character_name, room_id)
 
     # Decency compliance only on a real room change, and never for the avatar
-    if not room_id or room_id == old_room:
+    if not room_id or room_id == old_room or _initial_placement:
         return
     try:
         from app.models.account import is_player_controlled
@@ -4972,6 +5005,33 @@ def read_effect_profile(conn, character_name: str) -> dict:
     profile.update({name: read_cast(state[name]) for name, _, read_cast, _ in _STATE_TYPED_COLS})
     profile.update(json.loads(state["meta"] or "{}"))
     return profile
+
+
+def remove_state_meta_key(character_name: str, key: str) -> bool:
+    """Remove one runtime key (``_STATE_META_KEYS``) from the character's
+    ``character_state.meta`` — the only way to take such a key away again:
+    ``save_character_profile`` merges the meta and never drops a key the
+    profile leaves out. The caller holds ``keyed_lock("character_profile",
+    name)``. True when stored (or there was nothing to remove), False on a
+    DB error."""
+    if key not in _STATE_META_KEYS:
+        raise ValueError(f"{key!r} is not a character_state meta key")
+    try:
+        with transaction() as conn:
+            row = conn.execute("SELECT meta FROM character_state WHERE character_name=?",
+                               (character_name,)).fetchone()
+            meta = json.loads((row[0] if row else None) or "{}")
+            if key in meta:
+                meta.pop(key)
+                conn.execute("UPDATE character_state SET meta=? WHERE character_name=?",
+                             (json.dumps(meta, ensure_ascii=False), character_name))
+    except Exception as e:
+        logger.error("remove_state_meta_key DB error for %s: %s", character_name, e,
+                     exc_info=True)
+        return False
+    finally:
+        read_scope.clear()
+    return True
 
 
 def write_effect_profile(conn, character_name: str, profile: dict, *, runtime: dict | None = None) -> None:

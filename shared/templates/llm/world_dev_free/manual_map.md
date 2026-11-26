@@ -3,12 +3,20 @@
 The world is one flat plane in metres: `x` east, `z` south, a point is `[x, z]`.
 `world_overview{}` names the world bounds and the terrain kinds that exist; `map_region{min_x,
 min_z, max_x, max_z}` shows what already lies in a box (add `"polygons": true` for outlines).
+An outline too long for that list reads `polygon: <n> points — get_area{"id": …}`:
+`get_area{id}` returns one terrain or height area whole — for an area drawn as a stroke first
+the centre line and width to send back in an update, then its full polygon. A list too long
+for that result ends `,…]` with a `[cut — …]` line: never send a cut list back.
 
 ## Terrain areas — the painted ground
 
 `add_terrain_area{kind, polygon | stroke, label?, z_order?}`,
 `update_terrain_area{id, kind?, polygon? | stroke?, label?, z_order?}` (existing areas too —
-reshaping a wood to make room for a lake is an edit; everything else stored on the area is kept).
+reshaping a wood to make room for a lake is an edit; everything else stored on the area is kept,
+including the rows of props along a stroke — `along: <n> rows` in `get_area`). A new `stroke`
+replaces the whole stroke: send `style`, `spacing_m` and `amplitude_m` again or they fall back
+to their defaults. A `polygon` sent for an area drawn as a stroke drops the stroke and its
+`along` rows.
 
 - `kind` — EXACTLY one of the world's terrain kinds (see `world_overview`); anything else is
   refused. The overview also says which kinds are impassable.

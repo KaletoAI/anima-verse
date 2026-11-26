@@ -47,8 +47,9 @@ import json
 import math
 import secrets
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from app.core import world_dev_completeness as completeness
 from app.core import world_dev_runs as wr
 from app.core import world_dev_undo as wu
 from app.core.log import get_logger
@@ -82,6 +83,9 @@ class ToolSpec:
     signature: str
     summary: str
     fn: Callable[["_Step", Dict[str, Any]], str]
+    #: A reference read (manual section, template schema): the agent history
+    #: keeps its result whole instead of shrinking it.
+    pinned: bool = False
 
 
 @dataclass
@@ -97,9 +101,9 @@ class ToolResult:
 TOOLS: Dict[str, ToolSpec] = {}
 
 
-def _tool(name: str, write: bool, signature: str, summary: str):
+def _tool(name: str, write: bool, signature: str, summary: str, pinned: bool = False):
     def deco(fn):
-        TOOLS[name] = ToolSpec(name, write, signature, summary, fn)
+        TOOLS[name] = ToolSpec(name, write, signature, summary, fn, pinned)
         return fn
     return deco
 
@@ -283,8 +287,14 @@ def tool_list() -> List[str]:
 # ── Argument checks ──────────────────────────────────────────────────────
 
 def _is_num(value: Any) -> bool:
-    return (isinstance(value, (int, float)) and not isinstance(value, bool)
-            and math.isfinite(float(value)))
+    # An int is always finite; isfinite is only asked of a float, because
+    # float() of a huge JSON integer (10**400) raises OverflowError — _num
+    # refuses such an int when it converts it.
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return True
+    return isinstance(value, float) and math.isfinite(value)
 
 
 def _num(args: Dict[str, Any], key: str, required: bool = False) -> Optional[float]:
@@ -294,7 +304,11 @@ def _num(args: Dict[str, Any], key: str, required: bool = False) -> Optional[flo
         return None
     if not _is_num(args[key]):
         raise ToolRefusal(f"'{key}' must be a number")
-    return float(args[key])
+    try:
+        return float(args[key])
+    except OverflowError:
+        raise ToolRefusal(f"'{key}' must be a number (got an integer too "
+                          f"large for one)") from None
 
 
 def _str(args: Dict[str, Any], key: str, required: bool = False) -> Optional[str]:
@@ -339,11 +353,14 @@ def _only_keys(args: Dict[str, Any], allowed, what: str) -> None:
 # location editor's extra fields the core writers take.
 _LOC_STR = ("name", "description", "image_prompt_day", "image_prompt_night",
             "image_prompt_building", "indoor", "decency", "style_hint",
-            "activity_hint", "outfit_type", "terrain", "entry_room",
+            "activity_hint", "terrain", "entry_room",
             "default_door_style", "default_window_style")
 _LOC_INT = ("danger_level",)
 _LOC_BOOL = ("swim_allowed",)
 _LOC_KEYS = set(_LOC_STR) | set(_LOC_INT) | set(_LOC_BOOL) | {"rooms", "map3d"}
+#: What a get_location fields read knows as a field even when the place
+#: does not store it: the writable keys plus the id and the map position.
+_LOC_READ_KEYS = _LOC_KEYS | {"id", "pos_x", "pos_z", "yaw_deg"}
 _ROOM_STR = ("id", "name", "description", "indoor", "decency", "style_hint",
              "image_prompt", "image_prompt_day", "image_prompt_night",
              "activity_hint")
@@ -358,6 +375,112 @@ _MAP3D_KEYS = {"floors", "footprint", "style", "color", "ground_corridor",
                "boundary_openings", "hull_openings"}
 #: Longest location or room name a tool stores.
 MAX_NAME_CHARS = 120
+#: The decency values the location writers keep ("" = inherit / public).
+_DECENCY = ("", "public", "private", "nude_ok")
+#: The danger levels the location writers store (they clamp to 0-5).
+_DANGER_LEVELS = tuple(range(6))
+#: The indoor flags the readers know (models.world.resolve_indoor_flag;
+#: the location writers blank anything else, "" = unset).
+_INDOOR = ("", "indoor", "outdoor")
+
+
+def _shown(value: Any) -> str:
+    return '""' if value == "" else str(value)
+
+
+def _one_of(data: Dict[str, Any], key: str, allowed) -> None:
+    """Refuse a value of ``key`` outside ``allowed`` (the refusal lists them)."""
+    if key in data and data[key] not in allowed:
+        raise ToolRefusal(f"'{key}' must be one of: "
+                          + ", ".join(_shown(v) for v in allowed))
+
+
+def _check_location_values(data: Dict[str, Any]) -> None:
+    """Value checks of a location body: a value the writers would clamp,
+    blank or keep without any reader is refused, never rewritten."""
+    _one_of(data, "danger_level", _DANGER_LEVELS)
+    _one_of(data, "decency", _DECENCY)
+    _one_of(data, "indoor", _INDOOR)
+    if "default_door_style" in data:
+        from app.core.door_styles import load_door_styles
+        _one_of(data, "default_door_style", ("",) + tuple(sorted(load_door_styles())))
+    if "default_window_style" in data:
+        from app.core.window_styles import load_window_styles
+        _one_of(data, "default_window_style",
+                ("",) + tuple(sorted(load_window_styles())))
+    if "terrain" in data:
+        from app.core.terrain_types import effective_catalog
+        _one_of(data, "terrain", ("",) + tuple(sorted(effective_catalog())))
+
+
+def _entry_room_choices(rooms: List[Dict[str, Any]],
+                        map3d: Optional[Dict[str, Any]],
+                        previous: Optional[List[Dict[str, Any]]] = None
+                        ) -> List[Tuple[str, str]]:
+    """``(id, name)`` of every room an ``entry_room`` may name once ``rooms``
+    is written with ``map3d``: the rooms of the list plus the corridors the
+    writer's sync adds, of the corridors only the ground floor's
+    (models.world.valid_entry_room). The ground is no choice — "" already
+    means "arrive on the ground". A room without an id yet has id "".
+    ``previous`` = the stored room list (None on create): a corridor the
+    sync brings back takes its stored name from there, as in the writer."""
+    from app.core.world_ops import _sanitize_map3d
+    from app.models.world import (GROUND_ROOM_ID, ensure_floor_rooms,
+                                  floor_room_level)
+    sim = copy.deepcopy([r for r in rooms if isinstance(r, dict)])
+    ensure_floor_rooms(sim, _sanitize_map3d(map3d) if map3d else None,
+                       previous=copy.deepcopy([r for r in previous or []
+                                               if isinstance(r, dict)]))
+    out: List[Tuple[str, str]] = []
+    for r in sim:
+        rid = str(r.get("id") or "")
+        if rid == GROUND_ROOM_ID:
+            continue
+        level = floor_room_level(rid)
+        if level is not None and level != 0:
+            continue
+        out.append((rid, str(r.get("name") or rid).strip()))
+    return out
+
+
+def _resolve_entry_room(value: str,
+                        choices: List[Tuple[str, str]]) -> Tuple[str, Optional[str]]:
+    """``(id, None)`` for a room that already has its id (``("", None)``
+    clears the entry room), ``("", name)`` for a room the write is still to
+    create — resolved by name after the write. Refused unless it names
+    exactly one room of ``choices`` (by id or by stripped name)."""
+    v = str(value or "").strip()
+    if not v:
+        return "", None
+    for rid, _name in choices:
+        if rid and rid == v:
+            return rid, None
+    named = [rid for rid, name in choices if name == v]
+    if len(named) > 1:
+        raise ToolRefusal(f"'entry_room': {len(named)} rooms are called {v!r} — "
+                          f"send the room's id")
+    if named:
+        return (named[0], None) if named[0] else ("", v)
+    raise ToolRefusal("'entry_room' must name a room of this place: "
+                      + (", ".join(name for _rid, name in choices) or "none")
+                      + ' ("" = arrive on the ground)')
+
+
+def _write_entry_room_by_name(lid: str, name: str, old_ids) -> None:
+    """Store the id of the room ``name`` (compared stripped) that a write
+    just created (its id is not in ``old_ids``) as the place's entry room."""
+    from app.core.world_ops import update_location_with_extras
+    from app.models.world import get_location_by_id
+    loc = get_location_by_id(lid) or {}
+    new = [str(r.get("id")) for r in loc.get("rooms") or []
+           if isinstance(r, dict) and str(r.get("name") or "").strip() == name
+           and str(r.get("id") or "") not in old_ids]
+    if len(new) != 1:
+        raise RuntimeError(f"entry room {name!r}: {len(new)} new rooms of that name "
+                           f"after the write")
+    update_location_with_extras(lid, {"entry_room": new[0]})
+    if str((get_location_by_id(lid) or {}).get("entry_room") or "") != new[0]:
+        raise RuntimeError(f"entry room {name!r} was not stored")
 
 
 def _check_name_length(value: Optional[str], what: str) -> None:
@@ -381,6 +504,7 @@ def _check_location_fields(data: Dict[str, Any], what: str,
         value = _num(data, key)
         if value is not None and value != int(value):
             raise ToolRefusal(f"'{key}' must be a whole number")
+    _check_location_values(data)
     if data.get("map3d") is not None:
         m3 = data["map3d"]
         if not isinstance(m3, dict):
@@ -402,6 +526,8 @@ def _check_location_fields(data: Dict[str, Any], what: str,
                 for key in _ROOM_BOOL:
                     _bool(room, key)
                 _check_name_length(_str(room, "name"), "'name'")
+                _one_of(room, "decency", _DECENCY)
+                _one_of(room, "indoor", _INDOOR)
             except ToolRefusal as exc:
                 raise ToolRefusal(f"rooms[{i}]: {exc}")
         seen: Dict[str, int] = {}
@@ -504,15 +630,19 @@ def _width(loc: Dict[str, Any]) -> str:
     return f"{_g(w)} m" if w > 0 else "no outline"
 
 
+#: Characters _cap_lines keeps free for its "… N more" line.
+_CAP_RESERVE = 60
+
+
 def _cap_lines(lines: List[str], hint: str = "narrow the query",
-               budget: int = MAX_RESULT_CHARS, used: int = 0) -> List[str]:
-    """At most MAX_LIST_LINES lines and "budget" characters ("used" already
+               budget: int = MAX_RESULT_CHARS, used: int = 0,
+               max_lines: int = MAX_LIST_LINES) -> List[str]:
+    """At most "max_lines" lines and "budget" characters ("used" already
     spent by a header), with "… N more — <hint>" for the rest."""
     out: List[str] = []
     total = used
-    reserve = 60
     for i, line in enumerate(lines):
-        if len(out) >= MAX_LIST_LINES or total + len(line) + 1 + reserve > budget:
+        if len(out) >= max_lines or total + len(line) + 1 + _CAP_RESERVE > budget:
             out.append(f"… {len(lines) - i} more — {hint}")
             return out
         out.append(line)
@@ -576,8 +706,58 @@ def _fmt_box(box: Optional[Tuple[float, float, float, float]]) -> str:
     return f"bbox ({_g(box[0])},{_g(box[1])})-({_g(box[2])},{_g(box[3])})"
 
 
-def _fmt_poly(polygon: Any) -> str:
-    return "[" + ",".join(f"[{_g(p[0])},{_g(p[1])}]" for p in polygon or []) + "]"
+#: Shared budget of the requested fields of ONE get_character / get_location
+#: call (decision D8): fields are returned whole up to it, so the model can
+#: read a long text and send it back unchanged.
+MAX_FIELD_CHARS = 12000
+#: At most this many field names per fields read, each at most
+#: MAX_FIELD_KEY_CHARS long: the placeholder lines ("(not set)", "(no such
+#: field)", "(not shown — over budget)") are not counted against
+#: MAX_FIELD_CHARS, so these two caps bound them instead.
+MAX_READ_FIELDS = 30
+MAX_FIELD_KEY_CHARS = 80
+
+
+def _field_text(value: Any) -> str:
+    """A field value as the model reads it: strings raw (not JSON-escaped),
+    everything else as JSON."""
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+
+
+def _field_blocks(items: List[Tuple[str, Optional[str], bool]],
+                  missing: Optional[Dict[str, str]] = None) -> List[str]:
+    """The requested fields, each "<key>:" + newline + its full text, under
+    the shared MAX_FIELD_CHARS budget (counted as header + text per field).
+
+    "items" = (key, text or None when unset, is a soul field). The field
+    that does not fit is cut to what is left and gets a note; every field
+    after it is named as not shown, never dropped silently. "missing" maps
+    a key that names no field at all to its placeholder text, so a typo
+    never reads like an empty field."""
+    out: List[str] = []
+    left = MAX_FIELD_CHARS
+    over = False
+    for key, text, soul in items:
+        if missing and key in missing:
+            out.append(f"{key}: {missing[key]}")
+            continue
+        if text is None:
+            out.append(f"{key}: (not set)")
+            continue
+        if over:
+            out.append(f"{key}: (not shown — over budget)")
+            continue
+        head = f"{key}:\n"
+        if len(head) + len(text) <= left:
+            out.append(head + text)
+            left -= len(head) + len(text)
+            continue
+        n = max(0, left - len(head))
+        note = (f"[cut at {n} of {len(text)} characters — ask for this field alone"
+                + (f" — do not send it back as soul:{key}" if soul else "") + "]")
+        out.append(head + text[:n] + "\n" + note)
+        left, over = 0, True
+    return out
 
 
 def _fields_arg(args: Dict[str, Any]) -> Optional[List[str]]:
@@ -585,6 +765,13 @@ def _fields_arg(args: Dict[str, Any]) -> Optional[List[str]]:
     if fields is not None and (not isinstance(fields, list)
                                or not all(isinstance(f, str) for f in fields)):
         raise ToolRefusal("'fields' must be a list of field names")
+    if fields is not None and len(fields) > MAX_READ_FIELDS:
+        raise ToolRefusal(f"at most {MAX_READ_FIELDS} fields per read — "
+                          f"{len(fields)} were asked for; split the read")
+    for key in fields or []:
+        if len(key) > MAX_FIELD_KEY_CHARS:
+            raise ToolRefusal(f"field name {key[:40]!r}… is longer than "
+                              f"{MAX_FIELD_KEY_CHARS} characters — no field has such a name")
     return fields
 
 
@@ -659,19 +846,27 @@ def _find_locations(step: _Step, args: Dict[str, Any]) -> str:
 
 
 @_tool("get_location", False, "get_location{id, fields?:[...]}",
-       "one place; rooms as names unless 'rooms' is asked for")
+       "one place; rooms as names unless 'rooms' is asked for; asked-for "
+       "fields come whole (shared budget of 12000 characters, at most 30 fields)")
 def _get_location(step: _Step, args: Dict[str, Any]) -> str:
     _only_keys(args, {"id", "fields"}, "get_location")
     loc = _resolve_location(_str(args, "id", required=True))
     fields = _fields_arg(args)
     if fields:
         out = [f'{loc.get("id")} "{loc.get("name")}"']
-        for key in fields:
-            if key not in loc:
-                out.append(f"{key}: (not set)")
-            else:
-                out.append(f"{key}: {_short(json.dumps(loc[key], ensure_ascii=False), 600)}")
-        return _cut("\n".join(out))
+        items: List[Tuple[str, Optional[str], bool]] = []
+        missing: Dict[str, str] = {}
+        for key in dict.fromkeys(fields):  # a key asked for twice is answered once
+            value = loc.get(key)
+            if key not in loc and key not in _LOC_READ_KEYS:
+                # Neither stored nor a location field: a typo, not an
+                # empty field.
+                missing[key] = ("(no such field — location fields: "
+                                + ", ".join(sorted(_LOC_READ_KEYS)) + ")")
+            items.append((key, None if value in (None, "") else _field_text(value),
+                          False))
+        out += _field_blocks(items, missing)
+        return "\n".join(out)
     rooms = [f'{r.get("name") or "?"} ({r.get("id")})' for r in _real_rooms(loc)]
     shown = {"id", "name", "description", "rooms", "pos_x", "pos_z", "yaw_deg",
              "indoor", "danger_level"}
@@ -688,7 +883,8 @@ def _get_location(step: _Step, args: Dict[str, Any]) -> str:
 
 
 @_tool("map_region", False, "map_region{min_x, min_z, max_x, max_z, polygons?}",
-       "terrain/height areas and places in a box (bboxes; polygons on request)")
+       "terrain/height areas and places in a box (bboxes; polygons on request, "
+       "a polygon too long for the result points to get_area)")
 def _map_region(step: _Step, args: Dict[str, Any]) -> str:
     from app.models.heightfield import list_height_areas
     from app.models.terrain import list_areas
@@ -704,28 +900,45 @@ def _map_region(step: _Step, args: Dict[str, Any]) -> str:
         return box is not None and not (box[2] < x0 or box[0] > x1
                                         or box[3] < z0 or box[1] > z1)
     lines: List[str] = []
+    used = 0
+
+    def add(line: str, area: Dict[str, Any]) -> None:
+        """One area line; with polygons, an outline longer than its own
+        ceiling (MAX_REGION_POLY_CHARS) or than the read budget still left
+        becomes a pointer to get_area instead of ending the list (decision
+        D11): one outline can never use up the list, later areas are listed
+        all the same. The outline keeps every stored decimal (_fmt_points),
+        so it can be sent back unchanged; only the bbox is rounded."""
+        nonlocal used
+        if polys:
+            poly = area.get("polygon") or []
+            text = _fmt_points(poly)
+            full = line + " polygon " + text
+            if (len(text) <= MAX_REGION_POLY_CHARS
+                    and used + len(full) + 1 + _CAP_RESERVE <= MAX_RESULT_CHARS):
+                line = full
+            else:
+                line += (f" polygon: {len(poly)} points — "
+                         f'get_area{{"id": "{area["id"]}"}}')
+        lines.append(line)
+        used += len(line) + 1
+
     for a in list_areas():
         box = _bbox(a.get("polygon"))
         if not hits(box):
             continue
         label = (a.get("meta") or {}).get("label")
-        line = (f'terrain {a["id"]} {a.get("kind")}'
-                + (f' "{_short(label, 40)}"' if label else "")
-                + f" {_fmt_box(box)} z_order {a.get('z_order') or 0}")
-        if polys:
-            line += " polygon " + _fmt_poly(a.get("polygon"))
-        lines.append(line)
+        add(f'terrain {a["id"]} {a.get("kind")}'
+            + (f' "{_label(label, 40)}"' if label else "")
+            + f" {_fmt_box(box)} z_order {a.get('z_order') or 0}", a)
     for h in list_height_areas():
         box = _bbox(h.get("polygon"))
         if not hits(box):
             continue
         label = (h.get("meta") or {}).get("label")
-        line = (f'height {h["id"]}' + (f' "{_short(label, 40)}"' if label else "")
-                + f" {_g(h.get('height_m'))} m falloff {_g(h.get('falloff_m'))} m "
-                + _fmt_box(box))
-        if polys:
-            line += " polygon " + _fmt_poly(h.get("polygon"))
-        lines.append(line)
+        add(f'height {h["id"]}' + (f' "{_label(label, 40)}"' if label else "")
+            + f" {_g(h.get('height_m'))} m falloff {_g(h.get('falloff_m'))} m "
+            + _fmt_box(box), h)
     for loc in list_locations():
         if loc.get("pos_x") is None or loc.get("pos_z") is None:
             continue
@@ -735,6 +948,121 @@ def _map_region(step: _Step, args: Dict[str, Any]) -> str:
     if not lines:
         return "nothing in this box"
     return "\n".join(_cap_lines(lines, "use a smaller box"))
+
+
+#: Longest outline text one map_region line carries with polygons; a longer
+#: one becomes a get_area pointer, so it cannot use up the list (D11).
+MAX_REGION_POLY_CHARS = 400
+
+#: Own budget of one get_area result: the stroke line (the recipe) first,
+#: then the outline, each cut on a point boundary beyond it.
+MAX_AREA_CHARS = 12000
+#: Part of MAX_AREA_CHARS kept free for the cut line.
+_AREA_CUT_RESERVE = 80
+
+
+def _label(label: Any, limit: int) -> str:
+    """A label for a quoted head field: shortened, inner double quotes
+    replaced by single ones so the quoting stays readable."""
+    return _short(str(label).replace('"', "'"), limit)
+
+
+def _m2(value: Any) -> str:
+    """A stored coordinate (2-decimal grid) as written: 2 decimals at most,
+    trailing zeros dropped — exact where :g would round a large value."""
+    try:
+        s = f"{round(float(value), 2):.2f}".rstrip("0").rstrip(".")
+    except (TypeError, ValueError):
+        return "?"
+    return "0" if s == "-0" else s
+
+
+def _fmt_points(points: Any) -> str:
+    """A point list as JSON with every stored decimal kept."""
+    return "[" + ",".join(f"[{_m2(p[0])},{_m2(p[1])}]" for p in points or []) + "]"
+
+
+def _fit_points(prefix: str, points: Any, budget: int) -> Tuple[str, int]:
+    """``prefix`` + the point list, whole when it fits ``budget`` characters;
+    otherwise as many WHOLE points as fit, closed by ",…]" (not valid JSON,
+    so a shortened list cannot be sent back by mistake). Returns the line
+    and the number of points shown."""
+    pts = list(points or [])
+    whole = prefix + _fmt_points(pts)
+    if len(whole) <= budget:
+        return whole, len(pts)
+    parts: List[str] = []
+    size = len(prefix) + 1 + 3          # "[" … ",…]" (or "…]" when none fit)
+    for p in pts:
+        s = f"[{_m2(p[0])},{_m2(p[1])}]"
+        add = len(s) + (1 if parts else 0)
+        if size + add > budget:
+            break
+        parts.append(s)
+        size += add
+    if not parts:
+        return prefix + "[…]", 0
+    return prefix + "[" + ",".join(parts) + ",…]", len(parts)
+
+
+@_tool("get_area", False, "get_area{id}",
+       "one terrain or height area whole: its full polygon, and a stroke "
+       "area's centre line and width (own budget of 12000 characters)")
+def _get_area(step: _Step, args: Dict[str, Any]) -> str:
+    from app.models.heightfield import list_height_areas
+    from app.models.terrain import get_area
+    _only_keys(args, {"id"}, "get_area")
+    aid = _str(args, "id", required=True)
+    area = get_area(aid)
+    if area is not None:
+        meta = area.get("meta") or {}
+        label = meta.get("label")
+        out = [f'terrain {area["id"]} {area.get("kind")}'
+               + (f' "{_label(label, 80)}"' if label else "")
+               + f" z_order {area.get('z_order') or 0}"]
+    else:
+        area = next((h for h in list_height_areas() if h.get("id") == aid), None)
+        if area is None:
+            raise ToolRefusal(f"no terrain or height area {aid!r} — use map_region")
+        meta = area.get("meta") or {}
+        label = meta.get("label")
+        out = [f'height {area["id"]}' + (f' "{_label(label, 80)}"' if label else "")
+               + f" height_m {_g(area.get('height_m'))}"
+               + f" falloff_m {_g(area.get('falloff_m'))}"]
+    # The stroke is the authoritative recipe (a stroke area's polygon is
+    # derived from it), so it comes first and is budgeted first; the
+    # polygon takes what is left. Both cut on a point boundary only.
+    left = MAX_AREA_CHARS - _AREA_CUT_RESERVE - len(out[0])
+    cuts: List[str] = []
+    stroke = meta.get("stroke")
+    if isinstance(stroke, dict) and stroke.get("points"):
+        spts = stroke.get("points") or []
+        prefix = f"stroke: width_m {_g(stroke.get('width_m'))}"
+        for key in ("style", "spacing_m", "amplitude_m"):
+            if stroke.get(key) not in (None, ""):
+                value = stroke[key]
+                prefix += f" {key} {value if isinstance(value, str) else _g(value)}"
+        along = stroke.get("along")
+        if isinstance(along, list) and along:
+            # The rows of props along the line are not part of the stroke an
+            # update sends; update_terrain_area carries them over.
+            prefix += f" along: {len(along)} rows (kept on update)"
+        # The polygon line always follows, so its shortest form (no point
+        # shown) is reserved before the stroke takes the rest.
+        poly_min = len(f"polygon ({len(area.get('polygon') or [])} points): […]") + 1
+        line, shown = _fit_points(f"{prefix} points ", spts, left - 1 - poly_min)
+        out.append(line)
+        left -= len(line) + 1
+        if shown < len(spts):
+            cuts.append(f"stroke: {shown} of {len(spts)} points shown")
+    poly = area.get("polygon") or []
+    line, shown = _fit_points(f"polygon ({len(poly)} points): ", poly, left - 1)
+    out.append(line)
+    if shown < len(poly):
+        cuts.append(f"polygon: {shown} of {len(poly)} points shown")
+    if cuts:
+        out.append(f"[cut — {'; '.join(cuts)}]")
+    return "\n".join(out)
 
 
 @_tool("find_characters", False, "find_characters{query?, location?}",
@@ -771,7 +1099,10 @@ def _find_characters(step: _Step, args: Dict[str, Any]) -> str:
 
 
 @_tool("get_character", False, "get_character{name, fields?:[...]}",
-       "one character; field names unless fields are asked for; "
+       "one character; field names unless fields are asked for, asked-for "
+       "fields come whole (shared budget of 12000 characters, at most 30 "
+       "fields; soul fields as the raw text soul:<field> takes, also readable "
+       "under that spelling); "
        "fields [\"body_slots\"] = its body slots with values and allowed values")
 def _get_character(step: _Step, args: Dict[str, Any]) -> str:
     from app.models.character import (character_row_exists, get_character_config,
@@ -785,9 +1116,35 @@ def _get_character(step: _Step, args: Dict[str, Any]) -> str:
     prof = get_character_profile(name) or {}
     cfg = get_character_config(name) or {}
     if fields:
+        from app.core import soul_writer
+        from app.core.linked_characters import soul_owner
+        template = str(prof.get("template") or "human-default")
+        tfields = _template_fields(template)
+        soul_map = {k: str(f["source_file"]) for k, f in tfields.items()
+                    if f.get("source_file")}
         out = [f'"{name}"']
+        items: List[Tuple[str, Optional[str], bool]] = []
+        missing: Dict[str, str] = {}
         schema: List[str] = []
+        seen: set = set()
         for key in fields:
+            if key.startswith("soul:"):
+                # The write spelling of a soul field reads the same text
+                # (answered under the bare key, the one update_character's
+                # "soul:<key>" names).
+                bare = key[len("soul:"):]
+                if bare not in soul_map:
+                    missing[key] = (f"(no such soul field in template {template} — "
+                                    "soul fields: "
+                                    + (", ".join(sorted(soul_map)) or "none") + ")")
+                    items.append((key, None, True))
+                    continue
+                key = bare
+            if key in seen:
+                # The same field asked for twice (bare and as soul:<key>)
+                # is answered once, not charged to the budget twice.
+                continue
+            seen.add(key)
             if key == "body_slots":
                 # The schema of the package-declared slots, not the raw blob:
                 # what can be set, to what, and what is set now.
@@ -797,12 +1154,34 @@ def _get_character(step: _Step, args: Dict[str, Any]) -> str:
                           ["body slots: none — the template declares none for this "
                            "character"])
                 continue
-            src = prof if key in prof else cfg if key in cfg else None
-            if src is None:
-                out.append(f"{key}: (not set)")
+            if key in soul_map:
+                # The raw file — what update_character's soul:<key> writes —
+                # not the profile's prepared copy (that one drops the top
+                # heading and empty sections).
+                rel = soul_map[key]
+                raw = soul_writer.read_text(soul_owner(name, rel), rel)
+                raw = None if raw is None else raw.rstrip("\n")
+                items.append((key, raw or None, True))
+                continue
+            stats = (prof.get("status_effects")
+                     if isinstance(prof.get("status_effects"), dict) else {})
+            if key in tfields and _field_store(tfields[key]) == "status":
+                # A stat lives in profile.status_effects (where
+                # create/update_character write it), not under its own key.
+                src = stats if key in stats else None
             else:
-                out.append(f"{key}: {_short(json.dumps(src[key], ensure_ascii=False), 600)}")
-        text = _cut("\n".join(out))
+                src = prof if key in prof else cfg if key in cfg else None
+            if src is None and key not in tfields:
+                # Neither a template field nor a stored key: a typo, not an
+                # empty field.
+                missing[key] = (f'(no such field — describe_template{{"template": '
+                                f'{json.dumps(template, ensure_ascii=False)}}} lists them)')
+            # A stored None or "" is "nothing there" like an absent key:
+            # one spelling, "(not set)".
+            value = None if src is None else src[key]
+            items.append((key, None if value in (None, "") else _field_text(value),
+                          False))
+        text = "\n".join(out + _field_blocks(items, missing))
         if schema:
             # The body-slot schema has its own, larger budget.
             block = "\n".join(_cap_lines(schema, "too many slots",
@@ -813,12 +1192,22 @@ def _get_character(step: _Step, args: Dict[str, Any]) -> str:
     def nonempty(d: Dict[str, Any]) -> List[str]:
         return sorted(k for k, v in d.items()
                       if v not in (None, "", [], {}) and not str(k).startswith("_"))
+    # status_effects is no writable key: the overview names the template's
+    # stats that hold a value instead (read and written under their own key).
+    ov_fields = _template_fields(str(prof.get("template") or "human-default"))
+    ov_stats = (prof.get("status_effects")
+                if isinstance(prof.get("status_effects"), dict) else {})
+    stat_keys = sorted(k for k, f in ov_fields.items()
+                       if _field_store(f) == "status"
+                       and ov_stats.get(k) not in (None, "", [], {}))
+    prof_keys = sorted([k for k in nonempty(prof) if k != "status_effects"] + stat_keys)
     out = [
         f'"{name}" at {prof.get("current_location") or "nowhere"}'
         + (f' / {prof.get("current_room")}' if prof.get("current_room") else ""),
         f'home: {cfg.get("home_location") or "(none)"}'
         + (f' / {cfg.get("home_room")}' if cfg.get("home_room") else ""),
-        "profile fields: " + (", ".join(nonempty(prof)) or "(none)"),
+        _known_places_line(cfg),
+        "profile fields: " + (", ".join(prof_keys) or "(none)"),
         "config fields: " + (", ".join(nonempty(cfg)) or "(none)"),
     ]
     from app.core.world_dev_apply import _template_has_wardrobe
@@ -836,7 +1225,7 @@ def _get_character(step: _Step, args: Dict[str, Any]) -> str:
 
 
 @_tool("read_manual", False, "read_manual{section}",
-       "one manual section: " + ", ".join(MANUAL_SECTIONS))
+       "one manual section: " + ", ".join(MANUAL_SECTIONS), pinned=True)
 def _read_manual(step: _Step, args: Dict[str, Any]) -> str:
     from app.core import prompt_templates
     _only_keys(args, {"section"}, "read_manual")
@@ -909,6 +1298,12 @@ def _create_location(step: _Step, args: Dict[str, Any]) -> str:
         body["map3d"] = {**(body.get("map3d") or {}), "boundary": boundary}
     if body.get("map3d") is not None:
         _refuse_map3d_dropped(body["map3d"], body["map3d"])
+    # The rooms get their ids from the writer: the entry room is resolved
+    # against the body's rooms now and stored by id after the write.
+    entry_id, entry_name = "", None
+    if "entry_room" in body:
+        entry_id, entry_name = _resolve_entry_room(
+            body.pop("entry_room"), _entry_room_choices(body["rooms"], body.get("map3d")))
     # Names are not keys: a name the world already has is a second place.
     body["create_new"] = True
 
@@ -936,11 +1331,19 @@ def _create_location(step: _Step, args: Dict[str, Any]) -> str:
             step.attach(lid, {"op": "delete_location", "id": lid})
             if x is not None:
                 update_location_position(lid, x, z, yaw)
+            if entry_name is not None:
+                _write_entry_room_by_name(lid, entry_name, set())
+            elif entry_id:
+                from app.core.world_ops import update_location_with_extras
+                update_location_with_extras(lid, {"entry_room": entry_id})
+                if str((get_location_by_id(lid) or {}).get("entry_room") or "") != entry_id:
+                    raise RuntimeError(f"entry room {entry_id!r} was not stored")
         after = get_location_by_id(lid) or {}
         line = f'created location {lid} "{after.get("name") or name}" at {_where(after)}'
         if taken:
             line += (f'; warnings: a place called "{name}" already exists — '
                      f"this is a second one")
+        line += completeness.suffix(completeness.location_gaps(after))
         step.complete(after, line)
     return line
 
@@ -1071,11 +1474,32 @@ def _update_location(step: _Step, args: Dict[str, Any]) -> str:
             _refuse_map3d_dropped(sent_m3, body["map3d"])
         if body.get("rooms") is not None or body.get("map3d") is not None:
             # The undo cannot put characters back into a removed room.
-            users = _room_users(lid, _rooms_removed_by(cur, body.get("rooms"),
-                                                       body.get("map3d")))
+            removed = _rooms_removed_by(cur, body.get("rooms"), body.get("map3d"))
+            users = _room_users(lid, removed)
             if users:
                 raise ToolRefusal("the patch would remove a room in use — "
                                   + "; ".join(users))
+            # The writer keeps a stale entry_room id; never leave it dangling.
+            entry_now = str(cur.get("entry_room") or "")
+            gone = next((r for r in removed if str(r.get("id") or "") == entry_now), None)
+            if entry_now and gone is not None and "entry_room" not in body:
+                raise ToolRefusal(
+                    f'the patch removes the entry room "{gone.get("name") or entry_now}" '
+                    f"({entry_now}) — send entry_room too (\"\" = arrive on the ground)")
+        entry_name = None
+        if "entry_room" in body:
+            # An existing room is sent by its id; one this call adds has no id
+            # yet and is stored by name after the write, in this same step.
+            rooms_after = body["rooms"] if body.get("rooms") is not None else stored_rooms
+            m3_after = body["map3d"] if body.get("map3d") is not None else cur.get("map3d")
+            entry_id, entry_name = _resolve_entry_room(
+                body["entry_room"],
+                _entry_room_choices(rooms_after, m3_after, stored_rooms))
+            if entry_name is None:
+                body["entry_room"] = entry_id
+            else:
+                body.pop("entry_room")
+        old_ids = {str(r.get("id") or "") for r in stored_rooms}
         before = copy.deepcopy(cur)
         # Until the exact diff is known the inverse restores the whole record,
         # so a crash between the write and the attach is still undone.
@@ -1090,12 +1514,20 @@ def _update_location(step: _Step, args: Dict[str, Any]) -> str:
 
         with step.writing(reconcile):
             update_location_with_extras(lid, body)
+            if entry_name is not None:
+                _write_entry_room_by_name(lid, entry_name, old_ids)
+            elif "entry_room" in body:
+                stored_entry = str((get_location_by_id(lid) or {}).get("entry_room") or "")
+                if stored_entry != body["entry_room"]:
+                    raise RuntimeError(f"entry room {body['entry_room']!r} was not "
+                                       f"stored (got {stored_entry!r})")
         after = get_location_by_id(lid) or {}
         b, w = wu.diff_keys(before, after)
         step.attach(lid, {"op": "restore_location", "id": lid, "before": b},
                     before=b)
         line = (f'updated location {lid} "{after.get("name") or ""}": '
-                + (", ".join(sorted(b)) if b else "no change"))
+                + (", ".join(sorted(b)) if b else "no change")
+                + completeness.location_suffix(step.ctx.run_id, after))
         step.complete(w, line)
     return line
 
@@ -1126,7 +1558,10 @@ def _place_location(step: _Step, args: Dict[str, Any]) -> str:
         with step.writing(reconcile):
             update_location_position(lid, x, z, yaw)
         after = get_location_by_id(lid) or {}
-        line = f'placed location {lid} "{after.get("name") or ""}" at {_where(after)}'
+        # The journal row is begun above, so this call's position write is
+        # already part of the location's scope.
+        line = (f'placed location {lid} "{after.get("name") or ""}" at {_where(after)}'
+                + completeness.location_suffix(step.ctx.run_id, after))
         step.complete(wu.position_of(after), line)
     return line
 
@@ -1265,7 +1700,15 @@ def _update_terrain_area(step: _Step, args: Dict[str, Any]) -> str:
     if new_geom:
         row["polygon"] = norm["polygon"]
         if (norm.get("meta") or {}).get("stroke"):
-            meta["stroke"] = norm["meta"]["stroke"]
+            new_stroke = norm["meta"]["stroke"]
+            old_stroke = meta.get("stroke")
+            # The rows of props along the line (meta.stroke.along) are not
+            # a key of the tool's stroke, so a reshaped stroke keeps them.
+            if (isinstance(old_stroke, dict) and old_stroke.get("along")
+                    and "along" not in new_stroke):
+                new_stroke = {**new_stroke,
+                              "along": copy.deepcopy(old_stroke["along"])}
+            meta["stroke"] = new_stroke
         else:
             meta.pop("stroke", None)
     if label is not None:
@@ -1398,18 +1841,22 @@ def _update_height_area(step: _Step, args: Dict[str, Any]) -> str:
 
 #: Keys of a create_character draft besides the template fields.
 _CHAR_DRAFT_SPECIAL = {"character_name", "template", "outfits", "body_slots",
-                       "home_location", "home_room", "daily_schedule"}
+                       "home_location", "home_room", "daily_schedule", "wear",
+                       "known_places"}
 #: update_character patch keys for home and daily schedule -> the draft key
 #: world_dev_apply._apply_home_and_schedule reads.
 #: Exactly one spelling each (the tool signature's); the draft spellings
 #: home_location / daily_schedule are refused in a patch, so two spellings
 #: of one value can never silently override each other.
 _HOME_PATCH_KEYS = {"home": "home_location", "home_room": "home_room",
-                    "schedule": "daily_schedule"}
+                    "schedule": "daily_schedule", "known_places": "known_places"}
 #: Draft keys of the home group -> the patch / argument key to use instead.
 _HOME_DRAFT_SPELLINGS = {"home_location": "home", "daily_schedule": "schedule"}
-_OUTFIT_KEYS = {"name", "outfit", "pieces", "locations", "activities",
-                "excluded_locations"}
+_OUTFIT_KEYS = {"name", "outfit", "pieces"}
+#: Outfit keys of the old outfit-type model: no reader exists any more (an
+#: outfit is chosen by the wardrobe and outfit compliance, never by place or
+#: activity) — refused with their own text, never dropped in silence.
+_DEAD_OUTFIT_KEYS = ("locations", "activities", "excluded_locations")
 _PIECE_KEYS = {"item_id", "slots", "name", "prompt_fragment", "description",
                "covers", "partially_covers"}
 
@@ -1460,6 +1907,72 @@ def _template_fields(template: str) -> Dict[str, Dict[str, Any]]:
     return out
 
 
+def _field_store(field: Dict[str, Any]) -> str:
+    """Where a template field's value lives: "soul" (a soul section file),
+    "config", "status" (a stat inside profile.status_effects) or
+    "profile"."""
+    if field.get("source_file"):
+        return "soul"
+    store = str(field.get("store") or "")
+    if store == "config":
+        return "config"
+    if store == "status_effects":
+        return "status"
+    return "profile"
+
+
+def _settable_fields(template: str) -> Dict[str, Dict[str, Any]]:
+    """Every field of the template the free tools may set: all except
+    readonly ones and the identity keys (character_name, template); soul
+    fields included."""
+    return {k: f for k, f in _template_fields(template).items()
+            if not f.get("readonly") and k not in ("character_name", "template")}
+
+
+def _check_stat_value(key: str, value: Any) -> None:
+    """A stat is a whole number 0-100 (the range every stat reader clamps
+    to)."""
+    # Range first: the whole-number test converts, which a huge integer
+    # (10**400) would overflow.
+    if not _is_num(value) or not 0 <= value <= 100 or float(value) != int(value):
+        raise ToolRefusal(f"'{key}' must be a whole number 0-100")
+
+
+def _write_char_fields(name: str, prof: Dict[str, Any], cfg: Dict[str, Any],
+                       stats: Dict[str, Any]) -> None:
+    """One read-modify-write of a character's profile and config under the
+    profile lock: profile keys set, ``status_effects`` merged with
+    ``stats`` (whole numbers), config keys set — raw JSON values, numbers
+    stay numbers. A save that reports False is a ValueError."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import (get_character_config, get_character_profile,
+                                      save_character_config, save_character_profile)
+    if not (prof or cfg or stats):
+        return
+    with keyed_lock("character_profile", name):
+        if prof or stats:
+            profile = copy.deepcopy(get_character_profile(name) or {})
+            profile.update(copy.deepcopy(prof))
+            if stats:
+                cur = profile.get("status_effects")
+                merged = dict(cur) if isinstance(cur, dict) else {}
+                merged.update({k: int(v) for k, v in stats.items()})
+                profile["status_effects"] = merged
+            # Soul values are injected on read; they never go back through a
+            # profile save (the MD file is the source).
+            template = str(profile.get("template") or "")
+            for k, f in _template_fields(template).items():
+                if f.get("source_file"):
+                    profile.pop(k, None)
+            if not save_character_profile(name, profile):
+                raise ValueError(f"the profile of {name} was not stored")
+        if cfg:
+            config = copy.deepcopy(get_character_config(name) or {})
+            config.update(copy.deepcopy(cfg))
+            if not save_character_config(name, config):
+                raise ValueError(f"the config of {name} was not stored")
+
+
 def _same_option(value: Any, option: Any) -> bool:
     """A value matches a select option only with the option's own JSON type
     (the number 2 for importance, never the string "2"; never a bool)."""
@@ -1470,13 +1983,50 @@ def _same_option(value: Any, option: Any) -> bool:
     return False
 
 
+def _expression_set_keys() -> List[str]:
+    from app.core.expression_sets import sets_payload
+    return sorted(sets_payload())
+
+
+def _animation_set_keys() -> List[str]:
+    from app.core.animation_sets import available_sets
+    return list(available_sets())
+
+
+# A select field's ``source`` -> the values the editor offers for it.
+_SELECT_SOURCES: Dict[str, Callable[[], List[str]]] = {
+    "expression_sets": _expression_set_keys,
+    "animation_sets": _animation_set_keys,
+}
+
+
+def _select_values(field: Dict[str, Any]) -> Optional[List[Any]]:
+    """The values a select field takes: its fixed option values (no
+    ``source``), the resolved source list (``source`` set), None when it
+    has neither or names a source this tool cannot resolve."""
+    source = field.get("source")
+    if source:
+        resolve = _SELECT_SOURCES.get(str(source))
+        return list(resolve()) if resolve else None
+    options = [o["value"] for o in field.get("options") or []
+               if isinstance(o, dict) and "value" in o]
+    return options or None
+
+
 def _check_field_value(key: str, field: Dict[str, Any], value: Any) -> None:
     """The template field type decides what a value may be:
     text/textarea -> string; number -> number; select with fixed options (no
     ``source``, no ``allow_custom``) -> one of the option values in the
-    option's JSON type, any other select -> string; season_day -> a
-    "<season>:<day>" of this world's calendar ("" clears it). A field type
-    this tool does not know is refused rather than stored unchecked."""
+    option's JSON type; fixed options + ``allow_custom`` -> any string; a
+    select with a ``source`` -> "" (derived automatically) or one of the
+    source's values; a select with neither -> refused (its values come from
+    live backends); season_day -> a "<season>:<day>" of this world's
+    calendar ("" clears it). A field type this tool does not know is refused
+    rather than stored unchecked. A stat (store status_effects) is a whole
+    number 0-100."""
+    if _field_store(field) == "status":
+        _check_stat_value(key, value)
+        return
     kind = str(field.get("type") or "")
     if kind in ("text", "textarea"):
         if not isinstance(value, str):
@@ -1487,13 +2037,21 @@ def _check_field_value(key: str, field: Dict[str, Any], value: Any) -> None:
             raise ToolRefusal(f"'{key}' must be a number")
         return
     if kind == "select":
-        options = [o["value"] for o in field.get("options") or []
-                   if isinstance(o, dict) and "value" in o]
-        if options and not field.get("source") and not field.get("allow_custom"):
-            if not any(_same_option(value, o) for o in options):
+        values = _select_values(field)
+        if values is None:
+            raise ToolRefusal(f"'{key}' cannot be checked here — set it in the "
+                              "character editor")
+        if field.get("source"):
+            if not isinstance(value, str) or (value and value not in values):
+                raise ToolRefusal(f"'{key}' must be one of: "
+                                  + ", ".join(json.dumps(v, ensure_ascii=False)
+                                              for v in [""] + list(values)))
+            return
+        if not field.get("allow_custom"):
+            if not any(_same_option(value, o) for o in values):
                 raise ToolRefusal(f"'{key}' must be one of: "
                                   + ", ".join(json.dumps(o, ensure_ascii=False)
-                                              for o in options))
+                                              for o in values))
             return
         if not isinstance(value, str):
             raise ToolRefusal(f"'{key}' must be a string")
@@ -1516,22 +2074,41 @@ def _check_str_list(value: Any, what: str) -> None:
         raise ToolRefusal(f"'{what}' must be a list of strings")
 
 
-def _check_outfits(outfits: Any) -> None:
+def _storable_piece_slots(profile: Dict[str, Any]) -> List[str]:
+    """The clothing slots a new outfit piece of this (would-be) profile may
+    name: the character's slots (``body_slots.piece_slots_for_profile``: the
+    species', else the core ones) that the catalog can store — it keeps only
+    core slots (``inventory._clean_piece_slots``), so a species slot outside
+    them could never be stored. One list for describe_template and
+    _check_outfits."""
+    from app.core.body_slots import piece_slots_for_profile
+    from app.models.inventory import VALID_PIECE_SLOTS
+    return [s for s in piece_slots_for_profile(profile) if s in VALID_PIECE_SLOTS]
+
+
+_NO_STORABLE_SLOTS = ("this template has no clothing slots the catalog can store "
+                      "— give existing pieces by item_id only")
+
+
+def _check_outfits(outfits: Any, allowed: Sequence[str]) -> None:
     """Shape of the draft's outfits; a piece is either a NEW piece {slots,
-    name, ...} or an existing catalog piece {item_id}."""
-    from app.models.inventory import VALID_PIECE_SLOTS, get_item
+    name, ...} or an existing catalog piece {item_id}. A new piece's slots
+    come from ``allowed`` (``_storable_piece_slots`` of the character)."""
+    from app.models.inventory import get_item
     if not isinstance(outfits, list):
         raise ToolRefusal("'outfits' must be a list of outfit objects")
     for i, outfit in enumerate(outfits):
         where = f"outfits[{i}]"
         if not isinstance(outfit, dict):
             raise ToolRefusal(f"{where} must be an object")
+        for key in _DEAD_OUTFIT_KEYS:
+            if key in outfit:
+                raise ToolRefusal(f"{where}: outfits are not bound to places or "
+                                  f"activities — leave out '{key}'")
         _only_keys(outfit, _OUTFIT_KEYS, where)
         try:
             _str(outfit, "name", required=True)
             _str(outfit, "outfit")
-            for key in ("locations", "activities", "excluded_locations"):
-                _check_str_list(outfit.get(key), key)
         except ToolRefusal as exc:
             raise ToolRefusal(f"{where}: {exc}")
         pieces = outfit.get("pieces")
@@ -1559,13 +2136,118 @@ def _check_outfits(outfits: Any) -> None:
                     _str(piece, key)
                 _check_str_list(piece.get("slots"), "slots")
                 slots = [s.strip().lower() for s in piece.get("slots") or []]
-                if not slots or any(s not in VALID_PIECE_SLOTS for s in slots):
+                if not allowed:
+                    raise ToolRefusal(_NO_STORABLE_SLOTS)
+                if not slots or any(s not in allowed for s in slots):
                     raise ToolRefusal("'slots' must name at least one of "
-                                      + ", ".join(VALID_PIECE_SLOTS))
+                                      + ", ".join(allowed))
                 for key in ("covers", "partially_covers"):
                     _check_str_list(piece.get(key), key)
             except ToolRefusal as exc:
                 raise ToolRefusal(f"{pw}: {exc}")
+
+
+def _starting_outfit_name(wear: Any, outfits: Any) -> Optional[str]:
+    """The stored name of the outfit a new character starts in: ``wear``
+    names one of ``outfits`` (case-insensitive); without ``wear`` the
+    first outfit; None without outfits. Refused: a ``wear`` that is no
+    string, names no outfit, or comes without outfits."""
+    names = [str(o.get("name") or "").strip() for o in outfits or []
+             if isinstance(o, dict)]
+    if wear is None:
+        return names[0] if names else None
+    if not isinstance(wear, str) or not wear.strip():
+        raise ToolRefusal("'wear' must be the name of one of data.outfits")
+    if not names:
+        raise ToolRefusal("'wear' names an outfit of data.outfits — there are none")
+    for n in names:
+        if n.casefold() == wear.strip().casefold():
+            return n
+    raise ToolRefusal(f"'wear' {wear!r} is none of the outfits: "
+                      + ", ".join(json.dumps(n, ensure_ascii=False) for n in names))
+
+
+def _wear_starting_outfit(name: str, outfit_name: str) -> Tuple[str, List[str], List[str]]:
+    """Dress a just-created character in its outfit set ``outfit_name``
+    (inside the create step: ``delete_character`` takes the equip and its
+    outfit-history rows back). Under the profile lock, like the wardrobe
+    route; ``apply_equipped_pieces`` takes no places lock, so the lock
+    order holds. Its answer is not trusted — it reports the pieces applied
+    even when the profile save returned False — so the worn state is read
+    again: a piece it applied that is not worn is a ValueError (the render
+    timers its outfit-change notice armed are disarmed first). Returns
+    (outfit name, worn slots in the character's slot order, warnings for
+    every piece of the set that is not worn — the ones the apply skipped,
+    and the ones it never saw because another piece of the set has the same
+    first slot (``outfit_set_pieces_by_slot`` keeps one piece per slot))."""
+    from app.core.body_slots import piece_slots_for_profile
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_outfits, get_character_profile
+    from app.models.inventory import (apply_equipped_pieces, get_equipped_pieces,
+                                      get_item, outfit_set_pieces_by_slot)
+    with keyed_lock("character_profile", name):
+        target = next((o for o in get_character_outfits(name)
+                       if str(o.get("name") or "").strip() == outfit_name), None)
+        if target is None:
+            raise ValueError(f"the starting outfit {outfit_name!r} was not stored")
+        result = apply_equipped_pieces(
+            name, pieces=outfit_set_pieces_by_slot(target),
+            remove_slots=list(target.get("remove_slots") or []), source="world_dev")
+        worn = get_equipped_pieces(name)
+        order = piece_slots_for_profile(get_character_profile(name) or {})
+    if any(worn.get(a.get("slot")) != a.get("item_id")
+           for a in result.get("applied") or []):
+        # apply_equipped_pieces notified the outfit change although nothing
+        # was stored: the render timers it armed would render a character
+        # that wears nothing. Disarm them (the history row it wrote is the
+        # create step's, taken back by its delete_character inverse).
+        from app.core.model_refs import cancel_character_timers
+        cancel_character_timers(name)
+        raise ValueError("the starting outfit was not stored")
+    slots = [s for s in order if s in worn] + sorted(s for s in worn if s not in order)
+    warnings = [f"starting outfit {outfit_name}: piece {s.get('item_id')} not worn "
+                f"({s.get('reason')})" for s in result.get("skipped") or []]
+    reported = {str(s.get("item_id")) for s in result.get("skipped") or []}
+    worn_ids = set(worn.values())
+    for pid in target.get("pieces") or []:
+        if pid in worn_ids or pid in reported:
+            continue
+        reported.add(pid)
+        has_slot = bool(((get_item(pid) or {}).get("outfit_piece") or {}).get("slots"))
+        warnings.append(f"starting outfit {outfit_name}: piece {pid} not worn ("
+                        + ("another piece of the outfit takes its slot" if has_slot
+                           else "it declares no slot") + ")")
+    return outfit_name, slots, warnings
+
+
+def _place_compliance(name: str) -> List[str]:
+    """The one outfit-compliance run of a just-created character, AFTER it
+    is dressed (``apply_character(place_compliance=False)`` skipped the run
+    on placement, which judged the character before its starting outfit
+    was on and left a wrong "missing" notification behind). Only for a
+    character that stands somewhere. The auto-filled slots are the
+    character's own and go with the create step's ``delete_character``
+    inverse. It writes NO violation notice (``notify=False``): a notice can
+    evict the oldest row of the bounded notification window, which no
+    inverse brings back — a remaining violation comes back as a warning for
+    the tool line instead."""
+    from app.models.character import get_character_current_location
+    if not get_character_current_location(name):
+        return []
+    from app.core.outfit_compliance import apply_outfit_compliance
+    try:
+        res = apply_outfit_compliance(name, notify=False)
+    except Exception as e:  # noqa: BLE001 — the character is created
+        logger.warning("WorldDev: outfit compliance for %s failed: %s", name, e)
+        return []
+    slots = sorted({str(v.get("slot")) for v in res.get("violations") or []
+                    if v.get("reason") in ("no_inventory_piece",
+                                           "forced_piece_not_equipped",
+                                           "outfit_not_worn")})
+    if not slots:
+        return []
+    return [f"outfit does not fit the {res.get('decency') or 'current'} place — "
+            f"missing: {', '.join(slots)}"]
 
 
 def _check_outfit_refs_reveal(outfits: Any) -> None:
@@ -1693,28 +2375,55 @@ def _body_schema(prof: Dict[str, Any]) -> List[str]:
 
 def _check_home_values(data: Dict[str, Any]) -> None:
     """home_location / home_room strings, daily_schedule a list of slot
-    objects ({hour, location?, role?, sleep?})."""
-    _str(data, "home_location")
-    _str(data, "home_room")
+    objects ({hour, location?, role?, sleep?}). A slot the apply would skip
+    with a warning is refused here instead (gap 24): an hour that is no whole
+    number 0-23, a slot with neither place, role nor sleep, a sleep slot that
+    also names a place or role, and an hour given twice. A whitespace-only
+    location is refused with its own message (it names no place), and so
+    are a blank home / home_room and an empty schedule list: each would be
+    accepted and do nothing, so the model would get no signal."""
+    for key, shown in (("home_location", "home"), ("home_room", "home_room")):
+        if _str(data, key) == "":
+            raise ToolRefusal(f"'{shown}' must not be empty — name a place or "
+                              "leave the key out")
     slots = data.get("daily_schedule")
     if slots is None:
         return
     if not isinstance(slots, list):
         raise ToolRefusal("'schedule' must be a list of {hour, location?, role?, "
                           "sleep?} objects")
+    if not slots:
+        raise ToolRefusal("'schedule' must not be empty — leave the key out")
+    seen: Dict[int, int] = {}
     for i, slot in enumerate(slots):
         if not isinstance(slot, dict):
             raise ToolRefusal(f"schedule[{i}] must be an object")
         _only_keys(slot, {"hour", "location", "role", "sleep"}, f"schedule[{i}]")
+        raw_hour = slot.get("hour")
+        if not (_is_num(raw_hour) and raw_hour == int(raw_hour)
+                and 0 <= int(raw_hour) <= 23):
+            raise ToolRefusal(f"schedule[{i}]: 'hour' must be a whole number 0-23")
+        hour = int(raw_hour)
         try:
-            hour = _num(slot, "hour", required=True)
-            if hour != int(hour):
-                raise ToolRefusal("'hour' must be a whole number")
-            _str(slot, "location")
-            _str(slot, "role")
-            _bool(slot, "sleep")
+            location = _str(slot, "location")
+            role = _str(slot, "role")
+            sleep = _bool(slot, "sleep")
         except ToolRefusal as exc:
             raise ToolRefusal(f"schedule[{i}]: {exc}")
+        if isinstance(slot.get("location"), str) and location == "":
+            raise ToolRefusal(f"schedule[{i}]: 'location' is blank — name a place "
+                              "or leave the key out")
+        if sleep:
+            if location or role:
+                raise ToolRefusal(f"schedule[{i}]: a sleep slot takes no location "
+                                  "or role")
+        elif not location and not role:
+            raise ToolRefusal(f'schedule[{i}] needs a location, a role or '
+                              '"sleep": true')
+        if hour in seen:
+            raise ToolRefusal(f"schedule[{i}] repeats hour {hour} of "
+                              f"schedule[{seen[hour]}]")
+        seen[hour] = i
 
 
 def _check_home_targets(data: Dict[str, Any], current_home: Any = None) -> None:
@@ -1738,21 +2447,269 @@ def _check_home_targets(data: Dict[str, Any], current_home: Any = None) -> None:
         raise ToolRefusal(f"room {data['home_room']!r} is not a room of "
                           f"{home.get('name')} — rooms: " + (", ".join(rooms) or "none"))
     for i, slot in enumerate(data.get("daily_schedule") or []):
-        if slot.get("location") and _resolve_world_location(slot["location"]) is None:
+        place = slot.get("location")
+        if isinstance(place, str) and place.strip() \
+                and _resolve_world_location(place) is None:
             raise ToolRefusal(f"schedule[{i}]: {slot['location']!r} is no place of "
                               "this world — use find_locations")
 
 
+def _check_known_places(value: Any) -> List[str]:
+    """known_places: a non-empty list of place ids or exact names, each a
+    place of this world. Returns the location ids, deduplicated, in the order
+    sent."""
+    from app.core.world_dev_apply import _resolve_world_location
+    if not isinstance(value, list):
+        raise ToolRefusal("'known_places' must be a list of place ids or names")
+    if not value:
+        raise ToolRefusal("'known_places' must not be empty — known places are only "
+                          "added here, never removed")
+    ids: List[str] = []
+    for i, raw in enumerate(value):
+        if not isinstance(raw, str) or not raw.strip():
+            raise ToolRefusal(f"known_places[{i}] must be a place id or name (a string)")
+        loc = _resolve_world_location(raw)
+        if loc is None:
+            raise ToolRefusal(f"known_places[{i}]: {raw!r} is no place of this world "
+                              "— use find_locations")
+        if str(loc["id"]) not in ids:
+            ids.append(str(loc["id"]))
+    return ids
+
+
+def _add_known_places(name: str, ids: List[str]) -> Tuple[List[str], List[str]]:
+    """Add ids to the character's known places (add-only, stored order kept,
+    the new ones appended in the order given) — the tool's own locked
+    read-modify-write: models.character.add_known_location is unlocked and
+    ignores the save result. A failed save, or an id missing when read back,
+    is a ValueError. Returns the stored list as read back and the ids this
+    call added (those not known before, in the order given)."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import (get_character_config, get_known_locations,
+                                      save_character_config)
+    with keyed_lock("character_profile", name):
+        cfg = copy.deepcopy(get_character_config(name) or {})
+        existing = cfg.get("known_locations")
+        known = [str(v) for v in existing if v] if isinstance(existing, list) else []
+        missing = [i for i in ids if i not in known]
+        if missing:
+            # Appended to the stored list AS IT IS (membership on the str
+            # view): the undo removes exactly the added ids, so a normalised
+            # copy would change entries the journal does not record.
+            cfg["known_locations"] = (list(existing) if isinstance(existing, list)
+                                      else []) + missing
+            if not save_character_config(name, cfg):
+                raise ValueError(f"the known places of {name} were not stored")
+        stored = get_known_locations(name)
+    if any(i not in stored for i in ids):
+        raise ValueError(f"the known places of {name} were not stored")
+    return stored, missing
+
+
+def _place_names(ids: List[str], cap: int = 8) -> str:
+    """Place names for a result line (the id of a place without a name), at
+    most cap of them."""
+    from app.models.world import get_location_by_id
+    names = [str((get_location_by_id(loc_id) or {}).get("name") or loc_id)
+             for loc_id in ids[:cap]]
+    return ", ".join(names) + (" …" if len(ids) > cap else "")
+
+
+def _known_places_line(cfg: Dict[str, Any]) -> str:
+    """The get_character overview line of the known places."""
+    known = cfg.get("known_locations")
+    ids = [str(v) for v in known if v] if isinstance(known, list) else []
+    return (f"known places: {len(ids)}" + (f" ({_place_names(ids)})" if ids else ""))
+
+
+#: Budget of describe_template (a whole template schema is longer than an
+#: ordinary read result; it is read once before creating).
+MAX_TEMPLATE_SCHEMA_CHARS = 8000
+
+
+def _unknown_fields_text(keys: List[str], template: str) -> str:
+    """The refusal of keys no settable field of the template has; it points
+    to describe_template."""
+    names = ", ".join(f"'{k}'" for k in keys)
+    return (f"unknown character field{'s' if len(keys) > 1 else ''} {names} — "
+            f'describe_template{{"template": {json.dumps(template, ensure_ascii=False)}}} '
+            "lists the fields")
+
+
+def _field_takes(field: Dict[str, Any]) -> str:
+    """What a template field takes, in the words describe_template uses —
+    the same rules _check_field_value enforces."""
+    store = _field_store(field)
+    if store == "status":
+        return "whole number 0-100"
+    if store == "soul":
+        return "soul text"
+    kind = str(field.get("type") or "")
+    if kind in ("text", "textarea"):
+        return "text"
+    if kind == "number":
+        return "number"
+    if kind == "season_day":
+        return '"<season>:<day>"'
+    if kind == "select":
+        values = _select_values(field)
+        if values is None:
+            return "editor only"
+        quoted = [json.dumps(v, ensure_ascii=False) for v in values]
+        if field.get("source"):
+            return "one of " + " | ".join([json.dumps("")] + quoted)
+        if field.get("allow_custom"):
+            return "one of " + " | ".join(quoted) + " or another string"
+        return "one of " + " | ".join(quoted)
+    return "editor only"
+
+
+#: Longest field hint describe_template shows (its first sentence, cut).
+MAX_FIELD_HINT_CHARS = 90
+
+#: A first sentence shorter than this (a bare range such as "0-100%.") says
+#: nothing on its own, so the hint runs on to the next sentence end.
+MIN_FIELD_HINT_SENTENCE = 12
+
+#: Words whose trailing dot does not end a sentence.
+_HINT_ABBREVIATIONS = ("e.g.", "i.e.", "etc.", "vs.", "approx.")
+
+
+def _hint_sentence_end(hint: str, start: int) -> int:
+    """Index just past the first real sentence end in hint at or after start
+    — a ". " that is not an abbreviation's dot and leaves no parenthesis or
+    double quote open; len(hint) when there is none."""
+    pos = hint.find(". ", start)
+    while pos >= 0:
+        head = hint[:pos + 1]
+        word = head.rsplit(" ", 1)[-1].lstrip("(\"'").lower()
+        if (word not in _HINT_ABBREVIATIONS
+                and head.count("(") <= head.count(")")
+                and head.count('"') % 2 == 0):
+            return pos + 1
+        pos = hint.find(". ", pos + 1)
+    return len(hint)
+
+
+def _field_hint(field: Dict[str, Any]) -> str:
+    """The first sentence of a field's editor hint (run on to the second
+    when the first is shorter than MIN_FIELD_HINT_SENTENCE), at most
+    MAX_FIELD_HINT_CHARS; "" without one."""
+    hint = " ".join(str(field.get("hint") or "").split())
+    if not hint:
+        return ""
+    end = _hint_sentence_end(hint, 0)
+    if end < MIN_FIELD_HINT_SENTENCE:
+        end = _hint_sentence_end(hint, end)
+    hint = hint[:end]
+    if len(hint) > MAX_FIELD_HINT_CHARS:
+        hint = hint[:MAX_FIELD_HINT_CHARS - 1].rstrip() + "…"
+    return hint
+
+
+def _visible_when_note(field: Dict[str, Any]) -> str:
+    """" (only when <field>=<v1|v2>)" for a field the editor shows only under
+    a condition; "" without one."""
+    cond = field.get("visible_when")
+    if not isinstance(cond, dict) or not cond:
+        return ""
+    if cond.get("field"):
+        values = "|".join(str(v) for v in cond.get("values") or [])
+        return f" (only when {cond['field']}={values})"
+    if cond.get("feature"):
+        return f" (only when the template has the feature {cond['feature']})"
+    return ""
+
+
+@_tool("describe_template", False, "describe_template{template?, gender?}",
+       "the fields a character template takes (key, where it is stored, allowed "
+       "values, default) and its body slots for a gender — read it before "
+       "create_character", pinned=True)
+def _describe_template(step: _Step, args: Dict[str, Any]) -> str:
+    _only_keys(args, {"template", "gender"}, "describe_template")
+    template = _str(args, "template") or "human-roleplay"
+    gender = _str(args, "gender")
+    templates = character_templates()
+    offered = {t["name"]: t for t in templates}
+    if template not in offered:
+        raise ToolRefusal(f"template {template!r} cannot be created here — "
+                          "templates: " + _templates_line(templates))
+    fields = _template_fields(template)
+    if gender is not None:
+        if "gender" not in fields:
+            raise ToolRefusal(f"template {template!r} has no gender field")
+        _check_field_value("gender", fields["gender"], gender)
+    info = offered[template]
+    head = (f"template {template} ({info['label']}) — "
+            f"{'outfits' if info['outfits'] else 'no outfits'}; keys work in "
+            "create_character data and in update_character patch (soul fields "
+            'there as "soul:<key>")')
+    # The body block comes right after the header: it is short, and a
+    # budget cut takes the field entries from the end, never the slots.
+    would_be: Dict[str, Any] = {"template": template}
+    if gender is not None:
+        would_be["gender"] = gender
+    body = _body_schema(would_be)
+    if not body:
+        top = [head, "body slots: none"]
+    else:
+        top = [head, f"body slots for gender={gender}:" if gender is not None else
+               "body slots (gender not given — slots that depend on it are left out):",
+               *body]
+    if info["outfits"]:
+        storable = _storable_piece_slots(would_be)
+        top.append("outfit slots: " + (", ".join(storable) if storable
+                                       else "none the catalog can store "
+                                            "(existing pieces by item_id only)"))
+    top.append("fields:")
+    # One entry per field: its line, plus the hint indented below it, so a
+    # cut never separates the two.
+    lines: List[str] = []
+    for key, field in _settable_fields(template).items():
+        store = _field_store(field)
+        line = f"- {key} [{store}]: {_field_takes(field)}"
+        default = field.get("default")
+        if store != "soul" and default not in (None, "", [], {}):
+            shown = json.dumps(default, ensure_ascii=False)
+            if len(shown) < 60:
+                line += f" — default {shown}"
+        line += _visible_when_note(field)
+        hint = _field_hint(field)
+        lines.append(line + (f"\n    {hint}" if hint else ""))
+    shown = "\n".join(top)
+    return "\n".join([shown] + _cap_lines(
+        lines, "the rest is cut — a key not listed is still checked when it is set",
+        budget=MAX_TEMPLATE_SCHEMA_CHARS, used=len(shown) + 1, max_lines=len(lines)))
+
+
+def _refuse_foreign_sweep_rows(name: str) -> None:
+    """The undo of a create is delete_character, which sweeps every row
+    under the name (notifications titled with it, rows of a character_name
+    column, ...). Rows that already exist under a name nobody holds are not
+    this create's: the undo would delete them, so the create is refused up
+    front. The row list is the one the cross-turn delete snapshots
+    (world_dev_undo.character_rows), so both read the same sweep."""
+    rows = wu.character_rows(name)
+    if rows:
+        counts = ", ".join(f"{tbl}: {len(r)}" for tbl, r in sorted(rows.items()))
+        raise ToolRefusal(f"rows under the name {name!r} already exist without a "
+                          f"character ({counts}) — undoing this create would delete "
+                          "them; choose another name")
+
+
 @_tool("create_character", True,
-       "create_character{data, home?, home_room?, schedule?:[{hour, location?, role?, sleep?}]}",
-       "new character (character schema fields + outfits); home = a place id or name")
+       "create_character{data, home?, home_room?, schedule?:[{hour, location?, role?, sleep?}], "
+       "known_places?:[place]}",
+       "new character (character schema fields + outfits); home = a place id or name; "
+       "known_places = further places it may travel to")
 def _create_character(step: _Step, args: Dict[str, Any]) -> str:
     from app.core.character_name import validate_character_name
     from app.core.world_dev_apply import (_get_generable_fields,
                                           _template_has_wardrobe, apply_character)
     from app.models.character import character_row_exists
     from app.models.character_template import get_template
-    _only_keys(args, {"data", "home", "home_room", "schedule"}, "create_character")
+    _only_keys(args, {"data", "home", "home_room", "schedule", "known_places"},
+               "create_character")
     data = args.get("data")
     if not isinstance(data, dict):
         raise ToolRefusal("'data' must be an object with the character fields")
@@ -1760,7 +2717,7 @@ def _create_character(step: _Step, args: Dict[str, Any]) -> str:
     if "name" in draft and "character_name" not in draft:
         draft["character_name"] = draft.pop("name")
     for arg, key in (("home", "home_location"), ("home_room", "home_room"),
-                     ("schedule", "daily_schedule")):
+                     ("schedule", "daily_schedule"), ("known_places", "known_places")):
         if args.get(arg) is not None:
             if draft.get(key) is not None:
                 # Two spellings of one value: refuse instead of letting one
@@ -1786,16 +2743,26 @@ def _create_character(step: _Step, args: Dict[str, Any]) -> str:
     if draft.get("outfits") and not _template_has_wardrobe(template):
         _refuse_outfits(template, templates)
     fields = _template_fields(template)
-    profile_keys, config_keys = _get_generable_fields(template)
-    soul_keys = {k for k, f in fields.items() if f.get("source_file")}
-    allowed = (_CHAR_DRAFT_SPECIAL | profile_keys | config_keys | soul_keys)
-    _only_keys(draft, allowed, "character")
+    settable = _settable_fields(template)
+    unknown = sorted(k for k in draft if k not in _CHAR_DRAFT_SPECIAL and k not in settable)
+    if unknown:
+        raise ToolRefusal(_unknown_fields_text(unknown, template))
     for key, value in draft.items():
         if key in fields and key not in _CHAR_DRAFT_SPECIAL:
             _check_field_value(key, fields[key], value)
     if draft.get("outfits") is not None:
-        _check_outfits(draft["outfits"])
+        _check_outfits(draft["outfits"], _storable_piece_slots({"template": template}))
         _check_outfit_refs_reveal(draft["outfits"])
+        seen_outfits: set = set()
+        for i, outfit in enumerate(draft["outfits"]):
+            key_name = str(outfit.get("name") or "").strip().casefold()
+            if key_name in seen_outfits:
+                raise ToolRefusal(f"outfits[{i}]: the name {outfit.get('name')!r} "
+                                  "is given twice")
+            seen_outfits.add(key_name)
+    # The starting outfit (D6): one of data.outfits by name, default the
+    # first; worn right after the apply, inside the create step.
+    wear_name = _starting_outfit_name(draft.pop("wear", None), draft.get("outfits"))
     if draft.get("body_slots") is not None:
         # Checked against the profile the character will have (template,
         # gender, ... of the draft): an invalid slot, attribute or value is
@@ -1805,18 +2772,43 @@ def _create_character(step: _Step, args: Dict[str, Any]) -> str:
         draft["body_slots"] = _check_body_slots(draft["body_slots"], would_be, template)
     _check_home_values(draft)
     _check_home_targets(draft)
+    # Added by this tool after the apply (the apply knows only home and
+    # schedule places), inside the create step.
+    known_ids = (_check_known_places(draft.pop("known_places"))
+                 if "known_places" in draft else [])
     # THE name rule (CharacterNameError is a ValueError -> refused), then
     # "taken" by the name it would be stored under.
     name = validate_character_name(raw_name)
     if character_row_exists(name):
         raise ToolRefusal(f"a character {name!r} already exists — use update_character")
     draft["character_name"] = name
+    _refuse_foreign_sweep_rows(name)
+    # Written by this tool right after the apply, in the same journal step
+    # (covered by delete_character): every config key (raw JSON — the apply
+    # would store str(value)), every stat (into status_effects) and the
+    # profile keys the apply does not take (not llm_generable). Soul,
+    # outfit, body-slot and home keys stay with the apply.
+    generable_profile, _ = _get_generable_fields(template)
+    extra_prof: Dict[str, Any] = {}
+    extra_cfg: Dict[str, Any] = {}
+    extra_stats: Dict[str, Any] = {}
+    for key in list(draft):
+        if key in _CHAR_DRAFT_SPECIAL or key not in settable:
+            continue
+        store = _field_store(settable[key])
+        if store == "config":
+            extra_cfg[key] = draft.pop(key)
+        elif store == "status":
+            extra_stats[key] = draft.pop(key)
+        elif store == "profile" and key not in generable_profile:
+            extra_prof[key] = draft.pop(key)
 
     step.prepare()
     # The backup can take seconds: a character of that name created by
     # someone else meanwhile is refused here, before any journal row exists.
     if character_row_exists(name):
         raise ToolRefusal(f"a character {name!r} already exists — use update_character")
+    _refuse_foreign_sweep_rows(name)
     inverse = {"op": "delete_character", "name": name, "items": []}
     step.begin("character", name, inverse)
     # Set by apply_character once it has confirmed, under the profile lock,
@@ -1854,7 +2846,15 @@ def _create_character(step: _Step, args: Dict[str, Any]) -> str:
 
     with step.writing(reconcile):
         result = apply_character(draft, created_by="world_dev", must_be_new=True,
-                                 on_claim=on_claim, on_item=on_item)
+                                 on_claim=on_claim, on_item=on_item,
+                                 place_compliance=False)
+        # An explicit chat_mode is written here, after the apply's
+        # rp_first default, so it wins.
+        _write_char_fields(name, extra_prof, extra_cfg, extra_stats)
+        worn = (_wear_starting_outfit(name, wear_name) if wear_name is not None
+                else None)
+        compliance_warnings = _place_compliance(name)
+        known = _add_known_places(name, known_ids)[0] if known_ids else None
         items = [str(i) for i in result.get("created_items") or []]
         step.attach(name, {**claimed_inverse(), "items": items})
     outfits = result.get("outfits") or []
@@ -1862,25 +2862,29 @@ def _create_character(step: _Step, args: Dict[str, Any]) -> str:
     from app.models.character import get_character_config
     cfg = get_character_config(name) or {}
     home = str(cfg.get("home_location") or "")
-    # No silent gap: the applicable body-slot attributes the draft left unset.
-    missing = _missing_body_attrs(name)
     line = (f'created character "{name}" (template {template}'
             + (f", {len(outfits)} outfit(s), {len(items)} new piece(s)"
                + (f", {reused} existing" if reused else "") if outfits else "")
+            + (f", wearing {worn[0]} ({', '.join(worn[1]) or 'no pieces'})"
+               if worn else "")
             + ")" + (f" home {home}" + (f" / {cfg.get('home_room')}"
                                         if cfg.get("home_room") else "")
                      if home else "")
-            + (f"; body slots not set: {', '.join(missing)} — set them with "
-               "update_character{patch: {body_slots}}" if missing else "")
-            + _warn_suffix([str(w) for w in result.get("warnings") or []]))
+            + (f"; knows {len(known)} place(s): {_place_names(known)}" if known else "")
+            + _warn_suffix([str(w) for w in result.get("warnings") or []]
+                           + (worn[2] if worn else [])
+                           + compliance_warnings)
+            # No silent gap: what the new character still lacks (Task 9).
+            + completeness.suffix(completeness.character_gaps(name)))
     step.complete({"name": name, "items": items}, line)
     return line
 
 
 @_tool("update_character", True, "update_character{name, patch}",
        "change fields of a character; 'soul:<field>' = the whole new text of a "
-       "soul section; home / home_room / schedule; body_slots (merged per "
-       "attribute); outfits (NEW outfits added)")
+       "soul section (trailing whitespace is normalised to one newline); home / home_room / schedule; body_slots (merged per "
+       "attribute); outfits (NEW outfits added); known_places (places added to "
+       "the ones it knows)")
 def _update_character(step: _Step, args: Dict[str, Any]) -> str:
     from app.core import soul_writer
     from app.core.keyed_lock import keyed_lock
@@ -1889,7 +2893,8 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
                                           _apply_one_outfit, _template_has_wardrobe)
     from app.models.character import (character_row_exists, get_character_config,
                                       get_character_outfits, get_character_profile,
-                                      save_character_config, save_character_profile)
+                                      get_known_locations, save_character_config,
+                                      save_character_profile)
     _only_keys(args, {"name", "patch"}, "update_character")
     name = _str(args, "name", required=True)
     patch = args.get("patch")
@@ -1906,6 +2911,7 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
 
     prof_patch: Dict[str, Any] = {}
     cfg_patch: Dict[str, Any] = {}
+    stat_patch: Dict[str, int] = {}  # stat -> whole number (status_effects)
     soul_patch: Dict[str, str] = {}  # rel path -> full new text
     home_data: Dict[str, Any] = {}
     outfits_patch: Optional[List[Dict[str, Any]]] = None
@@ -1924,10 +2930,13 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
                 raise ToolRefusal(f"{rel} of {name} is shared with {owner} — "
                                   f"change it on {owner}")
             soul_patch[rel] = value
+        elif key == "wear":
+            raise ToolRefusal("the worn outfit of an existing character is its own "
+                              "state — change it in the wardrobe")
         elif key == "outfits":
             if not _template_has_wardrobe(template):
                 _refuse_outfits(template, character_templates())
-            _check_outfits(value)
+            _check_outfits(value, _storable_piece_slots(prof0))
             _check_outfit_refs_reveal(value)
             outfits_patch = copy.deepcopy(value)
         elif key == "body_slots":
@@ -1949,13 +2958,15 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
             if value is None:
                 raise ToolRefusal(f"'{key}' must not be null")
             _check_field_value(key, field, value)
-            if field.get("store") == "config":
+            store = _field_store(field)
+            if store == "config":
                 cfg_patch[key] = copy.deepcopy(value)
+            elif store == "status":
+                stat_patch[key] = int(value)
             else:
                 prof_patch[key] = copy.deepcopy(value)
         else:
-            raise ToolRefusal(f"unknown character field {key!r} — use get_character "
-                              "for the field names")
+            raise ToolRefusal(_unknown_fields_text([key], template))
     if outfits_patch is not None:
         # Outfits are only ADDED: a name the character has already (or one
         # given twice) is refused, so nothing that existed is ever replaced
@@ -1994,7 +3005,21 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
         body_clean = _check_body_slots(body_raw, would_be, template)
         if not body_clean:
             raise ToolRefusal("'body_slots' must not be empty")
+    known_ids = (_check_known_places(home_data.pop("known_places"))
+                 if "known_places" in home_data else [])
     _check_home_values(home_data)
+
+    def refuse_non_list_known() -> None:
+        # The per-place inverse (remove_known_places) restores a list, or
+        # removes the key when there was none; a stored value of another type
+        # — a JSON null included, although the readers take it as empty —
+        # could not be restored exactly.
+        if known_ids and not isinstance(
+                (get_character_config(name) or {}).get("known_locations", []), list):
+            raise ToolRefusal(f"the stored known places of {name!r} are no list — "
+                              "they cannot be changed here")
+
+    refuse_non_list_known()
     if home_data and not any(home_data.get(k) for k in home_data):
         raise ToolRefusal("home / home_room / schedule must not be empty — "
                           "they cannot be cleared here")
@@ -2018,6 +3043,9 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
     with keyed_lock("character_profile", name):
         if not character_row_exists(name):
             raise ToolRefusal(f"no character {name!r} — use find_characters")
+        # Again under the lock, before any group writes: a foreign writer may
+        # have stored a non-list since the check above.
+        refuse_non_list_known()
         # Soul sections first: a profile save (below) creates missing soul
         # files from their scaffold, which must not become a section's
         # "before" text.
@@ -2091,6 +3119,60 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
             cline = ", ".join(changed) if changed else "fields unchanged"
             cstep.complete({"profile": wp, "config": wc}, cline)
             lines.append(cline)
+
+        if stat_patch:
+            # Its own step with a PER-STAT inverse: the hourly tick and
+            # adjust_status_effects rewrite status_effects all the time, so
+            # a whole-dict restore would make every undo "changed since" (or
+            # clobber a foreign change of another stat).
+            # Still inside the keyed_lock("character_profile") taken above:
+            # the before values, had_key and write_stats are read under the
+            # same lock as the write, so the hourly tick (which takes that
+            # lock too) cannot land between the read and the write.
+            tstep = group_step()
+            t_prof = get_character_profile(name) or {}
+            t_had_key = "status_effects" in t_prof
+
+            def stats_now() -> Dict[str, Any]:
+                p = get_character_profile(name) or {}
+                cur = p.get("status_effects") if isinstance(p.get("status_effects"), dict) else {}
+                return {k: (copy.deepcopy(cur[k]) if k in cur else wu.ABSENT)
+                        for k in stat_patch}
+
+            t_before = stats_now()
+
+            def stats_diff() -> Tuple[Dict[str, Any], Dict[str, Any]]:
+                now = stats_now()
+                changed_keys = [k for k in stat_patch
+                                if wu._norm(now[k]) != wu._norm(t_before[k])]
+                return ({k: t_before[k] for k in changed_keys},
+                        {k: now[k] for k in changed_keys})
+
+            def stats_inverse(before_map: Dict[str, Any]) -> Dict[str, Any]:
+                return {"op": "restore_status_effects", "name": name,
+                        "before": before_map, "had_key": t_had_key}
+
+            tstep.begin("character", name, stats_inverse(t_before))
+
+            def reconcile_stats():
+                tb, tw = stats_diff()
+                return None if not tb else (name, stats_inverse(tb), {"stats": tw})
+
+            # Only the stats whose stored value differs are written: a stat
+            # that already holds the value (70.0 for 70, say) is left as it
+            # is, so nothing changes outside what the journal records.
+            write_stats = {k: v for k, v in stat_patch.items()
+                           if wu._norm(t_before[k]) != wu._norm(v)}
+            with tstep.writing(reconcile_stats):
+                _write_char_fields(name, {}, {}, write_stats)
+            tb, tw = stats_diff()
+            tstep.attach(name, stats_inverse(tb))
+            if tb:
+                from app.core import sync_topics
+                sync_topics.changed_at(name, topics=("presence", "self"))
+            tline = ("stats " + ", ".join(sorted(tb))) if tb else "stats unchanged"
+            tstep.complete({"stats": tw}, tline)
+            lines.append(tline)
 
         if body_clean:
             bstep = group_step()
@@ -2207,7 +3289,62 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
             hstep.complete(w, hline)
             lines.append(hline)
 
-    return f'updated character "{name}": ' + "; ".join(lines)
+        if known_ids:
+            # Its own step with a PER-PLACE inverse: in-game discovery
+            # (add_known_location) extends the list at any time, so a
+            # whole-list restore would make the undo "changed since". The
+            # inverse removes exactly the places this call added. Still under
+            # the keyed_lock("character_profile") taken above.
+            kstep = group_step()
+            k_raw = (get_character_config(name) or {}).get("known_locations")
+            k_had_key = isinstance(k_raw, list)
+            k_known = [str(v) for v in k_raw if v] if k_had_key else []
+            k_missing = [i for i in known_ids if i not in k_known]
+
+            def known_inverse(added: List[str]) -> Dict[str, Any]:
+                return {"op": "remove_known_places", "name": name,
+                        "ids": list(added), "had_key": k_had_key}
+
+            def added_now() -> List[str]:
+                now = get_known_locations(name)
+                return [i for i in k_missing if i in now]
+
+            # Until the write is done the inverse names every place the call
+            # is about to add (none of them was known before, so removing
+            # them is exact); afterwards the ones read back.
+            kstep.begin("character", name, known_inverse(k_missing))
+
+            def reconcile_known():
+                added = added_now()
+                return None if not added else (name, known_inverse(added),
+                                               {"known": added})
+
+            with kstep.writing(reconcile_known):
+                k_stored, _ = _add_known_places(name, known_ids)
+            k_added = added_now()
+            kstep.attach(name, known_inverse(k_added))
+            kline = ((f"known places added: {_place_names(k_added)}" if k_added
+                      else "known places unchanged")
+                     + f"; knows {len(k_stored)} place(s)")
+            kstep.complete({"known": k_added}, kline)
+            lines.append(kline)
+
+    # The gaps of the groups this run's calls touched on this character.
+    return (f'updated character "{name}": ' + "; ".join(lines)
+            + completeness.character_suffix(step.ctx.run_id, name))
+
+
+# ── check_run ────────────────────────────────────────────────────────────
+
+@_tool("check_run", False, "check_run{}",
+       "what the elements this run created or changed still lack (call it before "
+       "the summary)")
+def _check_run(step: _Step, args: Dict[str, Any]) -> str:
+    _only_keys(args, set(), "check_run")
+    lines, complete, total = completeness.check_run_lines(step.ctx.run_id)
+    tail = f"{complete} of {total} elements complete"
+    return "\n".join(_cap_lines(lines, "fix these first, then call check_run again",
+                                used=len(tail) + 1) + [tail])
 
 
 # ── delete_created ───────────────────────────────────────────────────────
