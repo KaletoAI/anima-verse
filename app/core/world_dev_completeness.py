@@ -141,14 +141,44 @@ def character_gaps(name: str, scope: Optional[Set[str]] = None) -> List[str]:
     return gaps
 
 
-def location_gaps(loc: Dict[str, Any], created: bool = True) -> List[str]:
+def _has_floor_plan(loc: Dict[str, Any]) -> bool:
+    """What the scene composer needs to draw a place
+    (``scene_recipe._compose_stored``): a room with a layout, a building
+    outline (``map3d.outline``, 3+ points) or a building model. A model
+    lookup that fails counts as present — never a gap the agent cannot fix."""
+    if any(isinstance(r, dict) and r.get("layout") for r in loc.get("rooms") or []):
+        return True
+    if len((loc.get("map3d") or {}).get("outline") or []) >= 3:
+        return True
+    from app.core.location_model3d import find_building_model
+    try:
+        return find_building_model(str(loc.get("id") or "")) is not None
+    except Exception as exc:  # noqa: BLE001 — a read error is no gap
+        from app.core.log import get_logger
+        get_logger("world_dev_completeness").warning(
+            "building model lookup of %s failed: %s", loc.get("id"), exc)
+        return True
+
+
+def location_gaps(loc: Dict[str, Any], created: bool = True,
+                  floor_plan: bool = True) -> List[str]:
     """The gaps of a stored location. ``created`` False (the run only updated
-    it and wrote no x/z for it) = nothing is checked."""
+    it and wrote no x/z for it) = nothing is checked. ``floor_plan`` False
+    (the run did not create it) skips ``no floor plan`` (E5): a place with
+    at least one real room (not the ground, not a storey corridor) and
+    nothing the scene composer can draw."""
     if not created:
         return []
+    from app.models.world import GROUND_ROOM_ID, is_floor_room
+    gaps: List[str] = []
     if loc.get("pos_x") is None or loc.get("pos_z") is None:
-        return ["unplaced (no x/z) — not a travel target"]
-    return []
+        gaps.append("unplaced (no x/z) — not a travel target")
+    real_rooms = [r for r in loc.get("rooms") or [] if isinstance(r, dict)
+                  and str(r.get("id") or "") != GROUND_ROOM_ID
+                  and not is_floor_room(str(r.get("id") or ""))]
+    if floor_plan and real_rooms and not _has_floor_plan(loc):
+        gaps.append("no floor plan (set_room_layout)")
+    return gaps
 
 
 def suffix(gaps: List[str]) -> str:
@@ -222,7 +252,8 @@ def character_suffix(run_id: str, name: str) -> str:
 
 def location_suffix(run_id: str, loc: Dict[str, Any]) -> str:
     scope = element_scope(run_id, "location", str(loc.get("id") or ""))
-    return suffix(location_gaps(loc, scope is None or "position" in scope))
+    return suffix(location_gaps(loc, scope is None or "position" in scope,
+                                floor_plan=scope is None))
 
 
 def _exists(kind: str, ident: str) -> Optional[Dict[str, Any]]:
@@ -236,6 +267,15 @@ def _exists(kind: str, ident: str) -> Optional[Dict[str, Any]]:
     if kind == "terrain":
         from app.models.terrain import get_area
         return get_area(ident)
+    if kind == "world_prop":
+        from app.core.world_dev_undo import world_prop_row
+        return world_prop_row(ident)
+    if kind == "terrain_type":
+        from app.core.world_dev_undo import terrain_type_row
+        return terrain_type_row(ident)
+    if kind == "item":
+        from app.core.world_dev_undo import item_row
+        return item_row(ident)
     from app.core.world_dev_tools import _height_area
     return _height_area(ident)
 
@@ -253,8 +293,15 @@ def check_run_lines(run_id: str) -> Tuple[List[str], int, int]:
             gaps = character_gaps(ident, scope)
             label = f'character "{ident}"'
         elif kind == "location":
-            gaps = location_gaps(row, scope is None or "position" in scope)
+            gaps = location_gaps(row, scope is None or "position" in scope,
+                                 floor_plan=scope is None)
             label = f'location {ident} "{row.get("name") or ""}"'
+        elif kind == "world_prop":
+            gaps, label = [], f"world prop {ident}"
+        elif kind == "terrain_type":
+            gaps, label = [], f"terrain kind {ident}"
+        elif kind == "item":
+            gaps, label = [], f"item {ident}"
         else:
             gaps, label = [], f"{kind} area {ident}"
         total += 1

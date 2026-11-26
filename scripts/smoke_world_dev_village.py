@@ -43,7 +43,13 @@ check_run):
        Demo Cottage  rooms [Room]          at (0, 0)
        Demo Square   no rooms              at (60, 0)
        Demo Bakery   rooms [Shop, Oven]    at (120, 0)
-     each line ends "; complete".
+     Demo Square's line ends "; complete"; the two places WITH rooms end
+     "; missing: no floor plan (set_room_layout)" (E5 of plan
+     2026-11-25-world-dev-free-p2-buildings-terrain.md: a run-created place
+     with a real room and no room layout / outline / building model), so
+     each gets set_room_layout right after its create — 4 × 4 m rooms side
+     by side from x -2 (Cottage: Room at x -2) / x -4 (Bakery: Shop at -4,
+     Oven at 0), y -2 — and that line ends "; complete".
   3. create_character Demo Miller, ONE call:
        data: name, gender female, importance 2, courage 60, all seven soul
              fields, body_slots hair {color red, length long},
@@ -90,9 +96,9 @@ Assertions after the run:
   (e) travel: travel_engine.start_journey(Demo Miller, Bakery) does not
       answer "unknown_target" (Bakery is known). (Its stored journey is
       removed with the character by the undo below.)
-  (f) journal: rows of kind "write" == 5 (3 places + 2 characters — one
-      row per create call), kind "read" == 2 (describe_template, check_run),
-      no "refused" row.
+  (f) journal: rows of kind "write" == 7 (3 places + 2 floor plans +
+      2 characters — one row per write call), kind "read" == 2
+      (describe_template, check_run), no "refused" row.
   (g) discard_preview(run): 3 lines naming the three places and 2 lines
       naming the characters with their piece counts — Demo Miller brought
       6 pieces (3 + 3), Demo Weaver 3 (2 + 1): "6 outfit pieces it brought"
@@ -272,9 +278,19 @@ for name, rooms, x in (("Demo Cottage", ["Room"], 0), ("Demo Square", [], 60),
     if rooms:
         data["rooms"] = [{"name": r} for r in rooms]
     res = call(1, "create_location", {"data": data, "x": x, "z": 0})
-    check(f"2 create_location {name} -> complete", res.ok and res.line.endswith("; complete"),
+    tail = "; missing: no floor plan (set_room_layout)" if rooms else "; complete"
+    check(f"2 create_location {name} -> {tail}", res.ok and res.line.endswith(tail),
           res.line)
     PLACES[name] = wr.entries(run)[0]["target_id"]
+    if rooms:
+        stored = (get_location_by_id(PLACES[name]) or {}).get("rooms") or []
+        x0 = -2 * len(rooms)
+        plan = [{"id": next(r["id"] for r in stored if r.get("name") == rn),
+                 "x": x0 + 4 * i, "y": -2, "w": 4, "d": 4} for i, rn in enumerate(rooms)]
+        res = call(1, "set_room_layout", {"location_id": PLACES[name],
+                                          "layout": {"rooms": plan}})
+        check(f"2 set_room_layout {name} -> complete",
+              res.ok and res.line.endswith("; complete"), res.line)
 COTTAGE, SQUARE, BAKERY = (PLACES[n] for n in ("Demo Cottage", "Demo Square", "Demo Bakery"))
 ROOM = next((r.get("id") for r in (get_location_by_id(COTTAGE) or {}).get("rooms") or []
              if r.get("name") == "Room"), None)
@@ -373,7 +389,7 @@ check("(e) Miller -> Bakery is no unknown_target", reason != "unknown_target", r
 
 # ── (f) journal ─────────────────────────────────────────────────────────
 kinds = [s["kind"] for s in wr.steps(run)]
-check("(f) 5 write rows", kinds.count("write") == 5, kinds)
+check("(f) 7 write rows", kinds.count("write") == 7, kinds)
 check("(f) 2 read rows", kinds.count("read") == 2, kinds)
 check("(f) no refused row", "refused" not in kinds, kinds)
 

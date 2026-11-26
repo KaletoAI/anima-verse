@@ -350,6 +350,7 @@ of the templates `create_character` offers):
 | `manual_map.md` | Terrain areas, strokes, height areas, composition |
 | `manual_characters.md` | create/update_character, template fields, soul sections, outfits |
 | `manual_homes.md` | Home, home room and daily schedule spellings and values |
+| `manual_layout.md` | set_room_layout: floor plan, openings, plot openings, stairs, storey height |
 | `manual_naming.md` | Naming rules |
 
 ## Loader API

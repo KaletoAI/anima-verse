@@ -41,7 +41,8 @@ OPEN_STATUSES = ("running", "awaiting_review", "interrupted")
 TERMINAL_STATUSES = ("accepted", "rolled_back", "rollback_incomplete")
 STATUSES = OPEN_STATUSES + TERMINAL_STATUSES
 KINDS = ("read", "write", "refused")
-TARGET_KINDS = ("location", "terrain", "height", "character")
+TARGET_KINDS = ("location", "terrain", "height", "character", "world_prop", "terrain_type",
+                "item")
 
 
 class RunOpenError(RuntimeError):

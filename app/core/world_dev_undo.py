@@ -77,10 +77,21 @@ Inverse ops (``inverse["op"]``):
   had_key} · remove_known_places{name, ids:[place ids the call added],
   had_key} · remove_outfits{name, outfits:[ids], inventory:[item ids],
   items:[created piece ids]} (pending: {names, outfits_before,
-  inventory_before, refs, items}) · recreate_location{row} · recreate_terrain_area{row} ·
-  recreate_height_area{row} (row = the reader's full record) ·
+  inventory_before, refs, items}) · recreate_location{row} · recreate_terrain_area{row, order} ·
+  recreate_height_area{row, order} (row = the reader's full record, order = the
+  area's paint-order identity {created_at, updated_at, rowid}) ·
+  delete_world_prop{id} · recreate_world_prop{row} (row = :func:`world_prop_row`) ·
+  delete_terrain_type{kind} · recreate_terrain_type{row} (row = :func:`terrain_type_row`;
+  the delete skips a kind still in use — :func:`terrain_kind_users` — as ``changed
+  since`` with keys ["in use"]) ·
   recreate_character{name, snapshot:{rows, files, dirs, has_dir,
-  file_bytes}} (:func:`character_snapshot`)
+  file_bytes}} (:func:`character_snapshot`) ·
+  delete_items{ids} (create_item; :func:`_cleanup_items` — an item held anywhere
+  stays, ``item still in use``) · restore_inventory{name, before:{item id:
+  quantity or ABSENT}} (give_items; written = {item id: re-read entry}) ·
+  restore_room_items{location_id, room_id, before: the room's whole ``items``
+  list or ABSENT} (add_room_item; written = the room's items value after,
+  :func:`room_items_value`)
 
 Written shapes: restore_location / restore_home_schedule — the written map of
 :func:`diff_keys`; restore_position — ``{x, z, yaw}`` (:func:`position_of`);
@@ -125,6 +136,13 @@ REASON_ITEM_IN_USE = "item still in use"
 REASON_NOT_WRITTEN = "not written"
 #: A re-created element that does not read back as its snapshot.
 REASON_INEXACT = "re-created, but differs from the snapshot"
+#: A re-creation the writer refused (key ``error``: its message) — e.g. the
+#: library prop of a world prop was deleted in between, or the world is at
+#: its world-prop cap. The element stays absent; the undo is incomplete —
+#: unless an older creating entry of the same target is handled in the same
+#: pass: the target was the run's own and absent is its end state, so the
+#: record gets the key ``net_absent`` and counts as complete.
+REASON_RECREATE_REFUSED = "re-creation refused"
 #: Reason (behind the character's quoted name) of the INFORMATIONAL record of
 #: a character left standing in a place (or room) the undo removed. It carries
 #: the key ``occupant`` and never makes a rollback incomplete: nothing was
@@ -322,6 +340,12 @@ def _undo_delete_location(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_
 
 
 def _undo_restore_location(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    """Put the journalled keys of a location back (keys changed since by
+    someone else are skipped). The restore is READER-equal, not raw-row
+    equal: a place last written outside the tool writers (e.g. the create
+    editor path) is canonicalised by the first tool write (image_prompt_night
+    "" on every room, yaw_deg 0.0), and the undo keeps that canonical form —
+    get_location_by_id reads the same before and after."""
     from app.models.world import (get_location_by_id, upsert_location,
                                   world_write_lock)
     lid = str(inv.get("id") or "")
@@ -339,6 +363,11 @@ def _undo_restore_location(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["
             _apply_keys(cur, restore)
             if not upsert_location(cur, sync_world=True):
                 raise RuntimeError(f"restoring location {lid} was not stored")
+            # The seat inventory caches the room layouts (as every layout
+            # writer does, the restore drops it): a removed piece must not
+            # stay offered as a seat until the cache TTL runs out.
+            from app.core import places
+            places.invalidate()
             # The rooms the restore took away, read back from storage (the
             # writer's corridor sync has a say too). Whoever stands in one
             # stays there and is reported: the forward tool refuses this
@@ -454,9 +483,21 @@ def _undo_restore_height_area(entry: Dict[str, Any], inv: Dict[str, Any]) -> Lis
 
 # ── Characters ───────────────────────────────────────────────────────────
 
+def _knowledge_holders(iid: str, locations: Optional[List[Dict[str, Any]]] = None
+                       ) -> List[Dict[str, Any]]:
+    """The places whose ``knowledge_item_id`` names the item (the stored
+    ones, or ``locations`` when the discard preview passes its simulation)."""
+    if locations is None:
+        from app.models.world import list_locations
+        locations = list_locations() or []
+    return [loc for loc in locations
+            if isinstance(loc, dict) and str(loc.get("knowledge_item_id") or "") == iid]
+
+
 def _cleanup_items(item_ids: List[str]) -> List["_Skip"]:
     """Delete the catalog items a created character brought — only when the
-    item exists, is not shared and is held nowhere (inventory or room)."""
+    item exists, is not shared and is held nowhere (inventory, room, or a
+    place's knowledge_item_id)."""
     from app.models.inventory import (delete_item, find_item_location,
                                       get_item, is_shared_item)
     skips: List[_Skip] = []
@@ -464,7 +505,10 @@ def _cleanup_items(item_ids: List[str]) -> List["_Skip"]:
         iid = str(iid or "")
         if not iid or get_item(iid) is None:
             continue
-        if is_shared_item(iid) or find_item_location(iid) is not None:
+        if (is_shared_item(iid) or find_item_location(iid) is not None
+                or _knowledge_holders(iid)):
+            # A place naming it as its knowledge item holds it too: deleting
+            # it would leave that place naming a missing id.
             skips.append(_Skip(REASON_ITEM_IN_USE, item=iid))
             continue
         if not delete_item(iid) and get_item(iid) is not None:
@@ -1064,29 +1108,104 @@ def _undo_recreate_location(entry: Dict[str, Any], inv: Dict[str, Any]) -> List[
     return []
 
 
+def _check_order(exact_order: bool) -> None:
+    """A re-created area whose old rowid was taken while another area shares
+    its paint-order stamp: the content is exact, its place in the order may
+    not be (terrain.restore_area)."""
+    if not exact_order:
+        raise _Skip(REASON_INEXACT, keys=["paint order"])
+
+
+# A deleted area comes back with its ORDER identity (inverse key `order`:
+# created_at, updated_at, rowid — terrain.area_order_identity): the paint
+# order decides which overlapping area answers a point, and the height-area
+# order feeds height_sig, so re-inserting it "now" would move it to the top.
+# An entry journalled without `order` (before the key existed) is re-created
+# through the same writer with an empty identity (stamped now, a fresh rowid)
+# and reported as an inexact paint order — the content is exact, its place
+# in the order is not known.
+
 def _undo_recreate_terrain_area(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
-    from app.models.terrain import get_area, save_area
+    from app.models.terrain import get_area, restore_area
     row = inv.get("row") or {}
     aid = str(row.get("id") or "")
     if not aid:
         raise RuntimeError("recreate_terrain_area without an id")
     if get_area(aid) is not None:
         return _recreate_exists(entry)
-    save_area(copy.deepcopy(row))
+    order = inv.get("order")
+    _area, exact = restore_area(copy.deepcopy(row),
+                                order if isinstance(order, dict) else {})
     _check_recreated(get_area(aid), row)
+    exact = exact and isinstance(order, dict)
+    _check_order(exact)
     return []
 
 
 def _undo_recreate_height_area(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
-    from app.models.heightfield import save_height_area
+    from app.models.heightfield import restore_height_area
     row = inv.get("row") or {}
     aid = str(row.get("id") or "")
     if not aid:
         raise RuntimeError("recreate_height_area without an id")
     if _height_area(aid) is not None:
         return _recreate_exists(entry)
-    save_height_area(copy.deepcopy(row))
+    order = inv.get("order")
+    _area, exact = restore_height_area(copy.deepcopy(row),
+                                       order if isinstance(order, dict) else {})
     _check_recreated(_height_area(aid), row)
+    exact = exact and isinstance(order, dict)
+    _check_order(exact)
+    return []
+
+
+# ── World props (free-standing props, E10) ───────────────────────────────
+
+def world_prop_row(placement_id: str) -> Optional[Dict[str, Any]]:
+    """One stored world prop as the reader gives it (``list_world_props``
+    rows: id, prop_id, x, z, yaw_deg, offset_y, variant), or None."""
+    from app.models.world_props import list_world_props
+    pid = str(placement_id or "")
+    return next((r for r in list_world_props() if r.get("id") == pid), None) if pid else None
+
+
+# Like the areas, the world-prop writer has no writer lock to share: compare
+# and delete are not one atomic span; in a frozen world the window is
+# negligible.
+
+def _undo_delete_world_prop(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    from app.models.world_props import delete_world_prop
+    wid = str(inv.get("id") or "")
+    cur = world_prop_row(wid)
+    if cur is None:
+        raise _Skip(REASON_GONE)
+    written = entry.get("written")
+    if written is not None and _norm(cur) != _norm(written):
+        b, _w = diff_keys(written, cur)
+        raise _Skip(REASON_CHANGED, keys=sorted(b))
+    if not delete_world_prop(wid) and world_prop_row(wid) is not None:
+        raise _Skip(REASON_REFUSED)
+    return []
+
+
+def _undo_recreate_world_prop(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    """Bring a deleted world prop back with its exact row values. The
+    authoring ORDER is not restored: the writer stamps a new ``created_at``,
+    so the prop moves to the end of ``list_world_props()``. Accepted — world
+    props are decoration-only draw calls, nothing reads their order but the
+    listing itself."""
+    from app.models.world_props import save_world_prop
+    row = inv.get("row") or {}
+    wid = str(row.get("id") or "")
+    if not wid:
+        raise RuntimeError("recreate_world_prop without an id")
+    if world_prop_row(wid) is not None:
+        return _recreate_exists(entry)
+    try:
+        save_world_prop(copy.deepcopy(row))
+    except ValueError as exc:  # unknown library prop, world-prop cap
+        raise _Skip(REASON_RECREATE_REFUSED, error=str(exc)) from None
+    _check_recreated(world_prop_row(wid), row)
     return []
 
 
@@ -1115,6 +1234,215 @@ def _undo_recreate_character(entry: Dict[str, Any], inv: Dict[str, Any]) -> List
     return []
 
 
+# ── Terrain kinds (custom kinds of the world catalog, E12) ──────────────
+
+def terrain_type_row(kind: str) -> Optional[Dict[str, Any]]:
+    """The WORLD row of one terrain kind as the catalog reads it, or None
+    when the world holds no row of that kind (a shared-only kind is not the
+    world's to delete)."""
+    from app.core import terrain_types as tt
+    k = str(kind or "").strip()
+    if not k or tt.sources().get(k) != "world":
+        return None
+    return tt.get_type(k)
+
+
+def terrain_type_changed(row: Optional[Dict[str, Any]], written: Any) -> bool:
+    """Does the stored world row of a kind differ from what the creating
+    step wrote (its journal ``written``)? False when nothing was journalled."""
+    return written is not None and _norm(row) != _norm(written)
+
+
+def terrain_kind_users(kind: str) -> List[Tuple[str, str, str]]:
+    """Everything that names a terrain kind: ``(target kind, id, text)`` per
+    terrain area whose ``kind`` OR ``meta.bed_kind`` (the ground under a
+    water) it is, per place whose ``terrain`` field it is, and the world
+    setting ``game.default_terrain_kind`` (the ground no area covers) when
+    it names the kind. The one in-use check of the kind's undo, of
+    ``delete_created`` and of the discard preview."""
+    from app.core import config
+    from app.models.terrain import list_areas
+    from app.models.world import list_locations
+    k = str(kind or "").strip()
+    out: List[Tuple[str, str, str]] = []
+    if not k:
+        return out
+    for area in list_areas():
+        meta = area.get("meta") if isinstance(area.get("meta"), dict) else {}
+        aid = str(area.get("id") or "")
+        if str(area.get("kind") or "").strip() == k:
+            out.append(("terrain", aid, f"terrain area {aid}"))
+        elif str(meta.get("bed_kind") or "").strip() == k:
+            out.append(("terrain", aid, f"terrain area {aid} (its water bed)"))
+    for loc in list_locations():
+        if str(loc.get("terrain") or "").strip() == k:
+            lid = str(loc.get("id") or "")
+            out.append(("location", lid, f'location {lid} "{loc.get("name") or ""}"'))
+    if str(config.get("game.default_terrain_kind", "") or "").strip() == k:
+        out.append(("setting", "game.default_terrain_kind",
+                    "the world's default ground (setting game.default_terrain_kind)"))
+    return out
+
+
+# Like the areas, the catalog writer has no writer lock to share: compare,
+# use check and delete are not one atomic span; in a frozen world the window
+# is negligible.
+
+def _undo_delete_terrain_type(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    """Remove a kind the run created. Its own uses were undone first (they
+    are newer entries, the undo walks newest-first); a use that remains is
+    somebody else's — the kind stays (changed since, in use)."""
+    from app.core.terrain_types import delete_world_type
+    kind = str(inv.get("kind") or "")
+    cur = terrain_type_row(kind)
+    if cur is None:
+        raise _Skip(REASON_GONE)
+    written = entry.get("written")
+    if terrain_type_changed(cur, written):
+        b, _w = diff_keys(written, cur)
+        raise _Skip(REASON_CHANGED, keys=sorted(b))
+    if terrain_kind_users(kind):
+        raise _Skip(REASON_CHANGED, keys=["in use"])
+    if not delete_world_type(kind) and terrain_type_row(kind) is not None:
+        raise _Skip(REASON_REFUSED)
+    return []
+
+
+def _undo_recreate_terrain_type(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    from app.core.terrain_types import effective_catalog, save_world_type
+    row = inv.get("row") or {}
+    kind = str(row.get("kind") or "")
+    if not kind:
+        raise RuntimeError("recreate_terrain_type without a kind")
+    if kind in effective_catalog():
+        return _recreate_exists(entry)
+    try:
+        save_world_type(copy.deepcopy(row))
+    except ValueError as exc:
+        raise _Skip(REASON_RECREATE_REFUSED, error=str(exc)) from None
+    _check_recreated(terrain_type_row(kind), row)
+    return []
+
+
+# ── Items: catalog, inventories, room items (E14) ────────────────────────
+
+def item_row(item_id: str) -> Optional[Dict[str, Any]]:
+    """One WORLD catalog item as the reader gives it (``get_item``), or None
+    (a shared library item is never the run's own)."""
+    from app.models.inventory import get_item, is_shared_item
+    iid = str(item_id or "")
+    if not iid or is_shared_item(iid):
+        return None
+    row = get_item(iid)
+    return _norm(row) if row else None
+
+
+def _undo_delete_items(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    """Remove the catalog items a create_item made — only those held nowhere
+    (an inventory or a room) and never a shared one (:func:`_cleanup_items`).
+    An item already gone is ``already gone`` for the entry."""
+    ids = [str(i) for i in inv.get("ids") or [] if i]
+    if not any(item_row(i) is not None for i in ids):
+        raise _Skip(REASON_GONE)
+    return _cleanup_items(ids)
+
+
+def _undo_restore_inventory(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    """Take a give_items back per item: an entry that differs from what the
+    give wrote is somebody else's change (``changed since``, keys = item ids);
+    an entry the give created (before ABSENT) is removed whole, a stack the
+    give increased is set back to its quantity (the give touched no other
+    field of it, so the entry then equals its pre-run state)."""
+    from app.models.character import character_row_exists
+    from app.models.inventory import remove_from_inventory, update_inventory_entry
+    name = str(inv.get("name") or "")
+    before = inv.get("before") or {}
+    written = entry.get("written")
+    changed: List[str] = []
+    with keyed_lock("character_profile", name):
+        if not name or not character_row_exists(name):
+            raise _Skip(REASON_GONE)
+        for iid, bval in before.items():
+            now = inventory_entries(name).get(iid, ABSENT)
+            if isinstance(written, dict) and iid in written:
+                if _norm(now) != _norm(written[iid]):
+                    changed.append(iid)
+                    continue
+            if is_absent(now):
+                continue
+            if is_absent(bval):
+                qty = int(now.get("quantity") or 1)
+                if (not remove_from_inventory(name, iid, quantity=qty, force=True)
+                        or iid in inventory_entries(name)):
+                    raise RuntimeError(f"inventory entry {iid} of {name} was not removed")
+            elif (not update_inventory_entry(name, iid, {"quantity": bval})
+                  or (inventory_entries(name).get(iid) or {}).get("quantity") != bval):
+                raise RuntimeError(f"inventory entry {iid} of {name} was not set "
+                                   f"back to {bval}")
+    if changed:
+        raise _Skip(REASON_CHANGED, keys=changed)
+    return []
+
+
+def room_items_value(room: Dict[str, Any]) -> Any:
+    """A room's whole ``items`` value (a deep copy), :data:`ABSENT` when the
+    room has no such key — the before/written shape of restore_room_items."""
+    return copy.deepcopy(room["items"]) if "items" in room else ABSENT
+
+
+def _item_ids(value: Any) -> set:
+    if is_absent(value) or not isinstance(value, list):
+        return set()
+    return {str(e.get("item_id") or "") for e in value if isinstance(e, dict)} - {""}
+
+
+def _undo_restore_room_items(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    """Set a room's whole ``items`` value back (or pop the key when it had
+    none) under ``world_write_lock`` — never through remove_item_from_room,
+    so the row is equal to before and an OLDER restore_location of the same
+    place still finds its rooms as written. The discovery rows of every item
+    the restore takes out of the room go too (the statement
+    remove_item_from_room runs; inventory has no public helper for it)."""
+    from app.core import sync_topics
+    from app.core.db import transaction
+    from app.models.world import (get_location_by_id, upsert_location,
+                                  world_write_lock)
+    lid = str(inv.get("location_id") or "")
+    rid = str(inv.get("room_id") or "")
+    before = inv.get("before", ABSENT)
+    written = entry.get("written")
+    with world_write_lock:
+        cur = get_location_by_id(lid) if lid else None
+        if cur is None:
+            raise _Skip(REASON_GONE)
+        cur = copy.deepcopy(cur)
+        room = next((r for r in cur.get("rooms") or []
+                     if isinstance(r, dict) and r.get("id") == rid), None)
+        if room is None:
+            raise _Skip(REASON_GONE)
+        now = room_items_value(room)
+        if written is not None and _norm(now) != _norm(written):
+            raise _Skip(REASON_CHANGED, keys=["items"])
+        if is_absent(before):
+            room.pop("items", None)
+        else:
+            room["items"] = copy.deepcopy(before)
+        if not upsert_location(cur, sync_world=False):
+            raise RuntimeError(f"restoring the items of room {rid} of {lid} was not stored")
+        gone = _item_ids(now) - _item_ids(before)
+        if gone:
+            with transaction() as conn:
+                for iid in sorted(gone):
+                    conn.execute("DELETE FROM item_discoveries WHERE location_id=? "
+                                 "AND room_id=? AND item_id=?", (lid, rid, iid))
+
+    def visible(value: Any) -> bool:
+        return (isinstance(value, list)
+                and any(isinstance(e, dict) and not e.get("hidden") for e in value))
+    sync_topics.room_items_changed(lid, rid, visible(now), visible(before))
+    return []
+
+
 _HANDLERS: Dict[str, Callable[[Dict[str, Any], Dict[str, Any]], List[_Skip]]] = {
     "delete_location": _undo_delete_location,
     "restore_location": _undo_restore_location,
@@ -1135,6 +1463,13 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any], Dict[str, Any]], List[_Skip]]] = 
     "recreate_terrain_area": _undo_recreate_terrain_area,
     "recreate_height_area": _undo_recreate_height_area,
     "recreate_character": _undo_recreate_character,
+    "delete_world_prop": _undo_delete_world_prop,
+    "recreate_world_prop": _undo_recreate_world_prop,
+    "delete_terrain_type": _undo_delete_terrain_type,
+    "recreate_terrain_type": _undo_recreate_terrain_type,
+    "delete_items": _undo_delete_items,
+    "restore_inventory": _undo_restore_inventory,
+    "restore_room_items": _undo_restore_room_items,
 }
 
 
@@ -1174,13 +1509,25 @@ def undo(run_id: str, turn: Optional[int] = None) -> Dict[str, Any]:
     are reported beside it. ``already gone`` is a skip, not an error; an
     exception in one step becomes a skip (``undo failed: ...``) and the rest
     still runs. Every handled entry is marked undone. Occupant records of
-    characters this undo deleted are dropped at the end."""
+    characters this undo deleted are dropped at the end, and so are the
+    ``item still in use`` records of items a final cleanup pass deletes
+    (held only by an older element of the run that the walk removed later).
+
+    A ``re-creation refused`` (e.g. a world prop placed in turn 1, deleted
+    by ``delete_created`` in turn 2, its library prop gone since) stays
+    incomplete on its own — but when an OLDER creating entry of the same
+    target (``delete_*`` inverse) is handled in the same pass, the world
+    ends exactly as before the run (absent): the record gets
+    ``net_absent: True`` and no longer makes the rollback incomplete."""
     reversed_seqs: List[int] = []
     skipped: List[Dict[str, Any]] = []
     # Targets whose re-creation found a FOREIGN element under the same key:
     # every older entry of that target is skipped too — above all the
     # creating step's delete, which would otherwise remove the foreign one.
     foreign: set = set()
+    # Targets whose re-creation the writer refused -> those skip records;
+    # an older creating entry of the target in this pass marks them net_absent.
+    refused: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
     for entry in wr.entries(run_id, turn=turn):
         seq = int(entry["seq"])
         target = _target_of(entry.get("inverse") or {})
@@ -1208,8 +1555,36 @@ def undo(run_id: str, turn: Optional[int] = None) -> Dict[str, Any]:
               and str((entry.get("inverse") or {}).get("op") or "").startswith("recreate_")
               and any(s.get("reason") == REASON_CHANGED for s in skips)):
             foreign.add(target)
+        op = str((entry.get("inverse") or {}).get("op") or "")
+        if target is not None:
+            if op.startswith("recreate_"):
+                refused.setdefault(target, []).extend(
+                    s for s in skips if s.get("reason") == REASON_RECREATE_REFUSED)
+            elif op.startswith("delete_") and all(
+                    s.get("reason") == REASON_GONE for s in skips):
+                for s in refused.pop(target, []):
+                    s["net_absent"] = True
         skipped.extend(skips)
         wr.mark_undone(run_id, seq)
+    # An item the walk reached while an OLDER holder of the run still had it
+    # (a place or character created before the item, holding it through a
+    # foreign placement or a give changed since) is skipped as in use; the
+    # older entry has removed that holder by now. One more cleanup pass
+    # deletes what is held nowhere any more and drops its skip record — the
+    # end state discard_preview describes (_item_kept_by is order-free).
+    retry = sorted({str(s.get("item")) for s in skipped
+                    if s.get("reason") == REASON_ITEM_IN_USE and s.get("item")})
+    if retry:
+        try:
+            _cleanup_items(retry)
+        except Exception as e:  # noqa: BLE001 — the skip records stay as they are
+            logger.error("world-dev undo %s: item cleanup failed: %s", run_id, e,
+                         exc_info=True)
+        from app.models.inventory import get_item
+        gone = {iid for iid in retry if get_item(iid) is None}
+        skipped = [s for s in skipped
+                   if not (s.get("reason") == REASON_ITEM_IN_USE
+                           and str(s.get("item") or "") in gone)]
     if any("occupant" in s for s in skipped):
         # An occupant recorded before an older entry deleted that very
         # character (created before the place) has nobody left to place.
@@ -1244,6 +1619,14 @@ _TARGET_KEYS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "remove_known_places": ("character", ("name",)),
     "remove_outfits": ("character", ("name",)),
     "recreate_character": ("character", ("name",)),
+    "delete_world_prop": ("world_prop", ("id",)),
+    "recreate_world_prop": ("world_prop", ("row", "id")),
+    "delete_terrain_type": ("terrain_type", ("kind",)),
+    "recreate_terrain_type": ("terrain_type", ("row", "kind")),
+    # A LIST of ids: the target is its first id (create_item journals one).
+    "delete_items": ("item", ("ids",)),
+    "restore_inventory": ("character", ("name",)),
+    "restore_room_items": ("location", ("location_id",)),
 }
 
 
@@ -1254,14 +1637,18 @@ def _target_of(inv: Dict[str, Any]) -> Optional[Tuple[str, str]]:
     value: Any = inv
     for key in spec[1]:
         value = value.get(key) if isinstance(value, dict) else None
+    if isinstance(value, list):
+        value = value[0] if value else None
     return (spec[0], str(value)) if value else None
 
 
 def is_complete(skipped: List[Dict[str, Any]]) -> bool:
-    """True when every skip is ``already gone`` / ``not written`` or an
-    informational occupant record (key ``occupant``), or there is none."""
+    """True when every skip is ``already gone`` / ``not written``, an
+    informational occupant record (key ``occupant``) or a refused
+    re-creation of the run's own element (key ``net_absent``), or there is
+    none."""
     return all(s.get("reason") in (REASON_GONE, REASON_NOT_WRITTEN)
-               or "occupant" in s for s in skipped or [])
+               or "occupant" in s or s.get("net_absent") for s in skipped or [])
 
 
 def _exists(target: Tuple[str, str]) -> bool:
@@ -1274,8 +1661,339 @@ def _exists(target: Tuple[str, str]) -> bool:
         return get_area(ident) is not None
     if kind == "height":
         return _height_area(ident) is not None
+    if kind == "world_prop":
+        return world_prop_row(ident) is not None
+    if kind == "terrain_type":
+        return terrain_type_row(ident) is not None
+    if kind == "item":
+        return item_row(ident) is not None
     from app.models.character import character_row_exists
     return character_row_exists(ident)
+
+
+def _run_cleared_uses(entries: List[Dict[str, Any]], foreign: set
+                      ) -> Callable[[Tuple[str, str, str], str], bool]:
+    """For :func:`discard_preview`: does the undo itself take a use of a
+    terrain kind away before it reaches the kind? The undo walks newest-first
+    and first reaches the kind at its NEWEST creating entry
+    (``delete_terrain_type``), so only entries NEWER than that one count.
+    True for an area or place a newer entry created (it goes), and for one
+    whose value, after the newer restore entries are walked back newest-first
+    the way the handlers decide (a restore whose written value no longer
+    equals the simulated one is skipped as changed since, the next older one
+    compares against what is left — so a foreign edit between two run edits
+    of one area stops the chain there), no longer names the kind. An
+    area or place created BEFORE the kind still exists when the undo reaches
+    the kind; only a newer restore can clear its use. Everything else is a
+    foreign use."""
+    from app.models.terrain import get_area
+    from app.models.world import get_location_by_id
+    kind_at: Dict[str, int] = {}
+    # Per target, newest-first: (index, op, value written, pre-value).
+    steps: Dict[Tuple[str, str], List[Tuple[int, str, Any, Any]]] = {}
+    for idx, entry in enumerate(entries):  # newest-first
+        inv = entry.get("inverse") or {}
+        op = str(inv.get("op") or "")
+        target = _target_of(inv)
+        if target is None or target in foreign:
+            continue
+        if op == "delete_terrain_type":
+            kind_at.setdefault(str(inv.get("kind") or ""), idx)
+        elif op in ("delete_terrain_area", "delete_location"):
+            steps.setdefault(target, []).append((idx, "created", None, None))
+        elif op == "restore_terrain_area":
+            steps.setdefault(target, []).append(
+                (idx, "restore", entry.get("written"), inv.get("row") or {}))
+        elif op == "restore_location" and "terrain" in (inv.get("before") or {}):
+            steps.setdefault(target, []).append(
+                (idx, "restore", (entry.get("written") or {}).get("terrain"),
+                 (inv.get("before") or {}).get("terrain")))
+
+    def uses(row: Any, kind: str) -> bool:
+        row = row if isinstance(row, dict) else {}
+        meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+        return kind in (str(row.get("kind") or "").strip(),
+                        str(meta.get("bed_kind") or "").strip())
+
+    def clears(user: Tuple[str, str, str], kind: str) -> bool:
+        target = (user[0], user[1])
+        limit = kind_at.get(kind, len(entries))
+        newer = [s for s in steps.get(target, ()) if s[0] < limit]
+        if any(s[1] == "created" for s in newer):
+            return True
+        restores = [s for s in newer if s[1] == "restore"]
+        if not restores:
+            return False
+        if user[0] == "terrain":
+            value: Any = get_area(user[1])
+        else:
+            value = (get_location_by_id(user[1]) or {}).get("terrain", ABSENT)
+        for _idx, _op, written, before in restores:  # newest-first
+            if written is not None and _norm(value) != _norm(written):
+                continue  # changed since: the handler skips it
+            value = before
+        if user[0] == "terrain":
+            return not uses(value, kind)
+        return is_absent(value) or str(value or "").strip() != kind
+    return clears
+
+
+def _recreated_kind_users(entries: List[Dict[str, Any]], foreign: set,
+                          kind: str) -> List[Tuple[str, str, str]]:
+    """For :func:`discard_preview`: the uses of a terrain kind that are NOT
+    stored now but that the undo brings back before it reaches the kind — a
+    foreign area this run deleted (``recreate_terrain_area``, delete_area) in
+    an entry NEWER than the kind's newest creating entry. The undo walks
+    newest-first: it re-creates the area (absent now, so the re-creation runs),
+    walks the area's older restore entries back (one whose ``written`` no
+    longer equals the simulated row is skipped: changed since), and then
+    reaches the kind, which it skips as in use — unless an older creating
+    entry of this run (``delete_terrain_area``) deletes the area again before
+    the kind. Same triples as :func:`terrain_kind_users`."""
+    limit = next((i for i, e in enumerate(entries)
+                  if (e.get("inverse") or {}).get("op") == "delete_terrain_type"
+                  and str((e.get("inverse") or {}).get("kind") or "") == kind),
+                 len(entries))
+    out: List[Tuple[str, str, str]] = []
+    seen: set = set()
+    for i in range(limit):
+        inv = entries[i].get("inverse") or {}
+        if inv.get("op") != "recreate_terrain_area":
+            continue
+        target = _target_of(inv)
+        if target is None or target in foreign or target in seen:
+            continue
+        seen.add(target)
+        if _exists(target):
+            continue  # stored: counted by terrain_kind_users (or never deleted)
+        value: Any = inv.get("row") or {}
+        gone = False
+        for j in range(i + 1, limit):
+            older = entries[j]
+            oinv = older.get("inverse") or {}
+            if _target_of(oinv) != target:
+                continue
+            if oinv.get("op") == "delete_terrain_area":
+                gone = True
+                break
+            if oinv.get("op") == "restore_terrain_area":
+                written = older.get("written")
+                if written is None or _norm(value) == _norm(written):
+                    value = oinv.get("row") or {}
+        if gone:
+            continue
+        meta = value.get("meta") if isinstance(value.get("meta"), dict) else {}
+        if str(value.get("kind") or "").strip() == kind:
+            out.append(("terrain", target[1], f"terrain area {target[1]}"))
+        elif str(meta.get("bed_kind") or "").strip() == kind:
+            out.append(("terrain", target[1], f"terrain area {target[1]} (its water bed)"))
+    return out
+
+
+def _item_kept_by(iid: str, entries: List[Dict[str, Any]], foreign: set,
+                  deleted_names: set, created: Dict[str, str],
+                  removed_rooms: Dict[str, Dict[str, str]],
+                  sim_places: Optional[Dict[str, Optional[Dict[str, Any]]]] = None
+                  ) -> List[str]:
+    """Who still holds a created item once the undo has taken back what it
+    takes back — simulated the way the handlers decide, newest-first over
+    the run's not-undone entries: a character the discard deletes and a
+    room of a created place (or one a restore_location removes) let go of
+    it; an inventory entry walks back through the run's restore_inventory
+    rows of it (one whose entry no longer equals what it wrote is skipped:
+    changed since), a room's items through its restore_room_items rows the
+    same way. Order does not matter: an item the walk reaches while an OLDER
+    holder of the run still has it is deleted by undo()'s final cleanup pass. A target the discard leaves alone (foreign) keeps its holding.
+    What remains is the holder list :func:`_cleanup_items` will find."""
+    from app.core.db import get_connection
+    from app.models.world import list_locations
+    kept: List[str] = []
+    rows = get_connection().execute(
+        "SELECT DISTINCT character_name FROM inventory_items WHERE item_id=?",
+        (iid,)).fetchall()
+    for holder in sorted(str(r[0] or "").strip() for r in rows):
+        if not holder or holder in deleted_names:
+            continue
+        cur: Any = inventory_entries(holder).get(iid, ABSENT)
+        if ("character", holder) not in foreign:
+            for entry in entries:
+                inv = entry.get("inverse") or {}
+                before = inv.get("before") or {}
+                if (inv.get("op") != "restore_inventory"
+                        or str(inv.get("name") or "") != holder or iid not in before):
+                    continue
+                written = entry.get("written")
+                if (isinstance(written, dict) and iid in written
+                        and _norm(cur) != _norm(written[iid])):
+                    continue
+                if is_absent(cur):
+                    continue
+                cur = (ABSENT if is_absent(before[iid])
+                       else dict(cur, quantity=before[iid]))
+        if not is_absent(cur):
+            kept.append(f'character "{holder}"')
+    for loc in list_locations() or []:
+        lid = str(loc.get("id") or "")
+        for room in loc.get("rooms") or []:
+            if not isinstance(room, dict):
+                continue
+            rid = str(room.get("id") or "")
+            cur = room_items_value(room)
+            if iid not in _item_ids(cur) or lid in created or rid in removed_rooms.get(lid, {}):
+                continue
+            if ("location", lid) not in foreign:
+                for entry in entries:
+                    inv = entry.get("inverse") or {}
+                    if (inv.get("op") != "restore_room_items"
+                            or str(inv.get("location_id") or "") != lid
+                            or str(inv.get("room_id") or "") != rid):
+                        continue
+                    written = entry.get("written")
+                    if written is not None and _norm(cur) != _norm(written):
+                        continue
+                    cur = inv.get("before", ABSENT)
+            if iid in _item_ids(cur):
+                kept.append(f'room {rid} "{room.get("name") or rid}" of location {lid}')
+    # A place naming it as its knowledge item (as the undo leaves the place:
+    # sim_places holds the run's restore_location rows walked back) — a
+    # created place goes with the discard.
+    sims = sim_places or {}
+    places = [sims[str(loc.get("id") or "")] if str(loc.get("id") or "") in sims else loc
+              for loc in list_locations() or []]
+    for loc in _knowledge_holders(iid, [p for p in places if p]):
+        lid = str(loc.get("id") or "")
+        if lid not in created:
+            kept.append(f'location {lid} "{loc.get("name") or lid}" (its knowledge item)')
+    return kept
+
+
+def _run_removed_rooms(entries: List[Dict[str, Any]], foreign: set
+                       ) -> Tuple[Dict[str, Dict[str, str]], Dict[str, Optional[Dict[str, Any]]]]:
+    """For :func:`discard_preview`: ``({location id: {room id: name}},
+    {location id: simulated row})`` — the rooms the undo's restore_location
+    rows really take away, and each touched place as the undo leaves it. Simulated
+    the way the handlers decide, newest-first over the run's not-undone
+    entries on a copy of each place: a restore_room_items row puts its
+    room's items back when they still equal what it wrote
+    (:func:`_undo_restore_room_items`), and a restore_location restores only
+    the keys whose current value equals what it wrote (:func:`_split_keys`,
+    as :func:`_undo_restore_location` does) — a rooms / map3d key changed
+    since (a foreign edit, e.g. an item laid into a room the run added)
+    removes nothing. The removal itself is simulated with the writer's
+    corridor sync (``world_dev_tools._rooms_removed_by``)."""
+    from app.core.world_dev_tools import _rooms_removed_by
+    from app.models.world import get_location_by_id
+    sims: Dict[str, Optional[Dict[str, Any]]] = {}
+    removed: Dict[str, Dict[str, str]] = {}
+    for entry in entries:  # newest-first, as undo() walks them
+        inv = entry.get("inverse") or {}
+        op = inv.get("op")
+        if op == "restore_location":
+            lid = str(inv.get("id") or "")
+        elif op == "restore_room_items":
+            lid = str(inv.get("location_id") or "")
+        else:
+            continue
+        if not lid or ("location", lid) in foreign:
+            continue
+        if lid not in sims:
+            sims[lid] = copy.deepcopy(get_location_by_id(lid))
+        cur = sims[lid]
+        if not cur:
+            continue
+        written = entry.get("written")
+        if op == "restore_room_items":
+            rid = str(inv.get("room_id") or "")
+            room = next((r for r in cur.get("rooms") or []
+                         if isinstance(r, dict) and r.get("id") == rid), None)
+            if room is None or (written is not None
+                                and _norm(room_items_value(room)) != _norm(written)):
+                continue
+            before = inv.get("before", ABSENT)
+            if is_absent(before):
+                room.pop("items", None)
+            else:
+                room["items"] = copy.deepcopy(before)
+            continue
+        restore, _changed = _split_keys(inv.get("before") or {}, written, cur)
+        if "rooms" in restore or "map3d" in restore:
+            b_rooms = restore.get("rooms", ABSENT)
+            b_map3d = restore.get("map3d", ABSENT)
+            new_rooms = (None if "rooms" not in restore
+                         else [] if is_absent(b_rooms) else list(b_rooms or []))
+            new_map3d = (None if "map3d" not in restore or is_absent(b_map3d)
+                         else b_map3d)
+            for room in _rooms_removed_by(cur, new_rooms, new_map3d):
+                rid = str(room.get("id") or "")
+                removed.setdefault(lid, {})[rid] = str(room.get("name") or rid)
+        _apply_keys(cur, restore)
+    return removed, sims
+
+
+class _OrderSim:
+    """The discard preview's model of the area rowids, so it can say up front
+    which re-created area _check_order will report as an inexact paint order.
+    It applies terrain.order_tie_rule (and sqlite's: an insert without a
+    rowid takes the largest one + 1) to the rows as the undo, walking
+    newest-first, will find them — areas the undo deleted or re-created
+    before included."""
+
+    def __init__(self) -> None:
+        self.rows: Dict[str, Dict[str, Tuple[int, str, Optional[int]]]] = {}
+
+    def _table(self, kind: str) -> Dict[str, Tuple[int, str, Optional[int]]]:
+        if kind not in self.rows:
+            if kind == "terrain":
+                from app.models.terrain import area_order_rows
+                self.rows[kind] = {r["id"]: (r["rowid"], r["created_at"], r["z_order"])
+                                   for r in area_order_rows()}
+            else:
+                from app.models.heightfield import height_area_order_rows
+                self.rows[kind] = {r["id"]: (r["rowid"], r["created_at"], None)
+                                   for r in height_area_order_rows()}
+        return self.rows[kind]
+
+    def delete(self, kind: str, aid: str) -> None:
+        self._table(kind).pop(aid, None)
+
+    def recreate(self, kind: str, aid: str, order: Any, z: Optional[int]) -> bool:
+        """Re-insert ``aid`` the way restore_area would; True = exact order."""
+        rows = self._table(kind)
+        known = isinstance(order, dict)
+        old = order.get("rowid") if known else None
+        # An entry without `order` is stamped "now": it ties with nothing.
+        created = str(order.get("created_at") or "") if known else "\uffff"
+        from app.models.terrain import order_tie_rule
+        used = {v[0] for k, v in rows.items() if k != aid}
+        if known and isinstance(old, int) and old not in used:
+            new = old
+        else:
+            new = max(used, default=0) + 1
+        sibs = [(k, v[0]) for k, v in rows.items()
+                if k != aid and v[1] == created and (z is None or v[2] == z)]
+        tie = order_tie_rule(sibs, order if known else {}, new)
+        rows[aid] = (new, created, z)
+        return known and not tie
+
+
+def _order_preview_line(sim: _OrderSim, op: str, inv: Dict[str, Any]) -> Optional[str]:
+    """The line for a deleted area the discard re-creates but cannot put back
+    at its old place in the paint order — what _check_order will report."""
+    row = inv.get("row") or {}
+    aid = str(row.get("id") or "")
+    if op == "recreate_terrain_area":
+        try:
+            z = int(row.get("z_order") or 0)
+        except (TypeError, ValueError):
+            z = 0
+        exact, label = sim.recreate("terrain", aid, inv.get("order"), z), "terrain area"
+    elif op == "recreate_height_area":
+        exact, label = sim.recreate("height", aid, inv.get("order"), None), "height area"
+    else:
+        return None
+    if exact:
+        return None
+    return f"{label} {aid} comes back, but not at its old place in the paint order"
 
 
 def discard_preview(run_id: str) -> List[str]:
@@ -1293,8 +2011,24 @@ def discard_preview(run_id: str) -> List[str]:
     owns it (deleted and created again by the run): then it goes, decided
     by the same newest-first walk as :func:`undo`. A created character's
     line also counts the outfit pieces it brought that are still in the
-    catalog (", N outfit pieces it brought" — "piece" for 1 — left out at 0)."""
-    from app.core.world_dev_tools import _rooms_removed_by
+    catalog (", N outfit pieces it brought" — "piece" for 1 — left out at 0).
+    A world prop placed by the run and edited by somebody else since (its
+    row differs from what the creating step wrote) is left alone by the
+    undo (``changed since``): one "was changed since" line, not a going
+    line. A terrain kind the run created is listed as
+    ``terrain kind <kind> "<name>"``; when an area or place the undo does
+    not take away still uses it (see :func:`_run_cleared_uses`) — or a
+    deleted area the undo brings back first (:func:`_recreated_kind_users`) —, the line
+    says so and that it stays — the undo skips it (changed since, in use).
+    A kind changed since is one "was changed since" line, like a world prop.
+    An item the run created is listed as ``item <id> "<name>"``; when a
+    holder the undo does not take back still has it (:func:`_item_kept_by`),
+    the line names the holders and that it stays — the undo skips it (item
+    still in use). A deleted area the discard re-creates whose old rowid was
+    taken meanwhile by a sibling of the same paint-order stamp gets one
+    "comes back, but not at its old place in the paint order" line — the undo
+    reports it as inexact (paint order)."""
+    from app.core.world_dev_tools import _kind_label
     from app.models.character import character_row_exists, list_character_places
     from app.models.chat import count_messages_involving
     from app.models.memory import count_other_memories_naming
@@ -1316,7 +2050,12 @@ def discard_preview(run_id: str) -> List[str]:
     # (a newer creating entry owns the name) is not foreign: it goes.
     foreign: set = set()
     alive: Dict[Tuple[str, str], bool] = {}
+    # World props only: the row the simulation holds per target (the real
+    # one, or the snapshot a simulated re-creation brings back) — the undo of
+    # a creating step compares it with what the step wrote (changed since).
+    prop_rows: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {}
     items_of: Dict[str, set] = {}
+    order_sim = _OrderSim()
     for entry in entries:
         inv = entry.get("inverse") or {}
         op = str(inv.get("op") or "")
@@ -1325,24 +2064,57 @@ def discard_preview(run_id: str) -> List[str]:
             continue
         if target not in alive:
             alive[target] = _exists(target)
+            if target[0] == "world_prop":
+                prop_rows[target] = world_prop_row(target[1])
+            elif target[0] == "terrain_type":
+                prop_rows[target] = terrain_type_row(target[1])
         if op.startswith("recreate_"):
             if not alive[target]:
                 alive[target] = True
+                line = _order_preview_line(order_sim, op, inv)
+                if line:
+                    lines.append(line)
+                if op in ("recreate_world_prop", "recreate_terrain_type"):
+                    prop_rows[target] = inv.get("row")
             elif entry.get("state") == "done":
                 foreign.add(target)
-                lines.append(f"{target[0]} {target[1]} was deleted by this run and "
+                lines.append(f"{_kind_label(target[0])} {target[1]} was deleted by this run and "
                              "exists again — the discard leaves it alone")
             # pending and present: the delete never ran — nothing to do.
         elif op.startswith("delete_"):
+            if op == "delete_world_prop" and alive[target]:
+                # _undo_delete_world_prop leaves a row edited since alone.
+                written = entry.get("written")
+                now = prop_rows.get(target)
+                if written is not None and _norm(now) != _norm(written):
+                    foreign.add(target)
+                    lines.append(f"world prop {target[1]} "
+                                 f"({(now or {}).get('prop_id')}) was changed since "
+                                 "— the discard leaves it alone")
+                    continue
+            if op == "delete_terrain_type" and alive[target]:
+                # _undo_delete_terrain_type leaves a row edited since alone.
+                written = entry.get("written")
+                now = prop_rows.get(target)
+                if written is not None and _norm(now) != _norm(written):
+                    foreign.add(target)
+                    lines.append(f"terrain kind {target[1]} was changed since "
+                                 "— the discard leaves it alone")
+                    continue
             if op == "delete_character":
                 if (entry.get("state") == "pending" and entry.get("written") is None
                         and not inv.get("claimed")):
                     continue  # nothing written (see _undo_delete_character)
                 items_of.setdefault(target[1], set()).update(
                     str(i) for i in inv.get("items") or [] if i)
+            if op in ("delete_terrain_area", "delete_height_area") and alive[target]:
+                order_sim.delete("terrain" if op == "delete_terrain_area" else "height",
+                                 target[1])
             alive[target] = False
     from app.models.inventory import get_item
+    clears = _run_cleared_uses(entries, foreign)
     listed: set = set()
+    item_lines: List[Tuple[int, str, str]] = []
     for entry in reversed(entries):
         inv = entry.get("inverse") or {}
         op = inv.get("op")
@@ -1350,7 +2122,8 @@ def discard_preview(run_id: str) -> List[str]:
         if target in foreign:
             continue
         if op in ("delete_location", "delete_terrain_area", "delete_height_area",
-                  "delete_character"):
+                  "delete_character", "delete_world_prop", "delete_terrain_type",
+                  "delete_items"):
             # A target created, deleted and created again by this run has
             # several creating entries: one line.
             if target in listed:
@@ -1361,23 +2134,6 @@ def discard_preview(run_id: str) -> List[str]:
             if loc:
                 created[str(loc.get("id"))] = str(loc.get("name") or "")
                 lines.append(f'location {loc.get("id")} "{loc.get("name") or ""}"')
-        elif op == "restore_location":
-            before = inv.get("before") or {}
-            if "rooms" not in before and "map3d" not in before:
-                continue
-            lid = str(inv.get("id") or "")
-            cur = get_location_by_id(lid) if lid else None
-            if not cur:
-                continue
-            b_rooms = before.get("rooms", ABSENT)
-            b_map3d = before.get("map3d", ABSENT)
-            new_rooms = (None if "rooms" not in before
-                         else [] if is_absent(b_rooms) else list(b_rooms or []))
-            new_map3d = (None if "map3d" not in before or is_absent(b_map3d)
-                         else b_map3d)
-            for room in _rooms_removed_by(cur, new_rooms, new_map3d):
-                rid = str(room.get("id") or "")
-                removed_rooms.setdefault(lid, {})[rid] = str(room.get("name") or rid)
         elif op == "delete_terrain_area":
             area = get_area(str(inv.get("id") or ""))
             if area:
@@ -1386,6 +2142,32 @@ def discard_preview(run_id: str) -> List[str]:
             area = _height_area(str(inv.get("id") or ""))
             if area:
                 lines.append(f"height area {area['id']} ({area.get('height_m')} m)")
+        elif op == "delete_world_prop":
+            prop = world_prop_row(str(inv.get("id") or ""))
+            if prop:
+                lines.append(f"world prop {prop['id']} ({prop.get('prop_id')})")
+        elif op == "delete_items":
+            for iid in inv.get("ids") or []:
+                irow = item_row(str(iid or ""))
+                if irow:
+                    # Decided after the walk: who still holds it depends on
+                    # the created places/characters collected here.
+                    item_lines.append((len(lines), str(irow.get("id")),
+                                       str(irow.get("name") or "")))
+                    lines.append("")
+        elif op == "delete_terrain_type":
+            kind = str(inv.get("kind") or "")
+            trow = terrain_type_row(kind)
+            if trow:
+                head = f'terrain kind {kind} "{trow.get("name") or kind}"'
+                users = ([u for u in terrain_kind_users(kind) if not clears(u, kind)]
+                         + _recreated_kind_users(entries, foreign, kind))
+                if users:
+                    # _undo_delete_terrain_type skips it (changed since, in use).
+                    from app.core.world_dev_tools import _kind_users_text
+                    head += (" is still used by " + _kind_users_text(users)
+                             + " — the discard leaves it")
+                lines.append(head)
         elif op == "delete_character":
             name = str(inv.get("name") or "")
             if (entry.get("state") == "pending" and entry.get("written") is None
@@ -1401,6 +2183,17 @@ def discard_preview(run_id: str) -> List[str]:
                              f"{mems} memory rows of other characters name it"
                              + (f", {pieces} outfit piece{'' if pieces == 1 else 's'} it brought"
                                 if pieces else ""))
+    # The rooms a restore_location really takes away (one whose rooms /
+    # map3d changed since is skipped by the handler and removes nothing).
+    sim_removed, sim_places = _run_removed_rooms(entries, foreign)
+    removed_rooms.update(sim_removed)
+    for at, iid, iname in item_lines:
+        holders = _item_kept_by(iid, entries, foreign, deleted_names, created,
+                                removed_rooms, sim_places)
+        # _undo_delete_items skips an item still held (item still in use).
+        lines[at] = (f'item {iid} "{iname}"'
+                     + (" is still held by " + ", ".join(holders) + " — stays"
+                        if holders else ""))
     if created or removed_rooms:
         for name, (lid, room) in sorted(list_character_places().items()):
             if name in deleted_names:

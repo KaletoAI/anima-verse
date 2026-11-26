@@ -75,7 +75,7 @@ from app.core.log import get_logger
 logger = get_logger("world_dev_agent")
 
 #: Per-TURN budgets (each turn of a run gets them in full).
-DEFAULT_MAX_STEPS = 40
+DEFAULT_MAX_STEPS = 60
 DEFAULT_MAX_TOKENS_TOTAL = 600_000
 #: Start of the note of a turn cut off by its budget (work kept).
 BUDGET_NOTE_PREFIX = "budget reached ("

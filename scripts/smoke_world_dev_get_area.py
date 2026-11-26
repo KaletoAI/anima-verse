@@ -84,20 +84,25 @@ R, S1, S2, S3:
       polygon of 800 points [100.11 + i, 496.22] for i = 0..399 then
       [100.11 + (399-j), 504.22] for j = 0..399. Each point is
       "[ddd.11,50d.22]" = 15 characters. Head 'terrain ta_road water z_order
-      0' = 31, so 11889 characters are left (12000 - 80 - 31). Stroke line
-      'stroke: width_m 8 points ' (25) + 400*15 + 399 + 2 = 6426 <= 11888 ->
-      WHOLE. Left for the polygon: 11889 - 6427 = 5462, line budget 5461.
+      0' = 31. A water area carries the extras line 'water: water_level=0'
+      (WATER LINE below) = 20 characters + newline, reserved first, so
+      12000 - 80 - 31 - 21 = 11868 characters are left. Stroke line
+      'stroke: width_m 8 points ' (25) + 400*15 + 399 + 2 = 6426 <= 11867 ->
+      WHOLE. Left for the polygon: 11868 - 6427 = 5441, line budget 5440.
       Prefix 'polygon (800 points): ' = 22; n points take 22 + 1 + 15n +
-      (n - 1) + 3 = 25 + 16n <= 5461 -> n = 339 (line length 5449). Result:
-      head, the whole stroke line, 'polygon (800 points): [' + the first 339
-      polygon points + ',…]', then '[cut — polygon: 339 of 800 points shown]'.
+      (n - 1) + 3 = 25 + 16n <= 5440 -> n = 338 (line length 5433). Result:
+      head, the whole stroke line, 'polygon (800 points): [' + the first 338
+      polygon points + ',…]', the water line, then
+      '[cut — polygon: 338 of 800 points shown]'.
+      (Before the extras lines existed (Task 6 of the phase-2 plan): 339
+      points, line 5449.)
   (h) optional stroke keys: area ta_brook, kind "water", stroke {points
       [[5,5],[15,5],[25,8]], width_m 3, style "wavy", spacing_m 6,
       amplitude_m 1.5} (all inside terrain's clamps 2..100 / 0.5..30, so
       stored as given), polygon [[5,3],[25,3],[25,10],[5,10]] -> line 2 is
       'stroke: width_m 3 style wavy spacing_m 6 amplitude_m 1.5 points
       [[5,5],[15,5],[25,8]]', line 3 'polygon (4 points):
-      [[5,3],[25,3],[25,10],[5,10]]', no cut line.
+      [[5,3],[25,3],[25,10],[5,10]]', line 4 the water line, no cut line.
   (i) a label with double quotes is printed with single ones: label
       'a "q" line' on S1 -> get_area head 'terrain ta_sq1 grass "a 'q' line"
       z_order 0'.
@@ -107,18 +112,30 @@ R, S1, S2, S3:
       for i = 0..1023 (MAX_STROKE_POINTS), width_m 8}, polygon of 2048
       points [3000.11 + i, 4000.22] (i = 0..2047). Head
       'terrain ta_fill water "' + 80 + '" z_order 0' = 22 + 1 + 80 + 1 + 10
-      = 114, so 12000 - 80 - 114 = 11806 are left. The shortest polygon
+      = 114; the water line (20 + newline) is reserved, so
+      12000 - 80 - 114 - 21 = 11785 are left. The shortest polygon
       line 'polygon (2048 points): […]' (26) plus its newline (27) is
-      reserved, so the stroke line budget is 11806 - 1 - 27 = 11778. Every
+      reserved, so the stroke line budget is 11785 - 1 - 27 = 11757. Every
       stroke point is "[dddd.11,2000.22]" = 17 characters; prefix
       'stroke: width_m 8 points ' = 25; n points take 25 + 1 + 17n + (n - 1)
-      + 3 = 28 + 18n <= 11778 -> n = 652 (line 11764). Left for the polygon
-      11806 - 11765 = 41, line budget 40: one point would take 23 + 1 + 17
-      + 3 = 44 > 40, so the line is 'polygon (2048 points): […]'. Cut line
-      '[cut — stroke: 652 of 1024 points shown; polygon: 0 of 2048 points
-      shown]' = 7 + 32 + 2 + 31 + 1 = 73. Total 114 + 1 + 11764 + 1 + 26 + 1
-      + 73 = 11980 <= 12000. (The code before this fix budgeted the stroke
-      without the reserve: 654 points, line 11800, total 12016.)
+      + 3 = 28 + 18n <= 11757 -> n = 651 (line 11746). Left for the polygon
+      11785 - 11747 = 38, line budget 37: one point would take 23 + 1 + 17
+      + 3 = 44 > 37, so the line is 'polygon (2048 points): […]'. Then the
+      water line; cut line '[cut — stroke: 651 of 1024 points shown;
+      polygon: 0 of 2048 points shown]' = 7 + 32 + 2 + 31 + 1 = 73. Total
+      114 + 1 + 11746 + 1 + 26 + 1 + 20 + 1 + 73 = 11983 <= 12000. (The code
+      before the reserve for the polygon line: 654 points, total 12016;
+      before the extras lines: 652 points, line 11764, total 11980.)
+  WATER LINE: every "water" fixture here is saved through terrain.save_area
+      without a level, so terrain.settle_water_level freezes water_level =
+      the median natural height along its rim — 0 on this flat temp world (no
+      height area reaches those rims when they are saved: H, whose falloff
+      reaches down to z 50.5, is saved AFTER R; the other water fixtures lie
+      far from H). get_area
+      therefore ends such an area with 'water: water_level=0' (_g(0.0) = "0")
+      after the polygon line and before a cut line (Task 6 of the phase-2
+      plan, docs/superpowers/plans/2026-11-25-world-dev-free-p2-buildings-
+      terrain.md).
   (k) map_region outlines keep every stored decimal: ta_far, kind "grass",
       polygon [[12345.67,54321.12],[12349.67,54321.12],[12349.67,54325.12]]
       in box (12000,54000)-(13000,55000) -> the line ends
@@ -237,7 +254,7 @@ check("(b) full stroke first", len(out) > 1
       out[1][:120] if len(out) > 1 else None)
 check("(b) full polygon", len(out) > 2 and out[2] == "polygon (300 points): " + FMT(R_POLY),
       out[2][:120] if len(out) > 2 else None)
-check("(b) three lines", len(out) == 3, len(out))
+check("(b) water line last", len(out) == 4 and out[3] == "water: water_level=0", out[3:])
 check("(b) no cut", "[cut" not in res.line)
 check("(b) journalled as read", wr.steps(run)[-1]["kind"] == "read", wr.steps(run)[-1]["kind"])
 
@@ -308,9 +325,11 @@ check("(g) whole stroke line", len(out) > 1
       and len(out[1]) == 6426, out[1][:80] if len(out) > 1 else None)
 check("(g) polygon cut on point 339", len(out) > 2
       and out[2] == "polygon (800 points): [" + ",".join(
-          f"[{num(x)},{num(z)}]" for x, z in G_POLY[:339]) + ",…]"
-      and len(out[2]) == 5449, out[2][-60:] if len(out) > 2 else None)
-check("(g) cut line", len(out) == 4 and out[3] == "[cut — polygon: 339 of 800 points shown]",
+          f"[{num(x)},{num(z)}]" for x, z in G_POLY[:338]) + ",…]"
+      and len(out[2]) == 5433, out[2][-60:] if len(out) > 2 else None)
+check("(g) water line, then the cut line", len(out) == 5
+      and out[3] == "water: water_level=0"
+      and out[4] == "[cut — polygon: 338 of 800 points shown]",
       out[3:] if len(out) > 3 else None)
 check("(g) within the budget", len(res.line) <= 12000, len(res.line))
 
@@ -327,7 +346,7 @@ check("(h) stroke with optional keys", len(out) > 1 and out[1] ==
       "[[5,5],[15,5],[25,8]]", out[1:2])
 check("(h) polygon", len(out) > 2 and out[2] == "polygon (4 points): [[5,3],[25,3],[25,10],[5,10]]",
       out[2:3])
-check("(h) no cut line", len(out) == 3, out)
+check("(h) water line, no cut line", len(out) == 4 and out[3] == "water: water_level=0", out)
 
 # (i)
 sq1 = terrain.get_area(SQ[0][0])
@@ -345,16 +364,17 @@ terrain.save_area({"id": "ta_fill", "kind": "water", "polygon": J_POLY,
 res = wt.run_tool(ctx, "get_area", {"id": "ta_fill"})
 out = res.line.split("\n")
 check("(j) head 114", len(out[0]) == 114, len(out[0]))
-check("(j) stroke cut on point 652", len(out) > 1
+check("(j) stroke cut on point 651", len(out) > 1
       and out[1] == "stroke: width_m 8 points [" + ",".join(
-          f"[{num(x)},{num(z)}]" for x, z in J_STROKE[:652]) + ",…]"
-      and len(out[1]) == 11764, len(out[1]) if len(out) > 1 else None)
+          f"[{num(x)},{num(z)}]" for x, z in J_STROKE[:651]) + ",…]"
+      and len(out[1]) == 11746, len(out[1]) if len(out) > 1 else None)
 check("(j) empty polygon line", len(out) > 2 and out[2] == "polygon (2048 points): […]",
       out[2:3])
-check("(j) cut line", len(out) == 4 and out[3]
-      == "[cut — stroke: 652 of 1024 points shown; polygon: 0 of 2048 points shown]",
+check("(j) water line, then the cut line", len(out) == 5
+      and out[3] == "water: water_level=0" and out[4]
+      == "[cut — stroke: 651 of 1024 points shown; polygon: 0 of 2048 points shown]",
       out[3:])
-check("(j) total 11980 <= 12000", len(res.line) == 11980, len(res.line))
+check("(j) total 11983 <= 12000", len(res.line) == 11983, len(res.line))
 
 # (k)
 terrain.save_area({"id": "ta_far", "kind": "grass", "polygon":

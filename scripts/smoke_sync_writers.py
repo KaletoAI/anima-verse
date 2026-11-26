@@ -79,7 +79,7 @@ INVENTORY.update({
     "app/models/terrain.py": ["_bump_terrain_generation"],
     "app/core/terrain_types.py": ["_bump_types_generation"],
     "app/models/world_props.py": ["_bump_world_props_generation"],
-    "app/models/heightfield.py": ["save_height_area", "delete_height_area", "save_height_areas_bulk"],
+    "app/models/heightfield.py": ["save_height_area", "delete_height_area", "save_height_areas_bulk", "restore_height_area"],
     "app/core/scene_recipe.py": ["invalidate_prop_lib_token"],
     "app/core/surface_textures.py": ["_surface_changed"],
     "app/models/thought_store.py": ["add_thought"],

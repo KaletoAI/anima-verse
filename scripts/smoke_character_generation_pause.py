@@ -131,6 +131,9 @@ def main() -> int:
         starts = []
         real_start = figure_build.start
         figure_build._read_profile = lambda _c: {}
+        # The worker skips a character without a row (deleted since the request); these characters exist
+        # only as stubbed views, so they are never "gone".
+        figure_build._character_gone = lambda _c, **_kw: False
         figure_build.on_pipeline = lambda *_a, **_kw: True
         figure_build.auto_build_on = lambda *_a, **_kw: True
         figure_build.start = lambda c, **kw: starts.append((c, kw)) or {"status": "started"}
@@ -150,6 +153,9 @@ def main() -> int:
         real_fire_kinds = model_refs._fire_kinds
         model_refs._fire_kinds = lambda c, kinds, *a, **kw: fired.append((c, kinds))
         model_refs.get_auto_kinds = lambda _c: {"tpose": True, "pose": False}
+        # The timer body re-checks the character's row (a deleted one gets no
+        # render); these characters exist only as stubbed views.
+        model_refs._character_still_exists = lambda _c: True
         model_refs._pending_timers[(A, "tpose")] = SimpleNamespace(timer=threading.current_thread())
         model_refs._fire_kind(A, "tpose")
         check("1b no render", fired, [])

@@ -1321,8 +1321,14 @@ def _kind_lock(key: tuple) -> threading.Lock:
 def _run_generation(character_name: str, kind: str, force: bool = False,
                     tpose_view: Optional[str] = None) -> None:
     # Serial per (character, kind); the equipped state is read at run time,
-    # so the latest outfit always wins.
+    # so the latest outfit always wins. A character deleted since the render
+    # was requested (a World Dev undo of the create included) gets nothing —
+    # neither the render nor the T-pose auto-mesh hook below.
     from app.core.timeutils import utc_now
+    if not _character_still_exists(character_name):
+        logger.info("Model ref render for %s (%s): character deleted — skipped",
+                    character_name, kind)
+        return
     key = (character_name, kind)
     with _lock:
         _running[key] = utc_now()
@@ -1340,7 +1346,7 @@ def _run_generation(character_name: str, kind: str, force: bool = False,
     # hook itself verifies the T-pose file exists for the current
     # combination — a mesh run never starts before its input succeeded.
     # Spawns its own worker; the tpose kind lock is released here.
-    if kind == "tpose":
+    if kind == "tpose" and _character_still_exists(character_name):
         try:
             from app.core.model3d import maybe_auto_generate_for_outfit
             maybe_auto_generate_for_outfit(character_name)

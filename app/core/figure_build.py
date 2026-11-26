@@ -1145,6 +1145,13 @@ def _worker(character_name: str) -> None:
             reason, automatic = queue.popleft()
             refit_item = _refit_items.pop(character_name, "") if reason == REFIT_REASON else ""
             _current[character_name] = {"reason": reason, "step": None, "steps": []}
+        if _character_gone(character_name):
+            # Deleted since the request (a World Dev undo of the create included): neither a Build nor a
+            # re-fit runs, and an automatic Build is not recorded as held for a name without a row.
+            logger.info("Build %s (%s): character deleted — skipped", character_name, reason)
+            with _lock:
+                _current.pop(character_name, None)
+            continue
         if automatic and not refit_item:
             from app.core import generation_pause
             if generation_pause.hold_build(character_name, reason):
@@ -1181,11 +1188,31 @@ def _tracked(character_name: str, label: str):
         return None, ""
 
 
+def _character_gone(character_name: str, *, quiet: bool = False) -> bool:
+    """Whether the character's row is CONFIRMED missing — deleted since the Build was queued (a World Dev undo
+    of the create included). A read error is no verdict (False, logged): treating it as gone would drop the
+    Build of a character that exists (same rule as ``model_refs._character_still_exists``). The worker's
+    check logs a read error as a warning; the re-checks inside ``_run`` pass ``quiet`` (debug), so one
+    Build logs it once."""
+    try:
+        from app.models.character import character_row_exists
+        return not character_row_exists(character_name)
+    except Exception as e:  # noqa: BLE001
+        (logger.debug if quiet else logger.warning)(
+            "Build %s: row check failed, building anyway: %s", character_name, e)
+        return False
+
+
 def _run(character_name: str, reason: str, *, automatic: bool = False) -> None:
     """One Build: re-plan, then every step in order (module docstring). An
     ``automatic`` run reports a cached chain failure without running it; a
-    manual one retries it."""
+    manual one retries it. A character deleted since the request gets nothing — checked by ``_worker``, again
+    before the first hairstyle is minted (which would create an item for a name without a row) and again
+    before the plan."""
     from app.core import garment_hair
+    if _character_gone(character_name, quiet=True):
+        logger.info("Build %s: character deleted — skipped", character_name)
+        return
     try:
         # Hairstyles (plan Task 13): a humanoid without one gets its first, worn, before anything is planned.
         garment_hair.ensure_hairstyle(character_name)
@@ -1193,6 +1220,9 @@ def _run(character_name: str, reason: str, *, automatic: bool = False) -> None:
         logger.info("Build %s: no hairstyle (%s)", character_name, e)
     except Exception as e:  # noqa: BLE001 — a hairstyle that cannot be made never blocks the Build
         logger.warning("Build %s: the first hairstyle was not made: %s", character_name, e)
+    if _character_gone(character_name, quiet=True):
+        logger.info("Build %s: character deleted — skipped", character_name)
+        return
     try:
         profile = _read_profile(character_name)
     except Exception as e:  # noqa: BLE001 — ruling F13 e: failed, never "nothing to build"
@@ -2068,6 +2098,9 @@ def _run_refit(character_name: str, item_id: str) -> None:
     ``state()['failed']['assemble']`` says what Build still has to do (``REFIT_DUE``)."""
     from app.core import figure
     from app.core.timeutils import utc_now_iso
+    if _character_gone(character_name, quiet=True):
+        logger.info("Re-fit %s of %s: character deleted — skipped", item_id, character_name)
+        return
     label = f"Re-fit · {character_name} ({_item_name(item_id)})"
     queue, task_id = _tracked(character_name, label)
     failed: Dict[str, Dict[str, Any]] = {}

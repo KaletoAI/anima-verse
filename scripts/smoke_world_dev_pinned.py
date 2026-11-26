@@ -59,6 +59,22 @@ count among the newest 4.
     smoke_world_dev_agent.py (u) 40 / 600000 (updated in this task); (k)
     there still shrinks world_overview (not pinned) — run them in the
     regression set.
+(h) manual render (plan docs/superpowers/plans/2026-11-25-world-dev-free-p2-buildings-
+    terrain.md, Task 8): read_manual renders each section through the tool's
+    own function (no run needed — the read writes nothing).
+    locations: a "## NPC slots" section naming the seven keys normalize_slot
+    reads besides template/briefing (role, count_min, count_max, when, room,
+    radius_m, character), the count range 0…20 (npc_spawn.normalize_slot
+    _count: max(0, min(20, int(value)))), the "day"/"night"/"HH:MM-HH:MM"
+    windows (npc_windows.normalize_when), when a slot fits versus a full
+    character (create_character), and "there is no fill tool" (E7).
+    map: area slots need a label and take no room / radius_m.
+    characters: one line pointing to slots (npc_slots, read_manual
+    locations) for crowds.
+    Behaviour behind the documented range: the manual's "whole <lo>…<hi>"
+    is parsed, and npc_spawn.normalize_slot must store count_min <hi>+1 as
+    <hi> (min(20, ...) clamps 21 to 20) and count_min -1 as <lo> (max(0, ...)
+    clamps to 0) — so a moved cap in the code no longer matches the text.
 """
 import os
 import sys
@@ -211,6 +227,45 @@ check("(f) chain of three: the newest surviving copy A2 is restored",
       contents(st6) == [superseded(MAN), whole(MAN, "A2")], contents(st6))
 check("(f) chain of three: A1 stays superseded",
       st6.history[0].get("_superseded") is True, st6.history[0])
+
+print("(h) manual render: NPC slots")
+_manual = wt.TOOLS["read_manual"].fn
+
+
+def manual(section):
+    return _manual(None, {"section": section})
+
+
+_loc = manual("locations")
+_sec = _loc.split("## NPC slots", 1)[1].split("\n## ", 1)[0] if "## NPC slots" in _loc else ""
+check("(h) locations has a '## NPC slots' section", bool(_sec), _loc[-400:])
+for _key in ("role", "count_min", "count_max", "when", "room", "radius_m", "character"):
+    check(f"(h) NPC slots names `{_key}`", f"`{_key}`" in _sec)
+check("(h) NPC slots: counts 0…20", "0…20" in _sec, _sec[:400])
+import re  # noqa: E402
+from app.core import npc_spawn  # noqa: E402
+_rng = re.search(r"whole (\d+)…(\d+)", _sec)
+check("(h) NPC slots: the count range is written 'whole <lo>…<hi>'", bool(_rng), _sec[:400])
+if _rng:
+    _lo, _hi = int(_rng.group(1)), int(_rng.group(2))
+    _above = npc_spawn.normalize_slot({"role": "probe", "count_min": _hi + 1}) or {}
+    check(f"(h) normalize_slot: count_min {_hi + 1} is stored as {_hi} (manual's cap)",
+          _above.get("count_min") == _hi, _above)
+    _below = npc_spawn.normalize_slot({"role": "probe", "count_min": _lo - 1}) or {}
+    check(f"(h) normalize_slot: count_min {_lo - 1} is stored as {_lo} (manual's floor)",
+          _below.get("count_min") == _lo, _below)
+check("(h) NPC slots: windows day/night/HH:MM-HH:MM",
+      all(w in _sec for w in ('"day"', '"night"', '"HH:MM-HH:MM"')), _sec[:400])
+check("(h) NPC slots: slot vs full character (create_character)",
+      "create_character" in _sec and "staff" in _sec, _sec[:600])
+check("(h) NPC slots: there is no fill tool", "there is no fill tool" in _sec, _sec[:600])
+_map = manual("map")
+check("(h) map: area slots need a label, no room / radius_m",
+      "npc_slots" in _map and "needs a `label`" in _map
+      and "without `room` and `radius_m`" in _map)
+_chars = manual("characters")
+check("(h) characters: crowds point to npc_slots",
+      "npc_slots" in _chars and "read_manual locations" in _chars)
 
 print()
 if failures:

@@ -25,8 +25,8 @@ Start state: world not frozen, no run.
 
  1. GET /world-dev/schemas (admin) lists {"name": "free", "label": "Free
     (agent)"} (interface list of Task 8).
- 2. GET /world-dev/free/defaults (admin) -> {"max_steps": 40,
-    "max_tokens_total": 300000} (DEFAULT_MAX_STEPS / DEFAULT_MAX_TOKENS_TOTAL
+ 2. GET /world-dev/free/defaults (admin) -> {"max_steps": 60,
+    "max_tokens_total": 600000} (DEFAULT_MAX_STEPS / DEFAULT_MAX_TOKENS_TOTAL
     of world_dev_agent).
  3. player POST /world-dev/free/start -> 403 (router-wide require_admin);
     anonymous -> 401 (default-deny gate). Nothing frozen, no open run.
@@ -255,7 +255,7 @@ def main(c):
 
     r = c.get("/world-dev/free/defaults", headers=ADMIN)
     check("2 defaults", r.status_code == 200
-          and r.json() == {"max_steps": 40, "max_tokens_total": 300000}, r.text)
+          and r.json() == {"max_steps": 60, "max_tokens_total": 600000}, r.text)
 
     body = {"task": "build a pond", "model": "fake-model", "provider": "fake"}
     r = c.post("/world-dev/free/start", headers=USER, json=body)

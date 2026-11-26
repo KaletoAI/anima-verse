@@ -718,7 +718,6 @@ def _map_world_context() -> Tuple[Dict[str, Any], Dict[str, Any], Any, str]:
     in — it is a pure function on purpose, so this is the ONE place that reads
     them out of the world.
     """
-    from app.core import config
     from app.core.location_model3d import derive_plan_width_m
     from app.core.map_layout_apply import current_world_bounds
     from app.core.terrain_types import effective_catalog
@@ -740,7 +739,15 @@ def _map_world_context() -> Tuple[Dict[str, Any], Dict[str, Any], Any, str]:
             "boundary": map3d.get("boundary"),
             "plan_width_m": derive_plan_width_m(loc_id, map3d),
         }
-    default_kind = str(config.get("game.default_terrain_kind", "grass")
-                       or "grass")
     return (effective_catalog(), locations_by_id, current_world_bounds(),
-            default_kind)
+            default_terrain_kind())
+
+
+def default_terrain_kind() -> str:
+    """The terrain kind of ground no area covers (``game.default_terrain_kind``).
+
+    Split out of :func:`_map_world_context` for readers that need only the
+    ground, not every location's outline and the world bounds.
+    """
+    from app.core import config
+    return str(config.get("game.default_terrain_kind", "grass") or "grass")

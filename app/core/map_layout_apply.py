@@ -709,6 +709,93 @@ def _stub_danger(value: Any) -> Optional[int]:
         return None
 
 
+def impassable_warning(entry: Dict[str, Any], ref: str, *,
+                       catalog: Dict[str, Dict[str, Any]],
+                       areas: List[Dict[str, Any]],
+                       default_kind: str) -> Optional[Dict[str, str]]:
+    """The ``on_impassable`` warning of one placement entry, or None.
+
+    ``entry`` needs ``name``, ``pos_x`` and ``pos_z``; ``areas`` are the terrain
+    areas the ground is judged against, bottom-to-top (ascending ``z_order``,
+    the order ``terrain_query.kind_at`` reads — the last containing one wins).
+    A point no area covers stands on ``default_kind``. A kind the catalog does
+    not know counts as walkable.
+    """
+    from app.core.terrain_query import kind_at
+    ground = kind_at(entry["pos_x"], entry["pos_z"], areas=areas,
+                     default_kind=default_kind)
+    if bool((catalog.get(ground) or {}).get("passable", True)):
+        return None
+    return {"code": "on_impassable", "ref": ref,
+            "message": f"'{entry['name']}' stands on {ground!r}, which nobody "
+                       f"can walk on — the place would be unreachable."}
+
+
+def overlap_warnings(placed: Sequence[Dict[str, Any]], *,
+                     others: Sequence[Dict[str, Any]] = ()
+                     ) -> List[Dict[str, str]]:
+    """``footprint_overlap`` warnings, once per PAIR.
+
+    Every pair inside ``placed`` is compared (ref ``locations[<later index>]``),
+    then every ``placed`` entry against every one of ``others`` — places that
+    already stand in the world (ref ``locations[<index in placed>]``). Pairs
+    inside ``others`` are never reported: they are not what is being placed.
+    All entries have the :func:`boundaries_overlap` shape (``name``,
+    ``pos_x``, ``pos_z``, ``yaw_deg``, a drawn ``boundary``). Both sides
+    survive an overlap: overlapping places are legal (a hut on a village
+    square), they are just rarely intended.
+
+    An ``others`` entry that carries an ``id`` puts it into its warnings as
+    ``other_id`` (with ``other_name``), so a caller can name WHICH stored place
+    is in the way; the message text stays the same.
+    """
+    out: List[Dict[str, str]] = []
+    for a_i in range(len(placed)):
+        for b_i in range(a_i + 1, len(placed)):
+            a, b = placed[a_i], placed[b_i]
+            if not boundaries_overlap(a, b):
+                continue
+            _warn(out, "footprint_overlap", f"locations[{b_i}]",
+                  f"'{a['name']}' and '{b['name']}' overlap — their outlines "
+                  f"share ground.")
+    for b_i, b in enumerate(placed):
+        for a in others:
+            if not boundaries_overlap(a, b):
+                continue
+            _warn(out, "footprint_overlap", f"locations[{b_i}]",
+                  f"'{a['name']}' and '{b['name']}' overlap — their outlines "
+                  f"share ground.")
+            if a.get("id"):
+                out[-1]["other_id"] = str(a["id"])
+                out[-1]["other_name"] = str(a.get("name") or "")
+    return out
+
+
+def placement_warnings(entries: Sequence[Dict[str, Any]], *,
+                       catalog: Dict[str, Dict[str, Any]],
+                       areas: List[Dict[str, Any]],
+                       default_kind: str,
+                       others: Sequence[Dict[str, Any]] = ()
+                       ) -> List[Dict[str, str]]:
+    """Both placement checks for entries that are being placed: the
+    ``on_impassable`` warning per entry (ref ``locations[i]``), then the
+    overlaps among them and against ``others`` (:func:`overlap_warnings`).
+    The same two helpers :func:`sanitize_map_layout` runs, so a free tool and
+    the map schema apply the same rules. They are handed different outlines
+    in one case only: a stored place WITHOUT a drawn boundary — the free
+    tools judge it as the :func:`seed_boundary` square, the map schema
+    (``world_dev_apply._map_world_context``) and the renderers give it no area.
+    """
+    out: List[Dict[str, str]] = []
+    for i, entry in enumerate(entries):
+        w = impassable_warning(entry, f"locations[{i}]", catalog=catalog,
+                               areas=areas, default_kind=default_kind)
+        if w is not None:
+            out.append(w)
+    out.extend(overlap_warnings(entries, others=others))
+    return out
+
+
 def sanitize_map_layout(data: Any, *,
                         catalog: Dict[str, Dict[str, Any]],
                         locations_by_id: Dict[str, Dict[str, Any]],
@@ -885,7 +972,6 @@ def sanitize_map_layout(data: Any, *,
     # The draft's own areas are the ground the placement is judged against
     # (never the DB's): the model just drew this water, and a hut it put in
     # the middle of it must be reported even though nothing is painted yet.
-    from app.core.terrain_query import kind_at
     draft_areas = sorted(areas, key=lambda a: a["z_order"])
     placed: List[Dict[str, Any]] = []
     seen_ids: Dict[str, int] = {}
@@ -983,23 +1069,13 @@ def sanitize_map_layout(data: Any, *,
             _warn(warnings, "out_of_bounds", ref,
                   f"'{entry['name']}' stands outside the agreed map bounds.")
 
-        ground = kind_at(entry["pos_x"], entry["pos_z"], areas=draft_areas,
-                         default_kind=default_kind)
-        if not bool((catalog.get(ground) or {}).get("passable", True)):
-            _warn(warnings, "on_impassable", ref,
-                  f"'{entry['name']}' stands on {ground!r}, which nobody can "
-                  f"walk on — the place would be unreachable.")
+        ground_warning = impassable_warning(entry, ref, catalog=catalog,
+                                            areas=draft_areas,
+                                            default_kind=default_kind)
+        if ground_warning is not None:
+            warnings.append(ground_warning)
 
-    # Boundary overlaps, once per PAIR. Both survive: overlapping places are
-    # legal (a hut on a village square), they are just rarely intended.
-    for a_i in range(len(placed)):
-        for b_i in range(a_i + 1, len(placed)):
-            a, b = placed[a_i], placed[b_i]
-            if not boundaries_overlap(a, b):
-                continue
-            _warn(warnings, "footprint_overlap", f"locations[{b_i}]",
-                  f"'{a['name']}' and '{b['name']}' overlap — their outlines "
-                  f"share ground.")
+    warnings.extend(overlap_warnings(placed))
 
     # The ONE hard error besides a non-object: a draft that says nothing at
     # all. A draft whose entries were ALL dropped is not that — it carries a

@@ -188,6 +188,22 @@ def rooms_outside_boundary(layouts: Sequence[Tuple[str, Dict[str, Any]]],
 
 # ── Validation ──────────────────────────────────────────────────────────────
 
+def layout_context(location_id: str) -> Tuple[Dict[str, Any], List[str]]:
+    """(location dict, surface-library kinds) for one layout draft.
+
+    :func:`sanitize_layout` is a pure function on purpose, so this is the ONE
+    place that reads its two world facts out of the world — for the
+    floor-plan routes and the free-mode ``set_room_layout`` tool alike.
+    Raises ValueError for an unknown (or empty) location id.
+    """
+    from app.core.layout_prompt import layout_target
+    from app.core.surface_textures import library_kinds
+    loc = layout_target(location_id)
+    if not loc:
+        raise ValueError(f"no such location: {location_id!r}")
+    return loc, sorted(library_kinds())
+
+
 def _coerce_opening(raw: Any) -> Optional[Dict[str, Any]]:
     """Fill in what the schema lets the model leave out, then hand it on.
 

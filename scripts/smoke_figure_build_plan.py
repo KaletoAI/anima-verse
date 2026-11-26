@@ -210,6 +210,9 @@ def install_stubs():
     # the empty profile the non-strict read gave before — the stubs below never read it.
     from app.core import figure_build
     figure_build._read_profile = lambda c: {}
+    # Same reason for the deleted-character check of ``_run`` (plan 2026-11-25-world-dev-free-p2 Task 1): the
+    # World's Kira exists without a row, so it is never "gone".
+    figure_build._character_gone = lambda c, **_kw: False
     figure._delivered = lambda c, *, profile, pieces=None, items=None, **_kw: (W.wanted(), W.delivered())
     base_skin.enabled = lambda: False
     model3d.mesh_hub_stages = lambda c, sig: ["mesh", "rig"]

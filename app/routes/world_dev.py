@@ -1172,27 +1172,16 @@ def _restore_map_snapshot_sync(data: Any):
 # ("Prop-Welt statt Dioramen", stage 3)
 # ---------------------------------------------------------------------------
 
-def _layout_world_context(location_id: str) -> Tuple[Dict[str, Any],
-                                                     List[str]]:
-    """(location dict, surface-library kinds) for one layout draft.
-
-    ``layout_apply.sanitize_layout`` is a pure function on purpose, so this is
-    the ONE place that reads its two world facts out of the world.
-    """
-    from app.core.surface_textures import library_kinds
-    loc = layout_target(location_id)
-    if not loc:
-        raise HTTPException(status_code=404,
-                            detail=f"no such location: {location_id!r}")
-    return loc, sorted(library_kinds())
-
-
 def _normalize_layout_body(layout_data: Any, location_id: str
                            ) -> Tuple[Dict[str, Any], List[Dict[str, str]]]:
     """Run one raw draft through the sanitizer, turning its hard errors into a
-    400. Used by BOTH preview and apply, so the two can never disagree."""
-    from app.core.layout_apply import sanitize_layout
-    loc, kinds = _layout_world_context(location_id)
+    400 (an unknown location into a 404). Used by BOTH preview and apply, so
+    the two can never disagree."""
+    from app.core.layout_apply import layout_context, sanitize_layout
+    try:
+        loc, kinds = layout_context(location_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     try:
         return sanitize_layout(layout_data, location=loc, surface_kinds=kinds)
     except ValueError as e:

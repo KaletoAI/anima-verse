@@ -139,8 +139,10 @@ Fixture: place P "Demo Pond" (description "calm", room Shore).
     turn 200 (total 400), final -> awaiting_review "Y2 done.". Turn-2 usage
     events carry (turn_tokens, total) = (100, 300), (200, 400); turn_usage =
     {turn 2, steps 1, tokens 200}; run total 400.
-(u) defaults 40 / 300000; message(max_steps=5, max_tokens_total=1000) keeps
-    (40, 300000) = max of each; message(max_steps=50) -> (50, 300000).
+(u) defaults 60 / 600000 (DEFAULT_MAX_STEPS / DEFAULT_MAX_TOKENS_TOTAL, plan
+    2026-11-25 E15); message(max_steps=5, max_tokens_total=1000) keeps
+    (60, 600000) = max of each; message(max_steps=70) -> (70, 600000) — the
+    raise must exceed the default 60 to prove raising.
 (v) world frozen before; set_was_frozen raises "disk full" right after
     create_run -> start raises it, the newest run is rolled_back with
     "disk full" in its note, no LLM call, the world stays frozen (the
@@ -155,6 +157,16 @@ Fixture: place P "Demo Pond" (description "calm", room Shore).
 (x) like (h) with P -> "foreign3", but wr.set_skipped raises during discard:
     the run still closes rollback_incomplete, X1 gone, P keeps "foreign3",
     unfrozen, no open run.
+(z) pinned reads through the loop (plan 2026-11-25 Task 10): turn 1
+    [read_manual{characters}, read_manual{homes}, "Read."] -> awaiting_review;
+    the 3rd LLM call holds two read_manual results, both whole (start
+    "[result read_manual] # Manual"), no stub — so _loop passes the parsed
+    args (with one key "read_manual" + "null" the homes read would supersede
+    the characters read). Turn 2 [read_manual{characters},
+    RuntimeError("down")] -> rolled back (awaiting_review); turn 3 ["ok."]:
+    its LLM call holds exactly two read_manual results again, both whole,
+    none "superseded" (_fail restored the turn-1 copy whose newer copy was
+    cut away).
 Last: every LLM-queue registration was closed (active == done).
 """
 import asyncio
@@ -798,13 +810,13 @@ async def main():
     await settle(rm, run_id)
     await rm.message(run_id, "lower", max_steps=5, max_tokens_total=1000)
     run = await settle(rm, run_id)
-    check("(u) lowering keeps 40 / 300000",
-          (run["max_steps"], run["max_tokens_total"]) == (40, 300000),
+    check("(u) lowering keeps 60 / 600000",
+          (run["max_steps"], run["max_tokens_total"]) == (60, 600000),
           (run["max_steps"], run["max_tokens_total"]))
-    await rm.message(run_id, "raise", max_steps=50)
+    await rm.message(run_id, "raise", max_steps=70)
     run = await settle(rm, run_id)
-    check("(u) raising steps -> 50 / 300000",
-          (run["max_steps"], run["max_tokens_total"]) == (50, 300000),
+    check("(u) raising steps -> 70 / 600000",
+          (run["max_steps"], run["max_tokens_total"]) == (70, 600000),
           (run["max_steps"], run["max_tokens_total"]))
     await rm.discard(run_id)
 
@@ -908,6 +920,36 @@ async def main():
     check("(x) P keeps foreign3", get_location_by_id(P)["description"] == "foreign3")
     check("(x) unfrozen", not is_world_frozen())
     check("(x) no open run", wr.open_run() is None)
+
+    print("(z) pinned reads through the loop")
+    man_c = call("read_manual", '{"section": "characters"}')
+    man_h = call("read_manual", '{"section": "homes"}')
+    rm, fake = manager([man_c, man_h, "Read.", man_c,
+                        RuntimeError("down"), "ok."])
+    run_id = await start(rm)
+    run = await settle(rm, run_id)
+    check("(z) turn 1 awaiting_review", run["status"] == "awaiting_review", run["status"])
+
+    def man_results(msgs):
+        return [m["content"] for m in msgs
+                if m["content"].startswith("[result read_manual]")]
+
+    z1 = man_results(fake.calls[2]) if len(fake.calls) >= 3 else []
+    check("(z) call 3: two whole manual reads",
+          len(z1) == 2 and all(c.startswith("[result read_manual] # Manual") for c in z1),
+          [c[:60] for c in z1])
+    await rm.message(run_id, "again")
+    run = await settle(rm, run_id)
+    check("(z) turn 2 rolled back to review", run["status"] == "awaiting_review"
+          and "down" in (run["note"] or ""), (run["status"], run["note"]))
+    await rm.message(run_id, "go on")
+    await settle(rm, run_id)
+    z3 = man_results(fake.calls[-1]) if len(fake.calls) == 6 else []
+    check("(z) 6 LLM calls", len(fake.calls) == 6, len(fake.calls))
+    check("(z) turn 3: both turn-1 reads whole, none superseded",
+          len(z3) == 2 and all(c.startswith("[result read_manual] # Manual") for c in z3),
+          [c[:60] for c in z3])
+    await rm.discard(run_id)
 
     check("every LLM registration closed", COUNTS["active"] == COUNTS["done"]
           and COUNTS["active"] > 0, COUNTS)

@@ -2797,6 +2797,20 @@ def unequip_mesh_piece(character_name: str, slot: str) -> bool:
 # 4b. CENTRAL EQUIPMENT DIFF
 # ============================================================
 
+def outfit_set_pieces_by_slot(outfit: Dict[str, Any]) -> Dict[str, str]:
+    """An outfit set's pieces as the ``pieces`` argument of
+    :func:`apply_equipped_pieces`: first declared slot -> item id, one entry
+    per piece (the apply sets every mirrored slot from the item's
+    definition). A piece without a declared slot is left out."""
+    pieces_by_slot: Dict[str, str] = {}
+    for pid in (outfit.get("pieces") or []):
+        it = get_item(pid) or {}
+        slots = ((it.get("outfit_piece") or {}).get("slots") or [])
+        if slots:
+            pieces_by_slot[slots[0]] = pid
+    return pieces_by_slot
+
+
 def apply_equipped_pieces(character_name: str, *,
     pieces: Optional[Dict[str, str]] = None,
     items: Optional[List[str]] = None,

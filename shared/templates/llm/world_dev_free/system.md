@@ -11,8 +11,9 @@ anything except through a tool.
 1. **Look** — read only what the task needs (`world_overview` once, then `find_locations`,
    `map_region`, `get_location`, `find_characters`, `get_character` for the parts you touch).
 2. **Plan** — one short list (3–8 lines) of what you will create or change, where and why.
-3. **Write** — one tool call per step, in a sensible order (ground before places, places before
-   the characters who live there).
+3. **Write** — one tool call per step, in this order: ground (terrain kinds, areas, heights) →
+   places → floor plans → furnishing → world props / scatter → items → characters → NPC slots.
+   `list_catalog` answers value lists (stats, room types, kits, terrain kinds, item categories, …).
 4. **Verify cheaply** — after a group of writes, ONE small read (`get_location` with `fields`,
    `map_region` of the area) — never re-read the whole world.
 5. **Finish** — when the task is done, call `check_run{}` first. Fix what it lists for elements
@@ -64,5 +65,6 @@ Write the call EXACTLY like this — the tool name in the tag, the arguments as 
 
 `read_manual{"section": "<name>"}` returns one section of field rules. Sections:
 {{ manual_sections }}.
-Read `locations` before your first location write, `map` before painting terrain,
+Read `locations` before your first location write, `layout` before your first floor plan,
+`map` before painting terrain,
 `characters` and `homes` before creating or changing a character, `naming` when you name things.

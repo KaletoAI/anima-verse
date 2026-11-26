@@ -27,6 +27,9 @@ the field names a character has; `find_characters{query?, location?}` finds them
   "Body slots" below.
 - home and schedule — see `read_manual homes`.
 
+A crowd of anonymous people (staff, guards, market visitors) is not made of characters: give the
+place or painted area `npc_slots` instead (`read_manual locations`, "NPC slots").
+
 ## What is still missing
 
 Every `create_character` / `update_character` result ends with `; complete` or
@@ -104,7 +107,8 @@ are never replaced or removed here; `get_character` lists the outfit names.
 `{"name": "Daily", "pieces": [...]}` — only these keys. Outfits are not bound to places or
 activities: `locations` / `activities` / `excluded_locations` are refused.
 
-A piece is EITHER an existing catalog piece `{"item_id": "<id>"}` (the id alone) OR a new piece:
+A piece is EITHER an existing catalog piece `{"item_id": "<id>"}` (the id alone — `find_items{slot}`
+finds them) OR a new piece:
 
 - `slots` (required) — every slot it occupies; `describe_template` lists the clothing slots
   of the template (line `outfit slots:`), a slot not listed there is refused (a dress is
@@ -119,6 +123,20 @@ new character 2–3 outfits.
 A new character starts DRESSED: `data.wear` names the outfit it wears (one of `data.outfits`,
 case-insensitive); without `wear` it wears the first outfit. `wear` exists only in
 `create_character` — the worn outfit of an existing character is changed in the wardrobe.
+
+## Items
+
+`find_items{query?, category?, slot?}` before creating: an item that exists is REUSED by its id
+(across characters, rooms and outfits), never created twice — a name already in the catalog is
+refused. `create_item` makes a non-clothing item (`category` of `list_catalog item_categories`;
+clothing comes with outfits). A stackable item needs `max_stack` (2 or more).
+
+`give_items{character, items: [{item_id, quantity?}]}` accepts only a NEW entry (an item the
+character does not hold yet; quantity 1 unless the item is stackable, at most `max_stack`) or
+MORE of a stackable item it already holds, up to `max_stack` in total. A non-stackable item it
+already holds, a sum above `max_stack` and an item that reveals a secret are refused.
+`delete_created{kind: "item", id}` removes an item this run created in THIS turn and that
+nobody holds; an item of an earlier turn stays until the run is discarded.
 
 ## delete_created
 
