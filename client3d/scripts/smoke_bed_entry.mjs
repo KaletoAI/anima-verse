@@ -25,7 +25,7 @@ if(needed.some(k=>!existsSync(join(clips,k+'.fbx')))) {
   const file=join(dir,'client.mjs'); await writeFile(file,result.outputFiles[0].text);
   const {Figure,FigureLibrary,adaptExternalClips,setClipRootMotion,clipRootTurn,relockRootPaths,NpcManager,restCorrections,restPoseOf,rigHipsHeight}=await import(file);
   const bytes=async file=>{const b=await readFile(file);return b.buffer.slice(b.byteOffset,b.byteOffset+b.byteLength)};
-  const template=(await new GLTFLoader().register(()=>({name:'geometry_only',loadTexture:()=>Promise.resolve(null)})).parseAsync(await bytes(join(root,'static/client3d/models/Soldier.glb')),'')).scene;
+  const template=(await new GLTFLoader().register(()=>({name:'geometry_only',loadTexture:()=>Promise.resolve(null)})).parseAsync(await bytes(join(root,'static/fallback-models/Soldier.glb')),'')).scene;
   const loader=new FBXLoader(), donor=loader.parse(await bytes(join(root,'shared/models/rig/reference.fbx')),'');
   const raw=[];
   for(const kind of needed) {const c=loader.parse(await bytes(join(clips,kind+'.fbx')),'').animations[0].clone();c.name=kind;

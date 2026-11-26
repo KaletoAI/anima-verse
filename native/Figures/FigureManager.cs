@@ -2093,8 +2093,8 @@ public partial class FigureManager : Node3D
 
     // ---- the fallback pool and the portrait (Task 29, ruling P3-R10) -------------------------------------------------
 
-    /// <summary>Where the browser's fallback pool lives (served anonymously with the 3D client, § /static/client3d).</summary>
-    public const string PoolBase = "/static/client3d/models/";
+    /// <summary>Where the fallback pool lives (served anonymously under /static/fallback-models).</summary>
+    public const string PoolBase = "/static/fallback-models/";
 
     private sealed record PoolModel(string Name, ModelTemplate Template, ModelInfo Info, double Height, bool AssignOnly);
 

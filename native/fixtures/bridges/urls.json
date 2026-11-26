@@ -9,6 +9,6 @@
  "/assets/animation-clips/get-up-chair.fbx?v=bridgegetupchair": "repo:shared/models/clips/get-up-chair.fbx",
  "/assets/animation-clips/get-up-bed.fbx?v=bridgegetupbed": "repo:shared/models/clips/get-up-bed.fbx",
  "/assets/animation-clips/commanding.fbx?v=bridgestartwalk": "repo:shared/models/clips/commanding.fbx",
- "/characters/Mia%20Chair/model3d/file?v=bridgemia0001": "repo:static/client3d/models/Test3_mia.glb",
- "/characters/Bea%20Bed/model3d/file?v=bridgebea0001": "repo:static/client3d/models/Soldier.glb"
+ "/characters/Mia%20Chair/model3d/file?v=bridgemia0001": "repo:static/fallback-models/Test3_mia.glb",
+ "/characters/Bea%20Bed/model3d/file?v=bridgebea0001": "repo:static/fallback-models/Soldier.glb"
 }

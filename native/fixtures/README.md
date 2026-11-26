@@ -34,7 +34,7 @@ contract (docs/schnittstellen-3d.md) — not recorded from a run.
 | `s3c/` | Task S3c: a second, hand-written world (avatar, open/closed/far/gone locations, world props, a wet tile) — files missing there (`heightfield.json`, the ground files) are read from this directory; see "S3c world" |
 | `storeys/` | Task 16: a third, hand-written world (a tower with a cellar, two storeys above and an always-visible terrace; a pit with a ground model over a basement) for the storey switch at runtime — the ground files come from this directory; see "Storeys world" |
 | `fidelity/` | Task 17: a fourth, hand-written world (a plan hull with cutouts and padding, a room clip, two depth cuts on a turned location, a shell area, a changed scene for the sweep) — the ground files come from this directory; see "Fidelity world" |
-| `placement/` | Task 29: a hand-written world for the room placement (an inn with a hall, a bedroom and a loft over it, a storey corridor, a bench marker, a bed marker, a stool, a table and a cot; a closed shed) and the fallback pool (served from the repository's `static/client3d/models/`) — the ground files come from this directory; see "Placement world" |
+| `placement/` | Task 29: a hand-written world for the room placement (an inn with a hall, a bedroom and a loft over it, a storey corridor, a bench marker, a bed marker, a stool, a table and a cot; a closed shed) and the fallback pool (served from the repository's `static/fallback-models/`) — the ground files come from this directory; see "Placement world" |
 | `walk/` | Task 30: a hand-written FLAT world for the NPC walk (a hall with two storey-0 rooms joined by a party-wall door, a loft over them reached by one flight, a lake with a constant 1.5 m mirror) and the fallback pool; its own `heightfield.json` (all 0, no tiles), `terrain.json` and `model3d.json`, the layer files from this directory; see "Walk world" |
 | `bridges/` | Task 31: the walk world's flat ground (copies of its `heightfield.json`, `locations.json`, `terrain.json`, `scene_loc-hall.json`) with three figures on open grass — real rigs (`Test3_mia.glb`, `Soldier.glb`), the real clips idle / walk / sitting-at-the-table / laying / get-up-chair / get-up-bed and `commanding.fbx` served as a ramping `start-walk`, the reference rig; its own `worldmap.json`, `worldmap_poll2.json`, `model3d.json`, `animation_clips.json`, `urls.json`; see "Bridges world" |
 | `pairs/` | Task 32: the placement world's inn (copies of its `scene_loc-inn.json`, the inn row of `locations.json`) on the ground of this directory, nine figures — real rigs (`Test3_mia.glb` for role a, `Soldier.glb` for role b), the real pair clips greeting-handshake / greeting-hug (both halves) and `comforting__b` alone, idle / walk / sitting-at-the-table / get-up-chair, the reference rig, and `low_box.glb` (a hand-made box whose mesh bottom lies at −0.3 m); `worldmap.json` + `worldmap_poll2.json` + `worldmap_poll3.json`; see "Pairs world" |
@@ -256,7 +256,7 @@ not character routes or sync). No generated fixture was edited by hand.
 | Cleo Marsh | `location_id ""`, `travel` with waypoints, no `height_cm`, no `model_sig`, `avatar_url` `/characters/Cleo%20Marsh/images/cleo.png` | `null` = 404 | **journey** |
 
 → **figures = 3, glb_figures = 2, placeholders = 1** (Bram's FBX is a model — Task 34, "Animals world"; 404 → the
-fallback pool, whose manifest `/static/client3d/models/manifest.json` this fixture does not serve (404) → **pool failed
+fallback pool, whose manifest `/static/fallback-models/manifest.json` this fixture does not serve (404) → **pool failed
 → the portrait**, Task 29). Bram's FBX and its texture are downloaded once each (2 byte requests); his actions are his
 three takes **[idle, sit, walk]** (no alias adds one: `run`, `lie`, `dance`, `wave` find no needle), sit once, walk
 loops, and he stands in the idle take. Cleo's `avatar_url` is a character image
@@ -955,7 +955,7 @@ P3 — the inn closed (fade 0): every room figure is huddled AND hidden, a snap 
 datum → **4.0** (D6 again); no lean any more. Gus stays where he was (stay). Visible at the inn: Gus only. Opened again:
 Ada snaps back onto the bench, Cy onto the cot.
 
-P4 — the fallback pool: `model3d.json` answers null for everyone → the manifest (`repo:static/client3d/models/…`):
+P4 — the fallback pool: `model3d.json` answers null for everyone → the manifest (`repo:static/fallback-models/…`):
 Soldier, Xbot, Robot (T3mia is assign-only and assigned to nobody); the library (this directory's clip list, 5
 importable clips) fits Soldier and Xbot (mixamo bones), not the Robot (its own `Foot.L` … skeleton) → the random pool is
 [Soldier, Xbot]; `seededRandom('model:' + name)` (scatter.ts, FNV-1a + the murmur finaliser), first draw ·2: Ada Ash

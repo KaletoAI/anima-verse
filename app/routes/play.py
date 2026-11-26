@@ -46,8 +46,6 @@ def _avatar_write_guard(request: Request):
 
 router = APIRouter(dependencies=[Depends(_avatar_write_guard)])
 
-_SHELL = Path("static/client3d/index.html")
-
 
 def _expr_version(name: str) -> str:
     """Version of requested expression identity and the actually served bytes.
@@ -145,19 +143,34 @@ def _bg_id(location_id: str, room: str) -> str:
     return ""
 
 
+_PLAY_HINT = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anima Verse</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 40em; margin: 4em auto; padding: 0 1em; line-height: 1.5; }
+</style>
+</head>
+<body>
+<h1>Anima Verse</h1>
+<p>Anima Verse runs in the native client. Start the native client and log in there with your account
+to play.</p>
+<p>The browser 3D view has been retired. World administration stays in the browser:
+<a href="/game-admin">Game-Admin</a>.</p>
+</body>
+</html>
+"""
+
+
 @router.get("/play", include_in_schema=False)
 def play_page():
-    # Serve the static shell without auth; it contains no secrets.
-    # The 3D client's title screen shows login when needed. Server auth here would
-    # return 401 JSON before the SPA loads. All data routes remain gated.
-    if not _SHELL.is_file():
-        return HTMLResponse(
-            "<h1>Player UI build missing</h1>"
-            "<p>From the repo root: <code>npm run build -w client3d</code></p>",
-            status_code=503)
-    # no-cache: a cached shell keeps loading the OLD hashed bundle after a
-    # deploy (ETag revalidation makes this cheap).
-    return FileResponse(_SHELL, headers={"Cache-Control": "no-cache"})
+    # A plain hint page, served without auth (it contains no secrets): the native client is the
+    # only player client, so a browser that lands here (the / redirect, a login redirect of a
+    # player route) learns where to play. All data routes remain gated.
+    # no-cache: a browser that cached the old 3D shell revalidates and gets this page.
+    return HTMLResponse(_PLAY_HINT, headers={"Cache-Control": "no-cache"})
 
 
 def _player_capabilities(avatar: str) -> list:

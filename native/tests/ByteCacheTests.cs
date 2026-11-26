@@ -96,7 +96,7 @@ public sealed class ByteCacheTests : IDisposable
     [InlineData("/play/locations/p/model?tier=full", "no-cache", 1)]
     [InlineData("/play/rooms/p/model", "no-cache", 1)]
     [InlineData("/characters/A/images/p.png?transparent=1", "no-cache", 1)]
-    [InlineData("/static/client3d/models/manifest.json", "no-cache", 1)]
+    [InlineData("/static/fallback-models/manifest.json", "no-cache", 1)]
     [InlineData("/assets/audio/music.ogg", "no-cache", 1)]
     public async Task RestartReusesBodiesByResponsePolicy(string url, string policy, int requests)
     {

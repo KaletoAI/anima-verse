@@ -7,8 +7,8 @@
  "/assets/animation-rig": "repo:shared/models/rig/reference.fbx",
  "/assets/surface-textures/ground_grass.png": "../ground_grass.png",
  "/assets/surface-textures/dark_stone_2.jpg": "repo:shared/surface_textures/dark_stone_2_1785267141.jpg",
- "/static/client3d/models/manifest.json": "repo:static/client3d/models/manifest.json",
- "/static/client3d/models/Soldier.glb": "repo:static/client3d/models/Soldier.glb",
- "/static/client3d/models/Xbot.glb": "repo:static/client3d/models/Xbot.glb",
- "/static/client3d/models/RobotExpressive.glb": "repo:static/client3d/models/RobotExpressive.glb"
+ "/static/fallback-models/manifest.json": "repo:static/fallback-models/manifest.json",
+ "/static/fallback-models/Soldier.glb": "repo:static/fallback-models/Soldier.glb",
+ "/static/fallback-models/Xbot.glb": "repo:static/fallback-models/Xbot.glb",
+ "/static/fallback-models/RobotExpressive.glb": "repo:static/fallback-models/RobotExpressive.glb"
 }

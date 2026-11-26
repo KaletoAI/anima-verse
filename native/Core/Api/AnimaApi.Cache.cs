@@ -36,7 +36,7 @@ public sealed partial class AnimaApi
         return p.StartsWith("/assets/animation-clips/", StringComparison.Ordinal) || p == "/assets/animation-rig"
             || p.StartsWith("/assets/props/", StringComparison.Ordinal) || p.StartsWith("/assets/doors/", StringComparison.Ordinal)
             || p.StartsWith("/assets/surface-textures/", StringComparison.Ordinal) || p.StartsWith("/assets/audio/", StringComparison.Ordinal)
-            || p.StartsWith("/static/client3d/models/", StringComparison.Ordinal)
+            || p.StartsWith("/static/fallback-models/", StringComparison.Ordinal)
             || (p.StartsWith("/characters/", StringComparison.Ordinal) && (p.Contains("/model3d/file", StringComparison.Ordinal)
                 || p.Contains("/model3d/texture", StringComparison.Ordinal) || p.Contains("/images/", StringComparison.Ordinal)))
             || ((p.StartsWith("/play/locations/", StringComparison.Ordinal) || p.StartsWith("/play/rooms/", StringComparison.Ordinal))

@@ -1042,7 +1042,7 @@ poll), with each mounted location's view state NOW — interior fade (> 0.5 = re
   centre; else the huddle on the tile ground. A standing figure faces its movement target's place. Hidden on another
   storey (the switch of Task 16) and in a closed interior (the fade of Task 15). A view change SNAPS (no walk); a
   real room change WALKS its door route (Task 30, below).
-- **No model** (ruling P3-R10): the browser's fallback pool from `/static/client3d/models/manifest.json` (Soldier,
+- **No model** (ruling P3-R10): the fallback pool from `/static/fallback-models/manifest.json` (Soldier,
   Xbot, Robot; assignments first, else `seededRandom('model:' + name)` over the rigs the clip library fits — their
   own takes win their kinds), scaled to the manifest height; while the pool loads or when it fails, the portrait
   sprite (`Figures/Portrait.cs`: seeded ring colour, the cut-out `avatar_url?transparent=1`, initials until it
