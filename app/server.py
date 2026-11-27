@@ -923,6 +923,14 @@ async def lifespan(app: FastAPI):
     except Exception as _fhs:
         logger.warning("Hairstyle migration failed (retried at the next start): %s", _fhs)
 
+    # Items in the world (Task 6): anchor every world-placeable room entry that
+    # has none yet (idempotent; runs once at every start).
+    try:
+        from app.core.item_placement import backfill_anchors
+        backfill_anchors()
+    except Exception as _iba:
+        logger.warning("Item anchor backfill failed: %s", _iba)
+
     # Re-make (same plan, Task 11g fix round 2, Ruling C2): the dressed
     # back/side views and worn backs the old MODEL fit made are stale (they
     # came back nude); readers refuse them, and once per world a background

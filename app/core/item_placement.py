@@ -390,3 +390,168 @@ def compute_anchor(item_id: str, size_m: float, geo: RoomGeo,
 
     outline = geo.get("outline") or []
     return _try_floor_pass(item_id, radius, yaw_item, outline, props, occupied)
+
+
+def repair_anchors(location: Dict[str, Any]) -> int:
+    """Repair invalid item anchors inside ``location`` in place.
+
+    Does not acquire any lock and does not persist to the DB — callers hold
+    ``world_write_lock`` (e.g. ``world._upsert_locations``). Computes room
+    geometry at most once per room, and only for rooms with at least one
+    anchored entry of a placeable item.
+
+    Returns the number of entries whose anchor was updated or dropped.
+    """
+    from app.models.inventory import get_item, item_world_size
+
+    changed = 0
+    item_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+
+    for room in (location.get("rooms") or []):
+        if not isinstance(room, dict):
+            continue
+        room_items = room.get("items") or []
+        if not room_items:
+            continue
+
+        candidates: List[Tuple[Dict[str, Any], str, Dict[str, Any]]] = []
+        for entry in room_items:
+            if not isinstance(entry, dict) or not isinstance(entry.get("anchor"), dict):
+                continue
+            iid = str(entry.get("item_id") or "")
+            if not iid:
+                continue
+            if iid not in item_cache:
+                item_cache[iid] = get_item(iid)
+            item = item_cache[iid]
+            if item and item.get("world_placeable"):
+                candidates.append((entry, iid, item))
+
+        if not candidates:
+            continue
+
+        geo = room_geometry(location, str(room.get("id") or ""))
+        if geo is None:
+            for entry, _, _ in candidates:
+                entry.pop("anchor", None)
+                changed += 1
+            continue
+
+        props_by_id = {
+            str(p.get("id") or ""): p
+            for p in (geo.get("props") or [])
+            if p.get("id")
+        }
+        prop_ids = set(props_by_id)
+        outline = geo.get("outline") or []
+
+        for entry, iid, item in candidates:
+            anchor = entry["anchor"]
+            on_id = str(anchor.get("on") or "")
+            on_missing = bool(on_id) and (on_id not in prop_ids)
+
+            at = anchor.get("at")
+            at_inside = False
+            if isinstance(at, (list, tuple)) and len(at) >= 2:
+                try:
+                    at_inside = point_in_polygon(float(at[0]), float(at[1]), outline)
+                except (TypeError, ValueError):
+                    at_inside = False
+
+            # The anchor also no longer holds when its support moved, changed
+            # height or lost its surface flag, or when furniture now stands on a
+            # floor item.
+            moved = False
+            if at_inside and not on_missing:
+                ax, az = float(at[0]), float(at[1])
+                support = props_by_id.get(on_id) if on_id else None
+                if support is not None:
+                    sy = support.get("surface_y")
+                    moved = (sy is None
+                             or abs(float(anchor.get("y") or 0.0) - float(sy)) > 1e-3
+                             or not _circle_hits_rect(ax, az, 1e-6, support))
+                elif not on_id:
+                    r = item_world_size(item) / 2.0
+                    moved = any(_circle_hits_rect(ax, az, r, p) for p in (geo.get("props") or []))
+
+            if not (on_missing or not at_inside or moved):
+                continue
+
+            occupied = occupied_by_items(room, iid)
+            new_anchor = compute_anchor(iid, item_world_size(item), geo, occupied)
+            if new_anchor is not None:
+                entry["anchor"] = new_anchor
+            else:
+                entry.pop("anchor", None)
+            changed += 1
+
+    return changed
+
+
+def backfill_anchors(item_id: Optional[str] = None) -> int:
+    """Compute and store anchors for placeable room entries that lack one.
+
+    When ``item_id`` is given, only entries for that item are considered.
+    Runs under ``world_write_lock``, reads the world fresh, and persists only
+    changed locations via ``upsert_location(loc, sync_world=False)``.
+    Returns the number of anchored entries.
+    """
+    from app.models.inventory import get_item, item_world_size
+    from app.models.world import _load_world_data, upsert_location, world_write_lock
+
+    target_id = str(item_id) if item_id is not None else None
+    item_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+
+    if target_id is not None:
+        target_item = get_item(target_id)
+        if not target_item or not target_item.get("world_placeable"):
+            return 0
+        item_cache[target_id] = target_item
+
+    anchored = 0
+    with world_write_lock:
+        for loc in (_load_world_data().get("locations") or []):
+            if not isinstance(loc, dict):
+                continue
+            loc_changed = False
+            for room in (loc.get("rooms") or []):
+                if not isinstance(room, dict):
+                    continue
+                room_items = room.get("items") or []
+                if not room_items:
+                    continue
+
+                missing: List[Tuple[Dict[str, Any], str, Dict[str, Any]]] = []
+                for entry in room_items:
+                    if not isinstance(entry, dict) or entry.get("anchor"):
+                        continue
+                    iid = str(entry.get("item_id") or "")
+                    if not iid:
+                        continue
+                    if target_id is not None and iid != target_id:
+                        continue
+                    if iid not in item_cache:
+                        item_cache[iid] = get_item(iid)
+                    item = item_cache[iid]
+                    if item and item.get("world_placeable"):
+                        missing.append((entry, iid, item))
+
+                if not missing:
+                    continue
+
+                geo = room_geometry(loc, str(room.get("id") or ""))
+                if geo is None:
+                    continue
+
+                for entry, iid, item in missing:
+                    occupied = occupied_by_items(room, iid)
+                    new_anchor = compute_anchor(iid, item_world_size(item), geo, occupied)
+                    if new_anchor is not None:
+                        entry["anchor"] = new_anchor
+                        anchored += 1
+                        loc_changed = True
+
+            if loc_changed:
+                upsert_location(loc, sync_world=False)
+
+    return anchored

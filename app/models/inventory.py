@@ -1124,6 +1124,7 @@ def update_item(item_id: str,
         return item
 
     found: Optional[Dict[str, Any]] = None
+    _placeable_before = False
     # The item lock as well (review 05#12): a setter holding it outside keeps
     # its read and this write one step (RLock). Only around the read+write —
     # the follow-ups below run after both locks are released.
@@ -1138,6 +1139,7 @@ def update_item(item_id: str,
                     _before = _render_relevant_fields(item)
                     _part_before = _part_relevant_fields(item)
                     _detail_before = _exposed_detail_of(item)
+                    _placeable_before = bool(item.get("world_placeable", False))
                     shared[idx] = _apply_updates(item)
                     _save_shared_items(shared)
                     logger.info("Shared item updated: %s", item_id)
@@ -1151,6 +1153,7 @@ def update_item(item_id: str,
                     _before = _render_relevant_fields(item)
                     _part_before = _part_relevant_fields(item)
                     _detail_before = _exposed_detail_of(item)
+                    _placeable_before = bool(item.get("world_placeable", False))
                     _apply_updates(item)
                     _save_items([item])
                     logger.info("Item updated: %s", item_id)
@@ -1167,6 +1170,9 @@ def update_item(item_id: str,
             _invalidate_renders_for_item(host["item_id"])
     if _exposed_detail_of(found) != _detail_before:
         _after_exposed_detail_change(item_id)
+    if not _placeable_before and bool(found.get("world_placeable", False)):
+        from app.core.item_placement import backfill_anchors
+        backfill_anchors(item_id)
     return found
 
 
@@ -1491,7 +1497,8 @@ def add_item_to_room(location_id: str,
     quantity: int = 1,
     hidden: bool = False,
     discovery_difficulty: int = 0,
-    note: str = "") -> bool:
+    note: str = "",
+    anchor: Optional[Dict[str, Any]] = None) -> bool:
     """Place an item in a room.
 
     Reads the world FRESH under ``world_write_lock`` and writes back exactly
@@ -1513,6 +1520,21 @@ def add_item_to_room(location_id: str,
         logger.warning("hairstyle %s is worn through Figure → Hairstyles, not placed in a room", item_id)
         return False
 
+    placeable = bool(item.get("world_placeable"))
+
+    def _resolve_anchor(loc: Dict[str, Any], room: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not placeable:
+            return None
+        if anchor is not None:
+            return dict(anchor)
+        from app.core.item_placement import (compute_anchor, occupied_by_items,
+                                             room_geometry)
+        geo = room_geometry(loc, room_id)
+        if geo is None:
+            return None
+        occupied = occupied_by_items(room, item_id)
+        return compute_anchor(item_id, item_world_size(item), geo, occupied)
+
     with world_write_lock:
         for loc in _load_world_data().get("locations", []):
             if loc.get("id") == location_id:
@@ -1528,19 +1550,31 @@ def add_item_to_room(location_id: str,
                                 ri["discovery_difficulty"] = max(0, min(999, int(discovery_difficulty)))
                                 if note:
                                     ri["note"] = note
+                                if placeable:
+                                    if anchor is not None:
+                                        ri["anchor"] = dict(anchor)
+                                    elif not ri.get("anchor"):
+                                        computed = _resolve_anchor(loc, room)
+                                        if computed is not None:
+                                            ri["anchor"] = computed
                                 if not upsert_location(loc, sync_world=False):
                                     return False
                                 from app.core import sync_topics
                                 sync_topics.room_items_changed(location_id, room_id, visible_before, not hidden)
                                 return True
                         # Add a new entry.
-                        room_items.append({
+                        new_entry: Dict[str, Any] = {
                             "item_id": item_id,
                             "quantity": max(1, quantity),
                             "hidden": hidden,
                             "discovery_difficulty": max(0, min(999, int(discovery_difficulty))),
                             "note": note.strip(),
-                        })
+                        }
+                        if placeable:
+                            computed = _resolve_anchor(loc, room)
+                            if computed is not None:
+                                new_entry["anchor"] = computed
+                        room_items.append(new_entry)
                         room["items"] = room_items
                         if not upsert_location(loc, sync_world=False):
                             return False
@@ -2581,8 +2615,42 @@ def drop_item(character_name: str,
         if item_id in eqi:
             unequip_item(character_name, item_id, source="dropped")
 
+    # Read dropper position before taking world_write_lock (inside add_item_to_room).
+    drop_anchor: Optional[Dict[str, Any]] = None
+    if item.get("world_placeable"):
+        from app.core.item_placement import room_geometry
+        from app.core.world_geometry import point_in_polygon, world_to_local
+        from app.models.character import get_avatar_sync_snapshot
+        from app.models.world import get_location_by_id
+
+        snap = get_avatar_sync_snapshot(character_name)
+        pos = snap.get("pos") if isinstance(snap, dict) else None
+        if isinstance(pos, dict) and pos.get("x") is not None and pos.get("z") is not None:
+            loc = get_location_by_id(location_id)
+            if (isinstance(loc, dict)
+                    and loc.get("pos_x") is not None
+                    and loc.get("pos_z") is not None):
+                lx, lz = world_to_local(
+                    float(pos["x"]),
+                    float(pos["z"]),
+                    float(loc["pos_x"]),
+                    float(loc["pos_z"]),
+                    float(loc.get("yaw_deg") or 0.0),
+                )
+                geo = room_geometry(loc, room_id)
+                if geo is not None and point_in_polygon(lx, lz, geo["outline"]):
+                    rx = round(lx, 4)
+                    rz = round(lz, 4)
+                    ryaw = round(float(snap.get("yaw") or 0.0), 1)
+                    drop_anchor = {
+                        "at": [0.0 if rx == 0 else rx, 0.0 if rz == 0 else rz],
+                        "y": 0.0,
+                        "yaw": 0.0 if ryaw == 0 else ryaw,
+                        "on": "",
+                    }
+
     # Place in the room.
-    if not add_item_to_room(location_id, room_id, item_id, quantity=quantity):
+    if not add_item_to_room(location_id, room_id, item_id, quantity=quantity, anchor=drop_anchor):
         return {"success": False, "error": "Konnte Item nicht im Raum ablegen"}
 
     # Remove from inventory.
