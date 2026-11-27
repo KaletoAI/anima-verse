@@ -112,7 +112,8 @@ sink it), `variant` a whole variant index of the prop (leave it out and the plac
 the prop's variant count wraps around to the first again).
 `x`/`z` keep two decimals. Values outside these are refused, never rewritten. A world prop is
 decoration: nobody walks around it. The result warns when it stands on impassable ground or inside
-the outline of a place — furniture of a place goes into its rooms (`furnish_rooms`). A world
+a room of a place — furniture of a room goes into that room (`place_room_prop`, `furnish_rooms`).
+A place's open ground (inside its plot, outside its rooms — a village square) takes world props. A world
 holds a limited number of them (the call is refused when it is full). `map_region` lists them as `prop <id> <prop_id> (x,z)`.
 `delete_created{kind: "world_prop", id}` removes one this run placed.
 
@@ -148,12 +149,17 @@ relief.
 
 ## Composition
 
-- In an empty world call `set_build_bounds{min_x, min_z, max_x, max_z}` first (a small village:
-  300 × 300 m, e.g. -150 … 150 on both axes; each side 50 … 20 000 m); every later write warns
+- In an empty world call `set_build_bounds{min_x, min_z, max_x, max_z}` first (as build area for
+  a small village: e.g. -100 … 100 on both axes is fine — the village itself is 80–120 m across;
+  each side 50 … 20 000 m); every later write warns
   when it leaves that box (`… lie outside the build bounds`) — a warning, never a refusal. In a
   built world the extent is shown and the box is optional. Calling it again replaces the box and
   counts what already lies outside; it is not world data — neither the discard nor a rolled-back
   turn resets it (`world_overview` shows the current box).
+- Every entrance (house door) gets a path (`add_terrain_area` kind `"path"`, a stroke 2–3 m wide)
+  leading to the village lane or square — `check_run` checks for a path within 10 m of every
+  entrance using terrain kind `"path"` (and `"road"` when the world's terrain catalog defines it).
+  Open ground between houses gets `scatter` (trees, bushes) or `along` rows (fences, lamps).
 - Compose, do not tile: a handful of large, well-placed shapes reads better than fifty small ones.
 - Use water, rock or a dense forest belt as the world's edge.
 - A meadow is terrain, not a location — create a place only where the task asks for one.

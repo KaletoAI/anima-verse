@@ -39,17 +39,21 @@ check_run):
      courage stat is listed as "- courage [status]: whole number 0-100" (rp)
      and the hair slot as "hair: color=- [blonde|red|other]; length=- [short|long]"
      (fake package) — i.e. both package sources are live at once.
-  2. create_location x3, each with x/z (so no "unplaced" gap):
-       Demo Cottage  rooms [Room]          at (0, 0)
-       Demo Square   no rooms              at (60, 0)
-       Demo Bakery   rooms [Shop, Oven]    at (120, 0)
-     Demo Square's line ends "; complete"; the two places WITH rooms end
-     "; missing: no floor plan (set_room_layout)" (E5 of plan
-     2026-11-25-world-dev-free-p2-buildings-terrain.md: a run-created place
-     with a real room and no room layout / outline / building model), so
-     each gets set_room_layout right after its create — 4 × 4 m rooms side
-     by side from x -2 (Cottage: Room at x -2) / x -4 (Bakery: Shop at -4,
-     Oven at 0), y -2 — and that line ends "; complete".
+  2. create_location x3, each with x/z (so no "unplaced" gap; seeded 10 m
+     square boundaries, no path area in this temp world):
+       Demo Cottage  rooms [Room]          at (0, 0)    x -5..5
+       Demo Square   no rooms              at (60, 0)   x 55..65  (50 m from Cottage)
+       Demo Bakery   rooms [Shop, Oven]    at (120, 0)  x 115..125 (50 m from Square)
+     Every created place lacks a path within 10 m ("entrance without a path
+     within 10 m (add_terrain_area kind path)"). Demo Square (only ground room,
+     no props) also lacks open-ground props ("no props on the open ground
+     (place_room_prop)"). The two places WITH rooms start with "no floor plan
+     (set_room_layout)", which disappears after set_room_layout (4 × 4 m rooms
+     side by side from x -2 / x -4, y -2). Once the 3rd placed location
+     (Demo Bakery) exists, all 3 places stand 50 m edge to edge from their
+     nearest run-created neighbour (25 < 50 <= 150) and report "stands 50 m
+     from the nearest place of this run — a village's houses stand 3–10 m
+     apart".
   3. create_character Demo Miller, ONE call:
        data: name, gender female, importance 2, courage 60, all seven soul
              fields, body_slots hair {color red, length long},
@@ -75,14 +79,17 @@ check_run):
        known_places [Demo Bakery]
      -> "; missing: no secret (add_secret)" (as Demo Miller).
   5. check_run{} -> exactly
+       the three location lines (Cottage, Square, Bakery) with their derived
+       path / open-ground / 50 m spacing gaps above,
        'character "Demo Miller": missing: no secret (add_secret) · media pending:
         no portrait; no base body'   (one line; the run's media is on —
         create_run's default — and temp storage holds no profile image and no
         base body for these humanoid human-roleplay characters on the
         base-body pipeline),
        the same line for Demo Weaver,
-       "3 of 5 elements complete"   (3 created places complete, the 2 created
-       characters lack their secret).
+       "0 of 5 elements complete"   (the 3 created places lack paths / spacing
+       and Square lacks open-ground props; the 2 created characters lack their
+       secret).
 
 Assertions after the run:
   (a) Demo Miller current_location == Cottage id, current_room == the id of
@@ -290,14 +297,21 @@ check("1 lists the fake hair slot",
       "hair: color=- [blonde|red|other]; length=- [short|long]" in res.line, res.line[:400])
 
 # ── 2. three places ─────────────────────────────────────────────────────
+GAP_FP = "no floor plan (set_room_layout)"
+GAP_OPEN = "no props on the open ground (place_world_prop, or place_room_prop in an open room)"
+GAP_PATH = "entrance without a path within 10 m (add_terrain_area kind path)"
+GAP_SP50 = "stands 50 m from the nearest place of this run — a village's houses stand 3–10 m apart"
 PLACES = {}
-for name, rooms, x in (("Demo Cottage", ["Room"], 0), ("Demo Square", [], 60),
-                       ("Demo Bakery", ["Shop", "Oven"], 120)):
+for idx, (name, rooms, x) in enumerate((
+        ("Demo Cottage", ["Room"], 0),
+        ("Demo Square", [], 60),
+        ("Demo Bakery", ["Shop", "Oven"], 120))):
     data = {"name": name, "description": f"{name}, a demo place."}
     if rooms:
         data["rooms"] = [{"name": r} for r in rooms]
     res = call(1, "create_location", {"data": data, "x": x, "z": 0})
-    tail = "; missing: no floor plan (set_room_layout)" if rooms else "; complete"
+    create_gaps = ([GAP_FP] if rooms else [GAP_OPEN]) + [GAP_PATH] + ([GAP_SP50] if idx == 2 else [])
+    tail = "; missing: " + "; ".join(create_gaps)
     check(f"2 create_location {name} -> {tail}", res.ok and res.line.endswith(tail),
           res.line)
     PLACES[name] = wr.entries(run)[0]["target_id"]
@@ -308,8 +322,10 @@ for name, rooms, x in (("Demo Cottage", ["Room"], 0), ("Demo Square", [], 60),
                  "x": x0 + 4 * i, "y": -2, "w": 4, "d": 4} for i, rn in enumerate(rooms)]
         res = call(1, "set_room_layout", {"location_id": PLACES[name],
                                           "layout": {"rooms": plan}})
-        check(f"2 set_room_layout {name} -> complete",
-              res.ok and res.line.endswith("; complete"), res.line)
+        lay_gaps = [GAP_PATH] + ([GAP_SP50] if idx == 2 else [])
+        lay_tail = "; missing: " + "; ".join(lay_gaps)
+        check(f"2 set_room_layout {name} -> {lay_tail}",
+              res.ok and res.line.endswith(lay_tail), res.line)
 COTTAGE, SQUARE, BAKERY = (PLACES[n] for n in ("Demo Cottage", "Demo Square", "Demo Bakery"))
 ROOM = next((r.get("id") for r in (get_location_by_id(COTTAGE) or {}).get("rooms") or []
              if r.get("name") == "Room"), None)
@@ -355,10 +371,13 @@ check("4 Demo Weaver -> only the secret missing", res.ok and res.line.endswith(N
 
 # ── 5. check_run ────────────────────────────────────────────────────────
 res = call(3, "check_run", {})
-check("5 check_run: 3 of 5 complete", res.ok and res.line.splitlines() == [
-    f'character "{who}": missing: no secret (add_secret) · media pending: '
-    "no portrait; no base body" for who in ("Demo Miller", "Demo Weaver")]
-    + ["3 of 5 elements complete"], res.line)
+check("5 check_run: 0 of 5 complete", res.ok and res.line.splitlines() == [
+    f'location {COTTAGE} "Demo Cottage": missing: {GAP_PATH}; {GAP_SP50}',
+    f'location {SQUARE} "Demo Square": missing: {GAP_OPEN}; {GAP_PATH}; {GAP_SP50}',
+    f'location {BAKERY} "Demo Bakery": missing: {GAP_PATH}; {GAP_SP50}',
+    *(f'character "{who}": missing: no secret (add_secret) · media pending: '
+      "no portrait; no base body" for who in ("Demo Miller", "Demo Weaver")),
+    "0 of 5 elements complete"], res.line)
 
 # ── (a) position ────────────────────────────────────────────────────────
 check("(a) Miller stands in the Cottage",

@@ -358,9 +358,31 @@ def run_tool(ctx: ToolCtx, name: str, args: Any) -> ToolResult:
     return ToolResult(True, line, step.wrote, seq)
 
 
+#: Refusal text for ``add_room_item`` (always unavailable in World Dev).
+ROOM_ITEM_REFUSAL = ("items in rooms are invisible in the world — furnish with "
+                     "props (find_props, place_room_prop)")
+#: Tools that stay registered to return a clear refusal but are marked
+#: unavailable in the system prompt's tool list.
+UNAVAILABLE_TOOLS: Dict[str, str] = {"add_room_item": ROOM_ITEM_REFUSAL}
+
+#: Maximum edge-to-edge gap (metres) between houses of a settlement before a
+#: spacing warning or check_run gap is emitted.
+SETTLEMENT_GAP_MAX_M = 25.0
+#: Maximum edge-to-edge gap (metres) still considered part of the same
+#: settlement; beyond 150 m edge to edge a place is a separate site and no
+#: spacing warning or check_run gap is given.
+SETTLEMENT_RADIUS_M = 150.0
+
+
 def tool_list() -> List[str]:
     """One line per tool for the system prompt."""
-    return [f"{s.signature} — {s.summary}" for s in TOOLS.values()]
+    out: List[str] = []
+    for s in TOOLS.values():
+        line = f"{s.signature} — {s.summary}"
+        if s.name in UNAVAILABLE_TOOLS:
+            line += f" — NOT AVAILABLE: {UNAVAILABLE_TOOLS[s.name]}"
+        out.append(line)
+    return out
 
 
 # ── Argument checks ──────────────────────────────────────────────────────
@@ -2663,21 +2685,128 @@ def _pin_grounds(box: Optional[_Box]) -> Dict[str, Tuple[str, str]]:
             for loc in pins}
 
 
-def _outline_overlaps(before: Dict[str, Any], after: Dict[str, Any]) -> List[str]:
-    """After update_location: the overlap warnings of a placed place whose
-    drawn outline changed (the pin stays, so its ground is not judged). A
-    read after the write — a failure costs the warning, never the step."""
+def _edge_gap_m(a_points: Sequence[Sequence[float]],
+                b_points: Sequence[Sequence[float]]) -> float:
+    """Edge-to-edge distance in metres between two world shapes (0.0 when they
+    overlap or one contains the other; a place without a boundary is passed as
+    a single-point sequence holding its pin)."""
+    from app.core.world_geometry import polygon_distance, polygons_overlap
+    a = [(float(p[0]), float(p[1])) for p in (a_points or [])]
+    b = [(float(p[0]), float(p[1])) for p in (b_points or [])]
+    if not a or not b:
+        return math.inf
+    a_poly = len(a) >= 3
+    b_poly = len(b) >= 3
+    if a_poly and b_poly:
+        if polygons_overlap(a, b):
+            return 0.0
+        best = math.inf
+        for ax, az in a:
+            best = min(best, polygon_distance(ax, az, b))
+        for bx, bz in b:
+            best = min(best, polygon_distance(bx, bz, a))
+        return best
+    if a_poly and not b_poly:
+        return min(polygon_distance(bx, bz, a) for bx, bz in b)
+    if b_poly and not a_poly:
+        return min(polygon_distance(ax, az, b) for ax, az in a)
+    return min(math.hypot(ax - bx, az - bz) for ax, az in a for bx, bz in b)
+
+
+def _entry_world_shape(entry: Dict[str, Any]) -> List[Tuple[float, float]]:
+    """World polygon of a placement entry, or its single-point pin without one."""
+    from app.core.world_geometry import polygon_local_to_world
+    if entry.get("boundary"):
+        world = polygon_local_to_world(entry["boundary"], entry["pos_x"],
+                                       entry["pos_z"], entry.get("yaw_deg") or 0.0)
+        if world:
+            return world
+    return [(float(entry["pos_x"]), float(entry["pos_z"]))]
+
+
+def _spacing_note(entry: Dict[str, Any], exclude_id: str, run_id: str,
+                  created_by_run: bool) -> Tuple[str, List[str]]:
+    """Return ``(info, warnings)`` for a placed location: ``info`` is the
+    nearest-place edge-to-edge distance note (not a warning), and ``warnings``
+    holds the settlement spacing warning when a run-created place stands
+    > 25 m and <= 150 m from the nearest other run-created placed place while
+    the run has fewer than 3 placed places (once >= 3 placed places exist,
+    ``check_run`` / ``_settlement_spacing_gap`` reports it instead, avoiding a
+    duplicate report). Beyond 150 m edge to edge a place is a separate site and
+    no spacing warning is given. Never refuses."""
+    from app.models.world import list_locations
+    try:
+        shape = _entry_world_shape(entry)
+        others = [l for l in list_locations()
+                  if str(l.get("id") or "") != exclude_id
+                  and l.get("pos_x") is not None and l.get("pos_z") is not None]
+        if not others:
+            return "", []
+        gaps: Dict[str, Tuple[float, str]] = {}
+        nearest_any: Optional[Tuple[float, str, str]] = None
+        for other in others:
+            oid = str(other.get("id") or "")
+            oname = str(other.get("name") or "")
+            oentry = _placement_entry(other, other["pos_x"], other["pos_z"],
+                                      other.get("yaw_deg"))
+            gap = _edge_gap_m(shape, _entry_world_shape(oentry))
+            gaps[oid] = (gap, oname)
+            if nearest_any is None or gap < nearest_any[0]:
+                nearest_any = (gap, oid, oname)
+        info = ""
+        if nearest_any is not None:
+            gap, oid, oname = nearest_any
+            info = f'nearest place {oid} "{oname}": {round(gap)} m edge to edge'
+        warnings: List[str] = []
+        if created_by_run and run_id:
+            run_placed_ids = {
+                str(r.get("id") or "") for r in completeness.run_placed_locations(run_id)
+            }
+            total_run_placed = len(run_placed_ids) + (
+                0 if exclude_id and exclude_id in run_placed_ids else 1
+            )
+            if total_run_placed < 3:
+                nearest_run: Optional[Tuple[float, str]] = None
+                for oid in run_placed_ids:
+                    if oid == exclude_id or oid not in gaps:
+                        continue
+                    gap, oname = gaps[oid]
+                    if nearest_run is None or gap < nearest_run[0]:
+                        nearest_run = (gap, oname)
+                if nearest_run is not None:
+                    rgap, rname = nearest_run
+                    if SETTLEMENT_GAP_MAX_M < rgap <= SETTLEMENT_RADIUS_M:
+                        warnings.append(
+                            f"'{entry['name']}' stands {round(rgap)} m from the nearest place "
+                            f"'{rname}' of this run — houses of a village stand 3–10 m apart "
+                            f"edge to edge; move it closer (place_location) unless it is meant "
+                            f"to stand apart"
+                        )
+        return info, warnings
+    except Exception:  # noqa: BLE001 — a hint, never a reason to refuse
+        logger.exception("world-dev: spacing note failed")
+        return "", []
+
+
+def _outline_overlaps(before: Dict[str, Any], after: Dict[str, Any],
+                      run_id: str = "") -> Tuple[str, List[str]]:
+    """After update_location: ``(spacing_info, warnings)`` of a placed place
+    whose drawn outline changed (the pin stays, so its ground is not judged).
+    A read after the write — a failure costs the hint, never the step."""
     old = (before.get("map3d") or {}).get("boundary") if isinstance(before.get("map3d"), dict) else None
     new = (after.get("map3d") or {}).get("boundary") if isinstance(after.get("map3d"), dict) else None
     if old == new or after.get("pos_x") is None or after.get("pos_z") is None:
-        return []
+        return "", []
     try:
-        return _check_placement(
-            _placement_entry(after, after["pos_x"], after["pos_z"], after.get("yaw_deg")),
-            exclude_id=str(after.get("id") or ""), pin_kept=True)
+        lid = str(after.get("id") or "")
+        entry = _placement_entry(after, after["pos_x"], after["pos_z"], after.get("yaw_deg"))
+        warns = _check_placement(entry, exclude_id=lid, pin_kept=True)
+        created_by_run = bool(run_id) and completeness.element_scope(run_id, "location", lid) is None
+        info, sp_warns = _spacing_note(entry, lid, run_id, created_by_run)
+        return info, warns + sp_warns
     except Exception:  # noqa: BLE001 — a hint, the write is already journalled
         logger.exception("world-dev: overlap check after an outline change failed")
-        return []
+        return "", []
 
 
 def _pin_grounds_before(box: Optional[_Box]) -> Optional[Dict[str, Tuple[str, str]]]:
@@ -2783,11 +2912,15 @@ def _create_location(step: _Step, args: Dict[str, Any]) -> str:
     chattiness = body.pop("chattiness", "")
     # Names are not keys: a name the world already has is a second place.
     body["create_new"] = True
-    placement = (_check_placement(_placement_entry(body, x, z, yaw))
-                 if x is not None else [])
     if x is not None:
+        _entry = _placement_entry(body, x, z, yaw)
+        placement = _check_placement(_entry)
+        spacing_info, spacing_warns = _spacing_note(_entry, "", step.ctx.run_id, True)
+        placement += spacing_warns
         placement += _bounds_warnings(_place_points(body, x, z, yaw), f'place "{name}"',
                                       step.ctx.run_id)
+    else:
+        spacing_info, placement = "", []
 
     step.prepare()
     with world_write_lock:  # re-entrant; the writers take it again
@@ -2829,9 +2962,11 @@ def _create_location(step: _Step, args: Dict[str, Any]) -> str:
         line = f'created location {lid} "{after.get("name") or name}" at {_where(after)}'
         if seeded:
             line += f" · outline: {SEED_BOUNDARY_M:g} m square (no boundary given)"
+        if spacing_info:
+            line += f" · {spacing_info}"
         line += _warn_suffix(([f'a place called "{name}" already exists — '
                                f"this is a second one"] if taken else []) + placement)
-        line += completeness.suffix(completeness.location_gaps(after))
+        line += completeness.suffix(completeness.location_gaps(after, run_id=step.ctx.run_id))
         step.complete(after, line)
     return line
 
@@ -2920,6 +3055,11 @@ def _update_location(step: _Step, args: Dict[str, Any]) -> str:
     patch = _drop_none(patch)
     if not patch:
         raise ToolRefusal("'patch' has only null values — nothing to change")
+    if "boundary" in patch:
+        raise ToolRefusal(
+            "'boundary' is not a place field here — use map3d.boundary: "
+            '{"patch": {"map3d": {"boundary": [[x, z], …]}}}'
+        )
     patch = _drop_map3d_echo(lid, patch)
     _check_location_fields(patch, "patch")
     if "name" in patch and not str(patch["name"] or "").strip():
@@ -3056,9 +3196,11 @@ def _update_location(step: _Step, args: Dict[str, Any]) -> str:
         b, w = wu.diff_keys(before, after)
         step.attach(lid, {"op": "restore_location", "id": lid, "before": b},
                     before=b)
+        outline_info, outline_warns = _outline_overlaps(before, after, step.ctx.run_id)
         line = (f'updated location {lid} "{after.get("name") or ""}": '
                 + (", ".join(sorted(b)) if b else "no change")
-                + _warn_suffix(_outline_overlaps(before, after))
+                + (f" · {outline_info}" if outline_info else "")
+                + _warn_suffix(outline_warns)
                 + completeness.location_suffix(step.ctx.run_id, after))
         step.complete(w, line)
     return line
@@ -3079,9 +3221,12 @@ def _place_location(step: _Step, args: Dict[str, Any]) -> str:
     # ground it already stands on.
     kept = (stored.get("pos_x") is not None and stored.get("pos_z") is not None
             and float(stored["pos_x"]) == x and float(stored["pos_z"]) == z)
-    placement = _check_placement(
-        _placement_entry(stored, x, z, yaw if yaw is not None else stored.get("yaw_deg")),
-        exclude_id=lid, pin_kept=kept)
+    _entry = _placement_entry(stored, x, z, yaw if yaw is not None else stored.get("yaw_deg"))
+    placement = _check_placement(_entry, exclude_id=lid, pin_kept=kept)
+    spacing_info, spacing_warns = _spacing_note(
+        _entry, lid, step.ctx.run_id,
+        completeness.element_scope(step.ctx.run_id, "location", lid) is None)
+    placement += spacing_warns
     placement += _bounds_warnings(
         _place_points(stored, x, z, yaw if yaw is not None else stored.get("yaw_deg")),
         f'place "{stored.get("name") or lid}"', step.ctx.run_id)
@@ -3104,6 +3249,7 @@ def _place_location(step: _Step, args: Dict[str, Any]) -> str:
         # The journal row is begun above, so this call's position write is
         # already part of the location's scope.
         line = (f'placed location {lid} "{after.get("name") or ""}" at {_where(after)}'
+                + (f" · {spacing_info}" if spacing_info else "")
                 + _warn_suffix(placement)
                 + completeness.location_suffix(step.ctx.run_id, after))
         step.complete(wu.position_of(after), line)
@@ -3391,7 +3537,7 @@ def _scene_findings(lid: str) -> List[str]:
             str(r.get("id") or ""): str(r.get("name") or r.get("id") or "")
             for r in (loc.get("rooms") or []) if isinstance(r, dict)
         }
-        scene = compose_scene(loc)
+        scene = compose_scene(loc, read_only=True)
         out: List[str] = []
         for p in scene.get("problems") or []:
             if not isinstance(p, dict):
@@ -4549,15 +4695,41 @@ _WORLD_PROP_ARGS = {"prop_id": "prop_id", "x": "x", "z": "z", "yaw": "yaw_deg",
                     "offset_y": "offset_y", "variant": "variant"}
 
 
+def _room_contains_local(room: Dict[str, Any], lx: float, lz: float) -> bool:
+    """Whether location-local point (lx, lz) lies inside a level-0 room
+    (rectangle or custom outline, rim inclusive)."""
+    from app.core.room_recipe import _rect_outline
+    from app.core.world_geometry import _RIM_EPS, polygon_distance, polygon_points
+    lay = room.get("layout")
+    if not isinstance(lay, dict):
+        return False
+    if int(lay.get("level") or 0) != 0:
+        return False
+    try:
+        rx = float(lay.get("x") or 0.0)
+        ry = float(lay.get("y") or 0.0)
+        w = float(lay.get("w") or 0.0)
+        d = float(lay.get("d") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    if w <= 0 or d <= 0:
+        return False
+    raw_outline = polygon_points(lay.get("outline"))
+    pts = raw_outline if raw_outline is not None else _rect_outline(w, d)
+    local_poly = [(rx + float(p[0]), ry + float(p[1])) for p in pts]
+    return polygon_distance(lx, lz, local_poly) <= _RIM_EPS
+
+
 def _world_prop_warnings(x: float, z: float) -> List[str]:
     """Hints for a world prop at (x, z): impassable ground under it (the
     terrain kind the map reads there) and the outline of a placed place it
     stands in (its stored boundary; a place without one is a pin and has no
-    outline to stand in). A read only; a failure costs the hints, never the
-    step."""
+    outline to stand in). Distinguishes standing inside a level-0 room from
+    standing on open ground within the outline. A read only; a failure costs
+    the hints, never the step."""
     from app.core.terrain_query import kind_at
-    from app.core.world_geometry import boundary_contains
-    from app.models.world import list_locations
+    from app.core.world_geometry import boundary_contains, world_to_local
+    from app.models.world import GROUND_ROOM_ID, is_floor_room, list_locations
     out: List[str] = []
     try:
         catalog, areas, default_kind = _placement_world()
@@ -4573,18 +4745,40 @@ def _world_prop_warnings(x: float, z: float) -> List[str]:
             shape = {"pos_x": entry["pos_x"], "pos_z": entry["pos_z"],
                      "yaw_deg": entry["yaw_deg"], "map3d": {"boundary": entry["boundary"]}}
             if boundary_contains(shape, x, z):
-                out.append(f'it stands inside the outline of place {loc.get("id")} '
-                           f'"{loc.get("name") or ""}" — what belongs to a place goes '
-                           f"into its rooms (furnish_rooms)")
+                lx, lz = world_to_local(x, z, entry["pos_x"], entry["pos_z"],
+                                        entry["yaw_deg"])
+                hit_room = None
+                for r in loc.get("rooms") or []:
+                    if not isinstance(r, dict):
+                        continue
+                    rid = str(r.get("id") or "")
+                    if rid == GROUND_ROOM_ID or is_floor_room(rid):
+                        continue
+                    if _room_contains_local(r, lx, lz):
+                        hit_room = r
+                        break
+                if hit_room is not None:
+                    out.append(
+                        f'it stands inside room {hit_room.get("id")} '
+                        f'"{hit_room.get("name") or ""}" of place {loc.get("id")} '
+                        f'"{loc.get("name") or ""}" — use place_room_prop '
+                        f"(or furnish_rooms) for props inside a room"
+                    )
+                else:
+                    out.append(
+                        f'it stands inside the outline of place {loc.get("id")} '
+                        f'"{loc.get("name") or ""}" but in none of its rooms — '
+                        f"fine for open ground (scatter/along on a terrain area also work there)"
+                    )
     except Exception:  # noqa: BLE001 — a hint, never a reason to refuse
         logger.exception("world-dev: ground check of a world prop failed")
     return out
 
 
 @_tool("place_world_prop", True, "place_world_prop{prop_id, x, z, yaw?, offset_y?, variant?}",
-       "stand ONE library prop (3D object from find_props) on open ground outside any "
-       "place (world metres) — a well, a signpost, a rock; for a room use "
-       "place_room_prop")
+       "stand ONE library prop (3D object from find_props) on open ground (world "
+       "metres): outside any place, or on a place's open ground inside its plot but "
+       "outside its rooms (a well on a village square) — for a room use place_room_prop")
 def _place_world_prop(step: _Step, args: Dict[str, Any]) -> str:
     from app.models import world_props as wp
     _only_keys(args, set(_WORLD_PROP_ARGS), "place_world_prop")
@@ -4735,9 +4929,9 @@ def _whole_arg(args: Dict[str, Any], key: str, lo: int, hi: int, default: int,
 @_tool("create_item", True,
        "create_item{name, category, description?, prompt_fragment?, image_prompt?, "
        "stackable?, max_stack?, consumable?, transferable?, portable?, rarity?}",
-       "add a NEW non-clothing item: a thing characters can pick up, carry, use or own "
-       "(never furniture or decoration that stands in a room — that is a prop; missing "
-       "props go under left open)")
+       "add a NEW non-clothing item — items only for a character's inventory or outfit, "
+       "a secret or a quest, never to furnish or decorate a place; everything visible in "
+       "a place is a prop (find_props, place_room_prop, place_world_prop, furnish_rooms)")
 def _create_item(step: _Step, args: Dict[str, Any]) -> str:
     """One catalog item through inventory.add_item. The id is minted UP FRONT
     (as place_world_prop does), so the journal row is begun with its exact
@@ -4777,8 +4971,8 @@ def _create_item(step: _Step, args: Dict[str, Any]) -> str:
             raise ToolRefusal(f"the catalog already has the part item {taken.get('id')} "
                               f'"{taken.get("name")}" (worn through its host) — choose '
                               "another name")
-        uses = "give_items, add_room_item" + (", an outfit piece {item_id}"
-                                              if taken.get("category") == "outfit_piece" else "")
+        uses = "give_items" + (", an outfit piece {item_id}"
+                               if taken.get("category") == "outfit_piece" else "")
         raise ToolRefusal(f"the catalog already has {taken.get('id')} "
                           f'"{taken.get("name")}" — reuse it ({uses})')
     iid = require_item_id(_new_id("item", lambda i: get_item(i) is not None
@@ -4918,94 +5112,14 @@ def _give_items(step: _Step, args: Dict[str, Any]) -> str:
     return line
 
 
-def _stored_difficulty(entry: Optional[Dict[str, Any]]) -> int:
-    """A room entry's discovery_difficulty as the writer stores it (0…999)."""
-    value = (entry or {}).get("discovery_difficulty")
-    return max(0, min(999, int(value))) if _is_num(value) else 0
-
-
 @_tool("add_room_item", True,
        "add_room_item{location_id, room_id, item_id, quantity?, hidden?, "
        "discovery_difficulty?, note?}",
-       "lay a pickupable catalog item in a room (more of it when it already lies there "
-       "— never for 3D props like furniture, statues or rugs; use place_room_prop)")
+       "not available in World Dev — items in rooms are invisible; use place_room_prop")
 def _add_room_item(step: _Step, args: Dict[str, Any]) -> str:
-    """inventory.add_item_to_room; the journal holds the room's WHOLE items
-    value before (the list, or ABSENT when the room had no key), so the
-    inverse sets the room back exactly — also the hidden / difficulty / note
-    the writer overwrites on an entry that already lies there. On such an
-    entry, a ``hidden`` / ``discovery_difficulty`` left out keeps the stored
-    value (the writer would reset it to visible / 0); the line names a
-    visibility or difficulty change."""
-    from app.models.inventory import add_item_to_room
-    from app.models.world import get_location_by_id, world_write_lock
-    _only_keys(args, {"location_id", "room_id", "item_id", "quantity", "hidden",
-                      "discovery_difficulty", "note"}, "add_room_item")
-    loc = _resolve_location(_str(args, "location_id", required=True))
-    lid = str(loc.get("id"))
-    rid = _str(args, "room_id", required=True)
-    item = _item_or_refuse(args.get("item_id"), "add_room_item")
-    iid = str(item["id"])
-    qty = _whole_arg(args, "quantity", 1, 9999, 1, "add_room_item")
-    hidden_arg = _bool(args, "hidden")
-    difficulty_arg = (None if args.get("discovery_difficulty") is None else
-                      _whole_arg(args, "discovery_difficulty", 0, 999, 0, "add_room_item"))
-    note = _str(args, "note") or ""
-
-    def room_items_now() -> Tuple[Optional[Dict[str, Any]], Any]:
-        cur = get_location_by_id(lid)
-        room = next((r for r in (cur or {}).get("rooms") or []
-                     if isinstance(r, dict) and r.get("id") == rid), None)
-        if room is None:
-            return None, None
-        return room, wu.room_items_value(room)
-
-    room, _items = room_items_now()
-    if room is None:
-        ids = ", ".join(f'{r.get("id")} "{r.get("name") or ""}"' for r in loc.get("rooms") or []
-                        if isinstance(r, dict))
-        raise ToolRefusal(f"location {lid} has no room {rid!r} — rooms: {ids or 'none'}")
-    step.prepare()
-    with world_write_lock:  # re-entrant; add_item_to_room takes it again
-        room, before = room_items_now()
-        if room is None:
-            raise ToolRefusal(f"location {lid} has no room {rid!r} any more")
-        existing = next((e for e in (before if isinstance(before, list) else [])
-                         if isinstance(e, dict) and e.get("item_id") == iid), None)
-        hidden = (hidden_arg if hidden_arg is not None
-                  else bool((existing or {}).get("hidden")))
-        difficulty = (difficulty_arg if difficulty_arg is not None
-                      else _stored_difficulty(existing))
-        inverse = {"op": "restore_room_items", "location_id": lid, "room_id": rid,
-                   "before": before}
-        step.begin("location", lid, inverse)
-
-        def reconcile():
-            _r, now = room_items_now()
-            return None if wu._norm(now) == wu._norm(before) else (lid, inverse, now)
-
-        with step.writing(reconcile):
-            if not add_item_to_room(lid, rid, iid, quantity=qty, hidden=hidden,
-                                    discovery_difficulty=difficulty, note=note):
-                raise ValueError(f"the room did not take {iid}")
-        _r, written = room_items_now()
-    entry = next((e for e in written or [] if isinstance(e, dict)
-                  and e.get("item_id") == iid), {}) if not wu.is_absent(written) else {}
-    changes = []
-    if existing is not None:
-        was_hidden = bool(existing.get("hidden"))
-        if was_hidden != bool(entry.get("hidden")):
-            changes.append("was hidden, now visible" if was_hidden
-                           else "was visible, now hidden")
-        if _stored_difficulty(existing) != _stored_difficulty(entry):
-            changes.append(f"discovery_difficulty {_stored_difficulty(existing)} → "
-                           f"{_stored_difficulty(entry)}")
-    line = (f'placed {qty}× {iid} "{_short(item.get("name") or iid, 40)}" in room {rid} '
-            f'"{room.get("name") or ""}" of {lid} (now {entry.get("quantity")}'
-            + (", hidden" if entry.get("hidden") else "")
-            + "".join(f"; {c}" for c in changes) + ")")
-    step.complete(written, line)
-    return line
+    """Always refused in World Dev: items lying in rooms have no visible
+    representation in the world; visible place content uses props."""
+    raise ToolRefusal(ROOM_ITEM_REFUSAL)
 
 
 # ── Character writes ─────────────────────────────────────────────────────

@@ -34,6 +34,13 @@ journaled under target kind ``secret``, so only a created character or
 not on (group ``skills``, widened by a run's set_skill). The read tool
 ``check_character`` always checks in full.
 
+Location gaps for a location the run CREATED also check: places whose rooms are
+all open (and that have an open room or a drawn plot) with no props in any room
+or world props inside their boundary
+(``no props on the open ground (place_world_prop, or place_room_prop in an open room)``),
+placed entrances without a path terrain area within 10 m, and settlement spacing when
+the run created at least three placed places (gap > 25 m and <= 150 m).
+
 Media gaps (no portrait, no base body) are not agent gaps: the agent has no
 tool for them, so they never make an element incomplete; they are listed
 apart (:func:`media_gaps`), in ``check_run`` also on the line of a complete
@@ -333,24 +340,182 @@ def _has_floor_plan(loc: Dict[str, Any]) -> bool:
         return True
 
 
+def _is_open_room(room: Dict[str, Any]) -> bool:
+    """True when a room has no walls (open / no_walls / always_visible)."""
+    lay = room.get("layout") if isinstance(room.get("layout"), dict) else {}
+    return bool(lay.get("open") or lay.get("no_walls") or lay.get("always_visible"))
+
+
+#: Terrain kinds that count as a walkway/road for the entrance-path gap.
+#: The terrain catalog carries no path/road flag, so this set is explicit;
+#: an area counts only when its kind is in PATH_KINDS AND defined in the
+#: world's effective terrain catalog.
+PATH_KINDS = frozenset({"path", "road"})
+
+
+def _is_path_area(area: Dict[str, Any], catalog: Dict[str, Dict[str, Any]]) -> bool:
+    """True when a terrain area's kind is in :data:`PATH_KINDS` and defined in
+    the world's effective terrain catalog (``effective_catalog()``)."""
+    kind = str(area.get("kind") or "")
+    return kind in PATH_KINDS and kind in catalog
+
+
+def _missing_entrance_path(loc: Dict[str, Any]) -> bool:
+    """True when a placed location's entrance points (level-0 outside doorways
+    plus boundary_openings, or its boundary rim when neither exists) have no
+    path area within 10 m. Read / compose errors are logged and return False."""
+    if loc.get("pos_x") is None or loc.get("pos_z") is None:
+        return False
+    try:
+        from app.core.boundary_entry import opening_world_points
+        from app.core.scene_recipe import compose_scene
+        from app.core.terrain_types import effective_catalog
+        from app.core.world_dev_tools import _edge_gap_m
+        from app.core.world_geometry import (boundary_world_points,
+                                             local_to_world, polygon_distance,
+                                             polygon_points)
+        from app.models.terrain import list_areas
+        cx, cz = float(loc["pos_x"]), float(loc["pos_z"])
+        yaw = float(loc.get("yaw_deg") or 0.0)
+        catalog = effective_catalog()
+        path_polys = [
+            a["polygon"] for a in list_areas()
+            if _is_path_area(a, catalog) and polygon_points(a.get("polygon"))
+        ]
+        try:
+            scene = compose_scene(loc, read_only=True)
+        except Exception as exc:  # noqa: BLE001 — a compose error is no gap
+            _log().warning("path check of %s: compose_scene failed: %s",
+                           loc.get("id"), exc)
+            return False
+        entrances: List[Tuple[float, float]] = []
+        for d in scene.get("doorways") or []:
+            if not isinstance(d, dict):
+                continue
+            if int(d.get("level") or 0) != 0 or not d.get("outside"):
+                continue
+            at = d.get("at_world")
+            if isinstance(at, (list, tuple)) and len(at) >= 2:
+                entrances.append(local_to_world(float(at[0]), float(at[1]), cx, cz, yaw))
+        for _edge, pt in opening_world_points(loc):
+            entrances.append((float(pt[0]), float(pt[1])))
+        if entrances:
+            return not any(
+                polygon_distance(px, pz, poly) <= 10.0
+                for px, pz in entrances for poly in path_polys
+            )
+        rim = boundary_world_points(loc) or [(cx, cz)]
+        return not any(_edge_gap_m(rim, poly) <= 10.0 for poly in path_polys)
+    except Exception as exc:  # noqa: BLE001 — a read error is no gap
+        _log().warning("path check of %s failed: %s", loc.get("id"), exc)
+        return False
+
+
+def run_placed_locations(run_id: str) -> List[Dict[str, Any]]:
+    """Every still-existing placed location created by ``run_id`` (journal
+    scope None, with finite pos_x and pos_z). Shared between completeness
+    (:func:`_settlement_spacing_gap`) and ``world_dev_tools._spacing_note``."""
+    from app.models.world import get_location_by_id
+    out: List[Dict[str, Any]] = []
+    for kind, ident, scope in run_elements(run_id):
+        if kind != "location" or scope is not None:
+            continue
+        row = get_location_by_id(ident)
+        if row is not None and row.get("pos_x") is not None and row.get("pos_z") is not None:
+            out.append(row)
+    return out
+
+
+def _settlement_spacing_gap(loc: Dict[str, Any], run_id: str) -> Optional[str]:
+    """Spacing gap when the run created >= 3 placed locations and the nearest
+    other run-created placed location is > 25 m and <= 150 m away edge to edge.
+    Beyond 150 m edge to edge a place is treated as a separate site and no
+    spacing gap is reported."""
+    if not run_id or loc.get("pos_x") is None or loc.get("pos_z") is None:
+        return None
+    try:
+        from app.core.world_dev_tools import (SETTLEMENT_GAP_MAX_M,
+                                              SETTLEMENT_RADIUS_M, _edge_gap_m,
+                                              _entry_world_shape,
+                                              _placement_entry)
+        this_id = str(loc.get("id") or "")
+        run_placed = run_placed_locations(run_id)
+        if len(run_placed) < 3:
+            return None
+        this_shape = _entry_world_shape(
+            _placement_entry(loc, loc["pos_x"], loc["pos_z"], loc.get("yaw_deg")))
+        nearest: Optional[float] = None
+        for other in run_placed:
+            if str(other.get("id") or "") == this_id:
+                continue
+            oshape = _entry_world_shape(
+                _placement_entry(other, other["pos_x"], other["pos_z"],
+                                 other.get("yaw_deg")))
+            gap = _edge_gap_m(this_shape, oshape)
+            if nearest is None or gap < nearest:
+                nearest = gap
+        if nearest is not None and SETTLEMENT_GAP_MAX_M < nearest <= SETTLEMENT_RADIUS_M:
+            return (f"stands {round(nearest)} m from the nearest place of this run — "
+                    f"a village's houses stand 3–10 m apart")
+        return None
+    except Exception as exc:  # noqa: BLE001 — a read error is no gap
+        _log().warning("spacing check of %s failed: %s", loc.get("id"), exc)
+        return None
+
+
 def location_gaps(loc: Dict[str, Any], created: bool = True,
-                  floor_plan: bool = True) -> List[str]:
+                  floor_plan: bool = True,
+                  run_id: Optional[str] = None) -> List[str]:
     """The gaps of a stored location. ``created`` False (the run only updated
     it and wrote no x/z for it) = nothing is checked. ``floor_plan`` False
-    (the run did not create it) skips ``no floor plan`` (E5): a place with
-    at least one real room (not the ground, not a storey corridor) and
-    nothing the scene composer can draw."""
+    (the run did not create it) skips the created-only gaps: ``no floor plan``
+    (E5), outdoor open-ground props, entrance path within 10 m, and settlement
+    spacing (when ``run_id`` is given)."""
     if not created:
         return []
+    from app.core.world_geometry import polygon_points
     from app.models.world import GROUND_ROOM_ID, is_floor_room
     gaps: List[str] = []
     if loc.get("pos_x") is None or loc.get("pos_z") is None:
         gaps.append("unplaced (no x/z) — not a travel target")
-    real_rooms = [r for r in loc.get("rooms") or [] if isinstance(r, dict)
-                  and str(r.get("id") or "") != GROUND_ROOM_ID
+    rooms = [r for r in loc.get("rooms") or [] if isinstance(r, dict)]
+    real_rooms = [r for r in rooms
+                  if str(r.get("id") or "") != GROUND_ROOM_ID
                   and not is_floor_room(str(r.get("id") or ""))]
     if floor_plan and real_rooms and not _has_floor_plan(loc):
         gaps.append("no floor plan (set_room_layout)")
+    if floor_plan:
+        has_outline = bool(polygon_points((loc.get("map3d") or {}).get("boundary")))
+        # Only a place the model can furnish: an open room of its own
+        # (place_room_prop) or a drawn plot (place_world_prop inside it). A bare
+        # pin with only the ground room has neither, so the gap could never close.
+        if (real_rooms or has_outline) and all(_is_open_room(r) for r in real_rooms):
+            has_prop = any(
+                isinstance(r.get("layout"), dict) and bool(r["layout"].get("props"))
+                for r in rooms
+            )
+            if not has_prop:
+                try:
+                    from app.core.world_geometry import boundary_contains
+                    from app.models.world_props import list_world_props
+                    has_prop = any(
+                        p.get("x") is not None and p.get("z") is not None
+                        and boundary_contains(loc, float(p["x"]), float(p["z"]))
+                        for p in list_world_props()
+                    )
+                except Exception as exc:  # noqa: BLE001 — a read error is no prop
+                    _log().warning("world-prop check of %s failed: %s", loc.get("id"), exc)
+            if not has_prop:
+                gaps.append(
+                    "no props on the open ground "
+                    "(place_world_prop, or place_room_prop in an open room)"
+                )
+        if _missing_entrance_path(loc):
+            gaps.append("entrance without a path within 10 m (add_terrain_area kind path)")
+        if run_id:
+            spacing_gap = _settlement_spacing_gap(loc, run_id)
+            if spacing_gap:
+                gaps.append(spacing_gap)
     return gaps
 
 
@@ -426,7 +591,7 @@ def character_suffix(run_id: str, name: str) -> str:
 def location_suffix(run_id: str, loc: Dict[str, Any]) -> str:
     scope = element_scope(run_id, "location", str(loc.get("id") or ""))
     return suffix(location_gaps(loc, scope is None or "position" in scope,
-                                floor_plan=scope is None))
+                                floor_plan=scope is None, run_id=run_id))
 
 
 def _exists(kind: str, ident: str) -> Optional[Dict[str, Any]]:
@@ -472,7 +637,7 @@ def check_run_lines(run_id: str) -> Tuple[List[str], int, int]:
             label = f'character "{ident}"'
         elif kind == "location":
             gaps = location_gaps(row, scope is None or "position" in scope,
-                                 floor_plan=scope is None)
+                                 floor_plan=scope is None, run_id=run_id)
             label = f'location {ident} "{row.get("name") or ""}"'
         elif kind == "world_prop":
             gaps, label = [], f"world prop {ident}"

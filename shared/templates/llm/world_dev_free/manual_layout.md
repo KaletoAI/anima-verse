@@ -46,13 +46,13 @@ Real sizes (a person is 1.70 m tall; keep rooms within realistic `max_m2` guidel
   "rooms": [
     {"id": "r1a2b3c4", "x": -8, "y": -6, "w": 8, "d": 6, "level": 0, "room_type": "tavern",
      "openings": [
+       {"edge": 2, "at": 0.5, "width_m": 1.2, "type": "door", "to": "outside"},
        {"edge": 1, "at": 0.5, "width_m": 0.9, "type": "door", "to": "r9f8e7d6"},
        {"edge": 0, "at": 0.3, "width_m": 1.2, "height_m": 1.4, "sill_m": 0.9, "type": "window"}]},
     {"id": "r9f8e7d6", "x": 0, "y": -6, "w": 4, "d": 6},
     {"name": "Guest room", "description": "A low chamber over the taproom.",
      "x": -8, "y": -6, "w": 5, "d": 6, "level": 1}
   ],
-  "boundary_openings": [{"edge": 0, "at": 0.5, "width_m": 3, "room": "r1a2b3c4"}],
   "stairs": [{"at": [-7.4, -5.5], "from_level": 0, "dir_deg": 0}],
   "storey_height_m": 3
 }
@@ -71,27 +71,48 @@ by the building panel's button, not by you.
 - `x`, `y`, `w`, `d` — metres, `w` and `d` greater than 0. `level` — default 0.
 - `room_type` — optional, one of `list_catalog room_types` (furnishing needs it).
 - `open` — `true` (a boolean) for an open sub-area (yard, terrace, market stall): no walls, visible from
-  outside. Default `false` = a closed room.
+  outside. Default `false` = a closed room. Outdoor rooms (`open: true`) of a square get their props
+  via `place_room_prop`.
 - `surfaces` — optional `{"floor": "<kind>", "wall": "<kind>"}` of `list_catalog surface_kinds`.
 - `outline` — optional, instead of a plain rectangle: 3–32 points in metres relative to the
   room's own minimum corner (spanning 0…`w`, 0…`d`), first point not repeated.
 - `openings` — a list of the holes in THIS room's walls, one object each:
   - `edge` — which wall: `0` north, `1` east, `2` south, `3` west (with an `outline`,
     edge `i` runs from point `i` to point `i+1`).
-  - `at` — where the opening's centre sits along that wall, `0`…`1` (0.5 = middle).
+  - `at` — where the opening's centre sits along that wall, `0`…`1` (0.5 = middle), measured from
+    point `i` to point `i+1` of the edge: on a rectangle, edge `0` (north) runs west→east, edge `1`
+    (east) runs north→south, edge `2` (south) runs **EAST→WEST** (so `at` 0.2 on edge `2` is near
+    the EAST end), and edge `3` (west) runs south→north.
   - `width_m`, `height_m` — 0.4…10 m; `sill_m` 0…3 m. `type` `"door"` (default),
     `"window"` or `"passage"`. A missing height/sill gets the sizes of the table above
     (door/passage 2.1 m high, sill 0; window 1.4 m high, sill 0.9 m).
-  - `to` — optional: the room on the other side (an id, or `"outside"`).
+  - `to` — optional: the room on the other side (an id, or `"outside"`). A house's entrance is an
+    OUTSIDE DOOR on the room edge the plan says (`"to": "outside"`).
   **Doors connect ADJACENT rooms**: put the door on the wall two rooms share, at an `at`
   inside the shared stretch. One door in the shared wall suffices for both rooms — it is
   mirrored onto the neighbour's wall automatically.
 
-### `boundary_openings` — how one gets onto the plot
+### `boundary_openings` — gates in a fence around a plot
 
-A list of gaps in the place's OUTLINE (gate, street mouth), one object each — a single gate is a list of one: `edge` = index into `map3d.boundary` (edge `i`
-runs from point `i` to point `i+1`), `at` `0`…`1`, `width_m` from 0.5 m up to the plot's width, optional `room` (where one
-arrives: a room id, or the name of a room of the place or of this plan). Sending the list replaces the stored one; leave it out to keep what is there.
+`boundary_openings` are **gates in a fence** around a plot — use them ONLY when the plot is fenced
+(a yard with a fence and a gate, a walled market). Once a place has any `boundary_openings`, people
+can enter its plot ONLY through those openings. A house without a fence has NO `boundary_openings`;
+the building is entered through its outside doors (`"to": "outside"`), never through a boundary
+opening.
+
+Each entry is an object in a list (a single gate is a list of one): `edge` = index into
+`map3d.boundary` (edge `i` runs from point `i` to point `i+1`), `at` `0`…`1`, `width_m` from 0.5 m
+up to the plot's width, optional `room` (where one arrives: a room id, or the name of a room of the
+place or of this plan). Sending the list replaces the stored one; leave it out to keep what is there.
+
+Fenced-yard example:
+
+```json
+{
+  "rooms": [{"id": "r_yard", "x": -6, "y": -6, "w": 12, "d": 12, "open": true}],
+  "boundary_openings": [{"edge": 2, "at": 0.5, "width_m": 3, "room": "r_yard"}]
+}
+```
 
 ### `stairs` — one entry per flight
 

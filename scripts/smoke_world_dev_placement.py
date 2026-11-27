@@ -115,7 +115,13 @@ Second run (all far from the fixtures, which cover 0…40 and 150…160):
            a real move) -> refused with "which nobody can walk on".
       (n2) create_location Demo Hall at (400,300): seed square 395…405 x
            295…305, far from the tower diamond (|dx| = 100 - 5 > 28.28) and
-           the shed (320…330) -> no "; warnings:". update_location{hall,
+           the shed (320…330). Nearest placed place is Demo Kiosk (325…335 x
+           315…325): corner-to-corner gap = sqrt((395-335)^2 + (315-305)^2)
+           = sqrt(60^2 + 10^2) = sqrt(3700) = 60.83 -> 61 m (vs Shed 65 m,
+           Tower 66.7 m). Run 2 already has >= 3 run-created placed places, so
+           no per-write spacing warning fires ("houses of a village" absent,
+           no overlap warning) and the info line reads
+           'nearest place <kiosk> "Demo Kiosk": 61 m edge to edge'. update_location{hall,
            patch {description}} -> no "overlaps" (the outline is unchanged).
            update_location{hall, patch {map3d {boundary [[-80,-5],[-60,-5],
            [-60,5],[-80,5]]}}}: yaw 0, so it spans x 320…340, z 295…305. It
@@ -148,8 +154,14 @@ SEED_BOUNDARY_M (10) centred on the pin, ±5 m.
   (o2) Demo Pin upserted directly at (1000,0) WITHOUT map3d (no outline).
        create_location Demo Cart at (1008,0), no boundary: it spans x
        1003…1013, z -5…5. The pin (1000,0) lies outside that and has no area
-       -> no "; warnings:" (before: the pin's assumed seed 995…1005 shared
-       x 1003…1005 with the cart and warned).
+       -> no overlap warning (before: the pin's assumed seed 995…1005 shared
+       x 1003…1005 with the cart and warned). Nearest place of ANY kind is
+       Demo Pin (pin only at (1000,0)): gap = 1003 - 1000 = 3 m -> info
+       'nearest place loc_demo_pin "Demo Pin": 3 m edge to edge'. Run 3 holds
+       only 2 run-created placed places (Demo Barn at (1100,100), 1095…1105 x
+       95…105, and Demo Cart), so the per-write spacing warning fires: gap =
+       sqrt((1095-1013)^2 + (95-5)^2) = sqrt(82^2 + 90^2) = sqrt(14824) =
+       121.75 -> 122 m ("stands 122 m from the nearest place 'Demo Barn'").
        map_region{990,-10,1020,10}: the Demo Pin line has no "outline" and
        " · on grass"; the cart line has "outline (1003,-5)-(1013,5)".
   (o3) Demo Post upserted at (2000,0) without map3d. create_location Demo
@@ -431,9 +443,12 @@ check("(n1) a real move onto impassable ground is refused",
       not res.ok and "which nobody can walk on" in res.line, res)
 
 # (n2)
+KIOSK = (named("Demo Kiosk") or [{}])[0].get("id") or ""
 res = call(5, "create_location", {"data": {"name": "Demo Hall", "rooms": [{"name": "Room"}]},
                                   "x": 400, "z": 300})
-check("(n2) hall ok, no warning", res.ok and "; warnings:" not in res.line, res)
+check("(n2) hall ok, no spacing or overlap warning, 61 m info to Demo Kiosk",
+      res.ok and "overlaps" not in res.line and "houses of a village" not in res.line
+      and f'nearest place {KIOSK} "Demo Kiosk": 61 m edge to edge' in res.line, res)
 HALL = (named("Demo Hall") or [{}])[0].get("id") or ""
 SHED = (named("Demo Shed") or [{}])[0].get("id") or ""
 res = call(5, "update_location", {"id": HALL, "patch": {"description": "A demo hall."}})
@@ -509,8 +524,10 @@ check("(o2) fixture pin has no outline",
       not ((PIN_BEFORE or {}).get("map3d") or {}).get("boundary"), PIN_BEFORE)
 res = call(1, "create_location", {"data": {"name": "Demo Cart", "rooms": [{"name": "Room"}]},
                                   "x": 1008, "z": 0})
-check("(o2) cart ok, no warning (a pin has no area)",
-      res.ok and "; warnings:" not in res.line, res)
+check("(o2) cart ok, no overlap warning, 3 m pin info, 122 m spacing warning",
+      res.ok and "overlaps" not in res.line
+      and 'nearest place loc_demo_pin "Demo Pin": 3 m edge to edge' in res.line
+      and "stands 122 m from the nearest place 'Demo Barn'" in res.line, res)
 CART = (named("Demo Cart") or [{}])[0].get("id") or ""
 res = call(1, "map_region", {"min_x": 990, "min_z": -10, "max_x": 1020, "max_z": 10})
 lines = res.line.split("\n")

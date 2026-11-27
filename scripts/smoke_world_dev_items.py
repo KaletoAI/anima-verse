@@ -59,21 +59,12 @@ Run 1 (turn 1 unless named):
       the line names "max_stack 10"); give 4 -> ok (6 + 4 = 10, R2).
       The same item twice in one call -> refused "twice"; quantity 0 ->
       refused; an unknown character -> refused.
-  (d) SECRET -> refused "reveals a secret" in give_items and in add_room_item.
-  (e) create_location "Demo Forge" with room "Forge"; add_room_item{forge,
-      hammer, quantity 2} -> the room entry has quantity 2; again quantity 1
-      with note "Demo note" -> 3 (add_item_to_room adds the quantity).
-  (e3) add_room_item{forge, CHISEL, hidden true, discovery_difficulty 50};
-      again WITHOUT hidden / difficulty -> the entry keeps hidden true and 50,
-      quantity 2, the line ends "(now 2, hidden)"; again with hidden false,
-      difficulty 0 -> hidden false, 0, quantity 3, the line names "was
-      hidden, now visible" and "discovery_difficulty 50 → 0".
-      discovery_difficulty 1000 -> refused (writer clamps 0…999); room
-      "room_nope" -> refused; a part-free unknown item -> refused.
+  (d) SECRET -> refused "reveals a secret" in give_items.
+  (e) create_location "Demo Forge" with room "Forge"; add_room_item is always
+      refused in World Dev with "items in rooms are invisible in the world"
+      (nothing written to the room; journal row "refused").
   (e2) the PRE-EXISTING barn: set_room_layout{room_barn at x -4, y -4, w 8,
-      d 8} -> ok; add_room_item{barn, BUCKET} -> ok; add_room_item{barn,
-      NAILS} -> ok (quantity 1); a discovery row
-      (loc_demo_barn, room_barn, BUCKET, "Demo Smith") is inserted directly.
+      d 8} -> ok; add_room_item on the barn is refused likewise.
   (i) RAG = create_item "Demo Rag"; delete_created{item, RAG} in the same turn
       -> ok, RAG gone. RAG2 = create_item "Demo Rag2" in turn 1;
       delete_created{item, RAG2} in turn 2 -> refused "earlier turn" (an
@@ -86,15 +77,13 @@ Run 1 (turn 1 unless named):
   discard_preview -> contains 'item <id> "<name>"' for HAMMER, NAILS, CHISEL,
       RAG2, BOOK and the Demo Forge location line; no line names "Demo Rag"" (gone).
       Every holder of them is one the undo takes back (Smith's gives undone
-      newest-first, NAILS 10 -> 6 -> gone; the created forge; the barn room's
-      two restore_room_items back to no key), so the lines carry no "still
-      held" suffix.
+      newest-first, NAILS 10 -> 6 -> gone; the created forge), so the lines
+      carry no "still held" suffix.
   (f) undo(run) -> complete; Demo Smith holds nothing; HAMMER, NAILS, CHISEL,
       RAG2, BOOK are gone from the catalog (the barn's restore_location of
       (i2) is newer than BOOK's create, so the barn no longer names it); Demo
-      Forge is gone; the barn row equals
-      PRE_BARN (JSON) and its room has NO "items" key; no item_discoveries row
-      of the barn room is left.
+      Forge is gone; the barn row equals PRE_BARN (JSON) and its room has NO
+      "items" key.
 
 Run 2 (foreign changes; run 1 is set to "accepted" first — one open run):
   (g) TONGS = create_item "Demo Tongs"; give to Demo Smith -> ok; the admin
@@ -104,13 +93,13 @@ Run 2 (foreign changes; run 1 is set to "accepted" first — one open run):
       held by character "Demo Smith" — stays' (the give's undo is changed
       since) and 'item <PLIERS> "Demo Pliers" is still held by room room_barn
       "Barn" of location loc_demo_barn — stays'.
-  (h) add_room_item{barn, BUCKET, 1} -> ok; the admin adds ANVIL to the barn
-      room directly (add_item_to_room).
+  (h) add_room_item{barn, BUCKET, 1} -> refused ("items in rooms are invisible
+      in the world"); the admin adds ANVIL to the barn room directly
+      (add_item_to_room).
   undo(run) -> complete False; a skip "changed since" with keys [TONGS] (the
       inventory step), a skip "item still in use" with item TONGS, a skip
-      "changed since" with keys ["items"] (the room step), a skip "item still
-      in use" with item PLIERS. The entry keeps notes "x"; the barn room keeps
-      BUCKET, ANVIL and PLIERS.
+      "item still in use" with item PLIERS. The entry keeps notes "x"; the barn
+      room keeps ANVIL and PLIERS.
 
 Runs 3-5 — a holder the run created, kept holding by a foreign change; the
 order of creation decides when the undo walk (newest-first) meets the item:
@@ -139,10 +128,7 @@ create_item LAMP: (s7a) the admin lays LAMP in the Loft -> the barn's rooms no
 longer equal what the run wrote, so the undo skips "rooms" (changed since,
 keys ["rooms"]) and LAMP (item still in use); the preview line reads
 'item <LAMP> "<name>" is still held by room <LOFT> "Loft" of location
-loc_demo_barn — stays' (it used to read as going). (s7b) the RUN lays LAMP in
-the Loft (add_room_item, a newer restore_room_items row): the undo takes it
-out first, the rooms equal what was written again, the Loft goes: plain
-going line, undo complete, Loft and LAMP gone.
+loc_demo_barn — stays' (it used to read as going).
 Run 7 (S8) — the admin sets the barn's knowledge_item_id to a created SCROLL:
 preview 'item <SCROLL> "Demo Scroll" is still held by location loc_demo_barn
 "Demo Barn" (its knowledge item) — stays'; undo not complete (item still in
@@ -376,7 +362,7 @@ print("(d) reveals_secret")
 refused("(d) give secret", "give_items", {"character": SMITH, "items": [{"item_id": SECRET}]},
         "reveals a secret")
 
-print("(e) room items")
+print("(e) room items refused in World Dev")
 res = call(1, "create_location", {"data": {"name": "Demo Forge", "rooms": [{"name": "Forge"}]},
                                   "x": 0, "z": 0})
 check("(e) forge created", res.ok, res)
@@ -384,60 +370,22 @@ FORGE = next((l["id"] for l in list_locations() if l.get("name") == "Demo Forge"
 FORGE_ROOM = next((r["id"] for r in (get_location_by_id(FORGE) or {}).get("rooms") or []
                    if r.get("name") == "Forge"), "")
 check("(e) forge room", bool(FORGE and FORGE_ROOM))
-refused("(d) room secret", "add_room_item",
-        {"location_id": FORGE, "room_id": FORGE_ROOM, "item_id": SECRET}, "reveals a secret")
-res = call(1, "add_room_item", {"location_id": FORGE, "room_id": FORGE_ROOM,
-                                "item_id": HAMMER, "quantity": 2})
-check("(e) ok", res.ok and res.wrote, res)
-check("(e) quantity 2", (room_entry(FORGE, FORGE_ROOM, HAMMER) or {}).get("quantity") == 2,
+refused("(e) add_room_item refused (secret)", "add_room_item",
+        {"location_id": FORGE, "room_id": FORGE_ROOM, "item_id": SECRET},
+        "items in rooms are invisible in the world")
+refused("(e) add_room_item refused (hammer)", "add_room_item",
+        {"location_id": FORGE, "room_id": FORGE_ROOM, "item_id": HAMMER, "quantity": 2},
+        "items in rooms are invisible in the world")
+check("(e) forge room has no items", "items" not in (room_of(FORGE, FORGE_ROOM) or {}),
       room_of(FORGE, FORGE_ROOM))
-row = last_row()
-check("(e) journal inverse", (row.get("target_kind"), row.get("target_id")) == ("location", FORGE)
-      and (row.get("inverse") or {}).get("op") == "restore_room_items"
-      and wu.is_absent((row.get("inverse") or {}).get("before")), row.get("inverse"))
-res = call(1, "add_room_item", {"location_id": FORGE, "room_id": FORGE_ROOM,
-                                "item_id": HAMMER, "quantity": 1, "note": "Demo note"})
-check("(e) again -> 3", res.ok and (room_entry(FORGE, FORGE_ROOM, HAMMER) or {}).get("quantity")
-      == 3 and (room_entry(FORGE, FORGE_ROOM, HAMMER) or {}).get("note") == "Demo note",
-      room_of(FORGE, FORGE_ROOM))
-print("(e3) an entry already lying there keeps hidden / difficulty left out")
-res = call(1, "add_room_item", {"location_id": FORGE, "room_id": FORGE_ROOM, "item_id": CHISEL,
-                                "hidden": True, "discovery_difficulty": 50})
-check("(e3) hidden chisel", res.ok and (room_entry(FORGE, FORGE_ROOM, CHISEL) or {})
-      .get("hidden") is True, res)
-res = call(1, "add_room_item", {"location_id": FORGE, "room_id": FORGE_ROOM, "item_id": CHISEL})
-ent = room_entry(FORGE, FORGE_ROOM, CHISEL) or {}
-check("(e3) still hidden at 50, quantity 2", res.ok and ent.get("hidden") is True
-      and ent.get("discovery_difficulty") == 50 and ent.get("quantity") == 2, ent)
-check("(e3) line: no change named", res.line.endswith("(now 2, hidden)"), res.line)
-res = call(1, "add_room_item", {"location_id": FORGE, "room_id": FORGE_ROOM, "item_id": CHISEL,
-                                "hidden": False, "discovery_difficulty": 0})
-ent = room_entry(FORGE, FORGE_ROOM, CHISEL) or {}
-check("(e3) sent values replace", ent.get("hidden") is False
-      and ent.get("discovery_difficulty") == 0 and ent.get("quantity") == 3, ent)
-check("(e3) line names the change", "was hidden, now visible" in res.line
-      and "discovery_difficulty 50 → 0" in res.line, res.line)
-refused("(e) difficulty 1000", "add_room_item",
-        {"location_id": FORGE, "room_id": FORGE_ROOM, "item_id": HAMMER,
-         "discovery_difficulty": 1000}, "discovery_difficulty")
-refused("(e) unknown room", "add_room_item",
-        {"location_id": FORGE, "room_id": "room_nope", "item_id": HAMMER}, "room_nope")
-refused("(e) unknown item", "add_room_item",
-        {"location_id": FORGE, "room_id": FORGE_ROOM, "item_id": "item_nope"}, "item_nope")
 
-print("(e2) pre-existing place: layout + room item")
+print("(e2) pre-existing place: layout ok, add_room_item refused")
 res = call(1, "set_room_layout", {"location_id": BARN, "layout": {
     "rooms": [{"id": BARN_ROOM, "x": -4, "y": -4, "w": 8, "d": 8}]}})
 check("(e2) layout ok", res.ok and res.wrote, res)
-res = call(1, "add_room_item", {"location_id": BARN, "room_id": BARN_ROOM, "item_id": BUCKET})
-check("(e2) bucket placed", res.ok and (room_entry(BARN, BARN_ROOM, BUCKET) or {})
-      .get("quantity") == 1, res)
-res = call(1, "add_room_item", {"location_id": BARN, "room_id": BARN_ROOM, "item_id": NAILS})
-check("(e2) nails laid beside the bucket", res.ok and (room_entry(BARN, BARN_ROOM, NAILS) or {})
-      .get("quantity") == 1, res)
-with transaction() as conn:
-    conn.execute("INSERT INTO item_discoveries (location_id, room_id, item_id, character_name, "
-                 "game_ts) VALUES (?, ?, ?, ?, ?)", (BARN, BARN_ROOM, BUCKET, SMITH, "Y0001-D001"))
+refused("(e2) add_room_item on barn refused", "add_room_item",
+        {"location_id": BARN, "room_id": BARN_ROOM, "item_id": BUCKET},
+        "items in rooms are invisible in the world")
 
 print("(i) delete_created item")
 RAG = created_id(call(1, "create_item", {"name": "Demo Rag", "category": "tool"}))
@@ -501,7 +449,9 @@ check("(g) preview: pliers stay in the barn",
       f'{BARN} — stays' in prev, prev)
 res = call(1, "add_room_item", {"location_id": BARN, "room_id": BARN_ROOM, "item_id": BUCKET},
            run2)
-check("(h) bucket placed", res.ok, res)
+check("(h) add_room_item refused",
+      not res.ok and not res.wrote and "items in rooms are invisible in the world" in res.line,
+      res)
 check("(h) admin adds the anvil", add_item_to_room(BARN, BARN_ROOM, ANVIL))
 rep = wu.undo(run2)
 skips = rep["skipped"]
@@ -510,15 +460,13 @@ check("(g) inventory changed since", any(s.get("reason") == wu.REASON_CHANGED
                                          and s.get("keys") == [TONGS] for s in skips), skips)
 check("(g) tongs in use", any(s.get("reason") == wu.REASON_ITEM_IN_USE
                               and s.get("item") == TONGS for s in skips), skips)
-check("(h) room changed since", any(s.get("reason") == wu.REASON_CHANGED
-                                    and s.get("keys") == ["items"] for s in skips), skips)
 check("(g) entry keeps notes x", (held().get(TONGS) or {}).get("notes") == "x", held())
 check("(g) tongs stay in the catalog", get_item(TONGS) is not None)
 check("(g) pliers in use, stay", get_item(PLIERS) is not None
       and any(s.get("reason") == wu.REASON_ITEM_IN_USE and s.get("item") == PLIERS
               for s in skips), skips)
 ids = sorted(e.get("item_id") for e in (room_of(BARN, BARN_ROOM) or {}).get("items") or [])
-check("(h) barn keeps all three entries", ids == sorted([BUCKET, ANVIL, PLIERS]), ids)
+check("(h) barn keeps anvil and pliers", ids == sorted([ANVIL, PLIERS]), ids)
 wr.set_status(run2, "accepted")
 
 
@@ -604,52 +552,37 @@ def loft_of(loc):
                  if r.get("name") == "Loft"), "")
 
 
-for variant in ("s7a", "s7b"):
-    run6 = wr.create_run("items6" + variant, "m", "p", "u", 60, 600000)
-    # The stored rooms are sent by id and name (the tool merges each sent room
-    # onto its stored row, so the barn room keeps its items), plus the new one.
-    barn_rooms = [{"id": r["id"], "name": r.get("name") or r["id"]}
-                  for r in (get_location_by_id(BARN) or {}).get("rooms") or []
-                  if r.get("id") != "__ground__" and not r.get("is_floor")]
-    res = call(1, "update_location", {"id": BARN, "patch": {"rooms": barn_rooms + [{"name": "Loft"}]}},
-               run6)
-    LOFT = loft_of(BARN)
-    check(f"({variant}) loft added to the barn", res.ok and bool(LOFT), res)
-    LAMP = created_id(call(1, "create_item", {"name": "Probe Lamp " + variant,
-                                              "category": "tool"}, run6))
-    if variant == "s7a":
-        check("(s7a) admin lays the lamp in the loft", add_item_to_room(BARN, LOFT, LAMP))
-    else:
-        res = call(1, "add_room_item", {"location_id": BARN, "room_id": LOFT, "item_id": LAMP},
-                   run6)
-        check("(s7b) the run lays the lamp in the loft", res.ok, res)
-    prev = wu.discard_preview(run6)
-    name = "Probe Lamp " + variant
-    if variant == "s7a":
-        check("(s7a) preview: the lamp stays in the loft",
-              f'item {LAMP} "{name}" is still held by room {LOFT} "Loft" of location '
-              f'{BARN} — stays' in prev, prev)
-    else:
-        check("(s7b) preview: plain going line", f'item {LAMP} "{name}"' in prev, prev)
-    rep = wu.undo(run6)
-    skips = rep["skipped"]
-    if variant == "s7a":
-        check("(s7a) undo not complete", rep["complete"] is False, rep)
-        check("(s7a) rooms changed since", any(s.get("reason") == wu.REASON_CHANGED
-                                               and s.get("keys") == ["rooms"] for s in skips),
-              skips)
-        check("(s7a) lamp in use", any(s.get("reason") == wu.REASON_ITEM_IN_USE
-                                       and s.get("item") == LAMP for s in skips), skips)
-        check("(s7a) loft and lamp stay", loft_of(BARN) == LOFT and get_item(LAMP) is not None)
-        # Clean up for the next variant: the admin removes the loft again.
-        loc = copy.deepcopy(get_location_by_id(BARN))
-        loc["rooms"] = [r for r in loc["rooms"] if r.get("id") != LOFT]
-        from app.models.world import upsert_location  # noqa: E402
-        check("(s7a) cleanup", upsert_location(loc, sync_world=True) and not loft_of(BARN))
-    else:
-        check("(s7b) undo complete", rep["complete"], skips)
-        check("(s7b) loft and lamp gone", not loft_of(BARN) and get_item(LAMP) is None)
-    wr.set_status(run6, "accepted")
+run6 = wr.create_run("items6s7a", "m", "p", "u", 60, 600000)
+# The stored rooms are sent by id and name (the tool merges each sent room
+# onto its stored row, so the barn room keeps its items), plus the new one.
+barn_rooms = [{"id": r["id"], "name": r.get("name") or r["id"]}
+              for r in (get_location_by_id(BARN) or {}).get("rooms") or []
+              if r.get("id") != "__ground__" and not r.get("is_floor")]
+res = call(1, "update_location", {"id": BARN, "patch": {"rooms": barn_rooms + [{"name": "Loft"}]}},
+           run6)
+LOFT = loft_of(BARN)
+check("(s7a) loft added to the barn", res.ok and bool(LOFT), res)
+LAMP = created_id(call(1, "create_item", {"name": "Probe Lamp s7a",
+                                          "category": "tool"}, run6))
+check("(s7a) admin lays the lamp in the loft", add_item_to_room(BARN, LOFT, LAMP))
+prev = wu.discard_preview(run6)
+check("(s7a) preview: the lamp stays in the loft",
+      f'item {LAMP} "Probe Lamp s7a" is still held by room {LOFT} "Loft" of location '
+      f'{BARN} — stays' in prev, prev)
+rep = wu.undo(run6)
+skips = rep["skipped"]
+check("(s7a) undo not complete", rep["complete"] is False, rep)
+check("(s7a) rooms changed since", any(s.get("reason") == wu.REASON_CHANGED
+                                       and s.get("keys") == ["rooms"] for s in skips),
+      skips)
+check("(s7a) lamp in use", any(s.get("reason") == wu.REASON_ITEM_IN_USE
+                               and s.get("item") == LAMP for s in skips), skips)
+check("(s7a) loft and lamp stay", loft_of(BARN) == LOFT and get_item(LAMP) is not None)
+loc = copy.deepcopy(get_location_by_id(BARN))
+loc["rooms"] = [r for r in loc["rooms"] if r.get("id") != LOFT]
+from app.models.world import upsert_location  # noqa: E402
+check("(s7a) cleanup", upsert_location(loc, sync_world=True) and not loft_of(BARN))
+wr.set_status(run6, "accepted")
 
 print("run 7 (S8): a place names the created item as its knowledge item")
 # The run creates SCROLL; the admin sets the barn's knowledge_item_id to it

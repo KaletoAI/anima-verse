@@ -138,27 +138,19 @@ stored one back to the default).
   statues, rugs, wall art, stoves, barrels, beds, benches, lamps, plants. Props come from the prop
   library (`find_props`) and are placed via `furnish_rooms` (whole furniture kits),
   `place_room_prop` (one prop in a room, metres from the room's min corner) or `place_world_prop`
-  (open ground outside any place). Free mode cannot create new props (they need a 3D model); a
+  (open ground: outside any place, or a place's open ground inside its plot but outside its rooms). Free mode cannot create new props (they need a 3D model); a
   needed prop that the library lacks is named under *left open* in the summary — never created as
   an item instead.
-- **ITEM** — a thing a character can pick up, carry, use, consume, give or own (tools, food, books,
-  keys, jewellery, small trinkets). Lies in a room via `add_room_item`, sits in inventories
-  (`give_items`).
+- **ITEM** — a thing only for a character's inventory or outfit (`give_items`), a secret or a quest
+  (tools, food, books, keys, jewellery, small trinkets) — never to furnish or decorate a place.
 
 `place_room_prop{location_id, room_id, prop_id, x, z, yaw?, offset_y?, label?}` stands ONE library
 prop in a regular room with a floor plan (`x`, `z` in metres from the room's min corner; the turned
 footprint must stay inside the room's `w` × `d` and not overlap an existing standing placement).
 Ground and storey corridors (`__…`) are refused.
 
-## Room items
-
-`add_room_item{location_id, room_id, item_id, quantity?, hidden?, discovery_difficulty?, note?}`
-lays a pickupable catalog item (`find_items`; reuse an id, `create_item` only for a new kind of
-thing characters can pick up, carry, use or own — never a standing prop) in a room — also the
-ground or a corridor. The same item again adds to its quantity; a
-`hidden` / `discovery_difficulty` (whole 0…999: how hard a hidden item is to find) / `note` you
-send replaces the stored one, one you leave out keeps it. An
-item that reveals a secret is refused.
+`add_room_item` is not available in World Dev — items in rooms are invisible in the world;
+everything visible in a place is a prop (`place_room_prop`, `furnish_rooms`).
 
 ## Position and outline
 
@@ -172,7 +164,10 @@ item that reveals a secret is refused.
   one (the map shows it; redraw it with `update_location`). Draw it when the land has a shape (a
   shore along the lake edge, a yard between two woods). A place made elsewhere without an outline
   has no area on the map: the checks judge it by its pin.
-- Two places must not share ground; leave streets and squares between them. An outline that
+- Two places must not share ground; leave streets and squares between them. Houses of a village
+  stand 3–10 m apart edge to edge; the square is its own outdoor place with a tight outline (and
+  gets its props via `place_room_prop` in its open rooms). Placement tools report the edge-to-edge
+  gap to the nearest place and warn above 25 m. An outline that
   overlaps another place's is stored, but the result ends
   `; warnings: '<new>' overlaps place <id> "<name>"` — move one of them (`place_location`) unless the overlap is meant (a stall on a square).
 - A pin on impassable ground (deep water, rock — the kinds `world_overview` marks

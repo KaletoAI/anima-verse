@@ -70,7 +70,7 @@ plans -> furnishing -> world props / scatter -> items -> characters -> NPC slots
   t10 place_world_prop {Demo Well, x 60, z 60}                = WP      -> ok
   t11 create_item {"Demo Lantern", tool}                      = LANTERN -> ok
   t12 give_items {Demo Miller, [LANTERN x1]} (R1: a new entry)           -> ok
-  t13 add_room_item {TAV, Taproom, LANTERN}                              -> ok
+  t13 add_room_item {TAV, Taproom, LANTERN}                              -> refused ("items in rooms are invisible in the world")
   t14 create_character {character_name "Demo Keeper", template
       human-roleplay}                                                     -> ok
   t15 update_location TAV {npc_slots [{role "Demo Barkeeper", count_min 1,
@@ -329,7 +329,11 @@ WP = (new_ids(list_world_props, lambda: call(1, "place_world_prop", {
 LANTERN = (new_ids(list_items, lambda: call(1, "create_item", {
     "name": "Demo Lantern", "category": "tool"})) or [""])[0]
 call(1, "give_items", {"character": MILLER, "items": [{"item_id": LANTERN}]})
-call(1, "add_room_item", {"location_id": TAV, "room_id": TAP, "item_id": LANTERN})
+res_ari = wt.run_tool(wt.ToolCtx(run_id=run, turn=1), "add_room_item",
+                      {"location_id": TAV, "room_id": TAP, "item_id": LANTERN})
+check("add_room_item (turn 1) refused",
+      not res_ari.ok and not res_ari.wrote
+      and "items in rooms are invisible in the world" in res_ari.line, res_ari)
 call(1, "create_character", {"data": {"character_name": "Demo Keeper",
                                       "template": "human-roleplay"}})
 call(1, "update_location", {"id": TAV, "patch": {"npc_slots": [
