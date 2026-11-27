@@ -670,62 +670,64 @@ user acceptance; the proxy smoke checks forwarding configuration only.
 >     nicht mehr. Der Seed gilt für den Scatter-Seed dieser Platzierung
 >     unverändert, so wie er gespeichert ist; die
 >     Handrechnung nach § B5a rechnet mit genau diesem Seed.
-> 13. **`scene.boundary_openings`** — Durchgänge an der LOCATION-Grenze
->     (Straße quert die Zelle): `[{edge: <Kanten-Index>, at_world: [x, z],
->     width_m, type: "passage", room_id?, inward: [nx, nz]}]`, Punkt in
->     LOKALEN Metern um den Pin. **Seit v6 (Nr. 5)** ist `edge` der 0-basierte
->     INDEX der Boundary-Kante (Kante i = Punkt i → i+1) und `at ∈ [0,1]`
->     läuft entlang dieser Kante; die Buchstaben N/E/S/W sind gestrichen.
->     `inward` = GEMESSENE einwärtige Einheits-Normale (float, keine
+> 13. **`scene.boundary_openings`** — Tore in einem ZAUN um das Grundstück
+>     (nicht Gebäudeeingänge): `[{edge: <Kanten-Index>, at_world: [x, z],
+>     width_m, type: "passage", inward: [nx, nz]}]`, Punkt in LOKALEN Metern um
+>     den Pin (kein `room_id` mehr; `boundary_openings[].room` wird beim
+>     Speichern ersatzlos verworfen). **Seit v6 (Nr. 5)** ist `edge` der
+>     0-basierte INDEX der Boundary-Kante (Kante i = Punkt i → i+1) und
+>     `at ∈ [0,1]` läuft entlang dieser Kante; die Buchstaben N/E/S/W sind
+>     gestrichen. `inward` = GEMESSENE einwärtige Einheits-Normale (float, keine
 >     Achsenrichtung mehr — ein gezeichnetes Polygon hat schräge Kanten).
->     **`at`-Degradierung (eine Regel für beide
->     Verbraucher, seit E4):** fehlendes, nicht-numerisches oder nicht-endliches
->     `at` ist die KANTENMITTE 0,5, Werte außerhalb werden auf [0, 1] geklemmt —
+>     **`at`-Degradierung (eine Regel für beide Verbraucher, seit E4):**
+>     fehlendes, nicht-numerisches oder nicht-endliches `at` ist die
+>     KANTENMITTE 0,5, Werte außerhalb werden auf [0, 1] geklemmt —
 >     `scene_recipe._boundary_openings` und `boundary_entry` liefern damit
->     denselben Punkt (vorher stand hier 0, also die Ecke, und der Renderer bot
->     einen Eingang an, den das Eintritts-Gate ablehnte).
->     **Konsum — seit v6 über die WELTKARTE, nicht mehr über die Szene:**
->     das „Betreten"-Angebot liest `worldmap.locations[].openings` (§ A1.3),
->     wo dieselben Öffnungen fertig in WELT-Metern samt Welt-Normale stehen —
->     eine Quelle für jeden Ort, auch für den, dessen Szene 404 antwortet
->     (gemalte Wiese mit gezeichnetem Tor). Der Client rechnet an einer
->     Öffnung damit **gar nichts** mehr: kein Anker, keine Halbkanten-Formel,
->     keine Drehung. Die Kanten-Filterung ist mit dem Kachel-Schritt
->     gestrichen — auf der freien Ebene kreuzt ein Weg keine Kante, es zählt
->     nur der Abstand, und genau den misst auch der Server. Die
->     `scene.boundary_openings` bleiben, was sie sind: die LOKALE Variante
->     für die Detailszene (verriegelte Schwellen-Marken). Und der SERVER
->     lässt niemanden anders hinein als über eine autorisierte Öffnung
->     (`app/core/boundary_entry.py`, verdrahtet im ENTRY-Gate von
->     `POST /play/pos`, § A15) — eine Location ohne jede Opening hat
->     dagegen eine FREIE Grenze (E4 Task 5, § A15: sie hat nie gesagt, wo
->     ihr Weg hinein ist; die Regel-Gates gelten trotzdem). Der
->     Eintritt routet in den verknüpften Raum (der Verweis heißt `room` in
->     den Autoren-Daten unter `map3d` und `room_id` im gelieferten Payload —
->     dasselbe Feld, zwei Namen); eine Opening OHNE ihn ist trotzdem gültig
->     — sie sagt dann nichts über den Raum, und es entscheidet die
->     Ankunftsregel (`world.get_arrival_room_id`: der erklärte `entry_room`,
->     sonst die Grundfläche). Seit § A13 kommt niemand mehr raumlos an.
->     **Seit § A13b** darf der erklärte `entry_room` auch der Flur des
->     Erdgeschosses (`__floor__0`) sein — von den reservierten Fluren NUR
->     dieser (`world.valid_entry_room`); in einem Kellerflur kommt niemand an.
->     **Das Verlassen entscheidet EINE Funktion**
->     (`boundary_entry.may_leave`). Vier Wege hinaus, und es genügt, dass
->     EINER zutrifft: über eine autorisierte Öffnung DIESER Kante aus dem
->     Raum heraus, den sie verknüpft — ohne Verknüpfung führt sie auf die
->     Grundfläche, also ist die Grundfläche der Raum, aus dem sie
->     herauslässt (der Rundweg derselben Öffnung); aus einem OFFENEN Raum
->     über jede Kante (`boundary_entry.room_is_open`: die Grundfläche oder
->     ein Raum ohne Wände, `no_walls` bzw. `always_visible`; Entscheidung
->     2026-11-08 — sonst ist die Kante eines offenen Sees eine unsichtbare
->     Wand); aus dem `entry_room`, dem Gameplay-Gate jeder anderen Kante;
->     und von überall, wenn die Location keinen `entry_room` erklärt.
->     Einen Kompass, der das vorab **pro Richtung** beantwortet, gibt es
->     nicht mehr: `GET /world/avatar/neighbors` ist mit dem Kachel-Schritt
->     zusammen gestrichen — auf einer Meter-Karte gibt es keine vier Pfeile
->     mehr, die man vorab beurteilen könnte. `may_leave` lebt im **EXIT-Gate
->     von `POST /play/pos`** weiter und entscheidet am gemeldeten Standpunkt,
->     nicht auf Vorrat (die Gate-Reihenfolge steht in **§ A15**).
+>     denselben Punkt.
+>     **Zaun- und Tür-Semantik (`app/core/boundary_entry.py`):**
+>     - **Grundstücksgrenze (Zaun):** Eine Location mit nicht-leeren
+>       `boundary_openings` ist **EINGEZÄUNT** (`fenced(location) == True`):
+>       man betritt und verlässt das Grundstück nur über seine Tore
+>       (`at_gate`, innerhalb `GATE_TOLERANCE_M = 1.5` m vom Torpunkt). Ohne
+>       `boundary_openings` ist die Grundstücksgrenze frei begehbar
+>       (`fenced == False`).
+>     - **Gebäude (Außentüren auf Etage 0):** Ein Gebäude wird über JEDE seiner
+>       Außentüren auf Etage 0 betreten und verlassen — Raum-Öffnungen mit
+>       `to: "outside"` sowie Hüllentüren auf dem Gebäudeumriss
+>       (`hull_openings`, sie gehören zu `__floor__0`). `outside_door_frames(location, scene)`
+>       liefert diese Türen in WELT-Metern; `world_ops.location_entry_geometry(location_id)`
+>       liest sie aus dem gecachten Location-Block (nie pro Positionsmeldung
+>       neu komponiert) und baut `entry_geometry(location, scene)`. Ein Punkt
+>       steht AN EINER TÜR (`at_door`), wenn `|along| <= width_m/2 + DOOR_ALONG_PAD_M`
+>       (`0.3` m) entlang der Wand und `|across| <= DOOR_ACROSS_M` (`1.5` m)
+>       entlang der Auswärts-Normalen gilt. Gebäudewände kollidieren auch von
+>       außen.
+>     - **Betreten und Zielraum:** `may_enter(location, geo, x, z) -> (ok, reason, room)`
+>       prüft bei eingezäuntem Grundstück `at_gate` (sonst 403 `no_opening`)
+>       und beim Betreten eines ummauerten Raums `at_door` an einer seiner
+>       Außentüren (sonst 403 `no_door`). Der Zielraum ist der Raum AM PUNKT
+>       (`room_at_point(geo, x, z)`: der Etage-0-Raum, der `(x, z)` enthält;
+>       innerhalb der Gebäudekontur ohne Raum → `__floor__0`; sonst
+>       `__ground__`).
+>     - **Verlassen:** `may_leave(location, geo, current_room, x, z) -> (ok, reason)`
+>       verlangt beim Verlassen eines ummauerten Raums eine seiner Außentüren
+>       (`at_door`) und beim Verlassen eines eingezäunten Grundstücks ein Tor
+>       (`at_gate`), sonst 403 `leave_blocked`. **Keine-Falle-Regel:** ein
+>       nicht eingezäunter Ort ohne jede Außentür auf Etage 0 lässt aus jedem
+>       Raum hinaus.
+>     - **`entry_room` ist NUR der Ankunftsraum** für Reise, Teleport und
+>       Scheduler (`world.get_arrival_room_id`; `__floor__0` erlaubt über
+>       `world.valid_entry_room`, nie ein Kellerflur) — niemals eine
+>       Austrittsregel.
+>     - **Gestrichene Namen:** `opening_entry_room` und `opening_on_edge`
+>       existieren nicht mehr; das Zaun-Flag heißt ausschließlich `fenced`.
+>     **Konsum — über die WELTKARTE:** `worldmap.locations[].openings` (§ A1.3)
+>     liefert die Tore in WELT-Metern, `worldmap.locations[].fenced` das
+>     Zaun-Flag und `worldmap.locations[].doors` die Etage-0-Außentüren in
+>     WELT-Metern; `scene.boundary_openings` bleibt die LOKALE Variante für die
+>     Detailszene (verriegelte Schwellen-Marken). `GET /world/avatar/neighbors`
+>     bleibt gestrichen; `may_leave` / `may_enter` laufen im Übergangs-Gate von
+>     `POST /play/pos` (**§ A15**).
 >     **`width_m` wird beim Speichern geklemmt, nie verworfen:**
 >     [0,5 … `plan_width_m`] Meter (ohne Anker steht 10 ein) — die Kante
 >     ist die Obergrenze, und eine gespeicherte Öffnung, die stillschweigend
@@ -971,7 +973,9 @@ Eine Location-Zeile trägt genau ihre Kartengeometrie plus die
 | `yaw_deg` | `float` | IMMER vorhanden, `0.0` wenn ungesetzt |
 | `plan_width_m` | `float \| null` | **ABGELEITET**, nie autoriert: die breitere Seite der Bounding-Box von `boundary` (`world_geometry.polygon_plan_width_m` — dieselbe Funktion, mit der der Sanitizer das Feld schreibt, und dieselbe Boundary, aus der `world_bounds` entsteht; Eintrag und Flächen-Regel können also nicht auseinanderlaufen). `null` bedeutet deshalb **zweierlei**: der Ort ist **unplatziert** ODER er hat keine gezeichnete Boundary — beides heißt „keine Fläche“. Ein Client, der die Breite eines unplatzierten Ortes braucht, findet sie bis dahin nur in `map3d` |
 | `boundary` | `[[x, z], …] \| null` | **v6:** DER Fußabdruck als gezeichnetes Polygon in LOKALEN Metern um den Pin, aus `map3d` hochgezogen (`world_geometry.effective_boundary`) — der Client hat keinen Quadrat-Pfad mehr, weil es keine Quadrate mehr gibt. **Seit 2026-08-19 wird nichts mehr synthetisiert**: `null` = der Ort hat KEINE Fläche und wird als bloßer Pin gezeichnet (Alt-Welten repariert der Seed-Knopf, siehe v6 Nr. 1) |
-| `openings` | `[{edge, at_world, inward, room}, …]` | **v6:** die autorierten Grenz-Durchgänge, FERTIG GERECHNET (§ B1 Nr. 13): `edge` = Kanten-INDEX des Boundary-Polygons, `at_world` = `[x, z]` in WELT-Metern, `inward` = einwärtige Einheits-Normale in WELT-Achsen, `room` = verknüpfter Raum (`""` = keiner, dann entscheidet die Ankunftsregel). Immer vorhanden; **leere Liste = FREIE Grenze** (der Ort hat nie gesagt, wo sein Weg hinein ist, E4 Task 5). Gerechnet von `boundary_entry.opening_world_frames` — derselben Funktion, mit der das Eintritts-Gate von `POST /play/pos` misst, damit Angebot und Übertritt nicht auseinanderlaufen können. **Der Client rechnet an einer Öffnung nichts mehr selbst**: kein Buchstabe, keine Halbkanten-Formel, keine Kachel-Drehung |
+| `openings` | `[{edge, at_world, inward}, …]` | **v6:** die autorierten Tore in einem Zaun um das Grundstück, FERTIG GERECHNET (§ B1 Nr. 13): `edge` = Kanten-INDEX des Boundary-Polygons, `at_world` = `[x, z]` in WELT-Metern, `inward` = einwärtige Einheits-Normale in WELT-Achsen (kein `room` mehr). Immer vorhanden; **leere Liste = nicht eingezäunt** (frei begehbare Grundstücksgrenze). Gerechnet aus `boundary_entry.opening_world_frames` — derselben Geometrie, mit der `POST /play/pos` prüft. **Der Client rechnet an einem Tor nichts mehr selbst**: kein Buchstabe, keine Halbkanten-Formel, keine Kachel-Drehung |
+| `fenced` | `bool` | `true`, wenn der Ort nicht-leere `boundary_openings` trägt (eingezäuntes Grundstück: Ein- und Austritt an der Grundstücksgrenze nur durch die Tore in `openings`) |
+| `doors` | `[{"x","z","out_x","out_z","width_m","room","level"}, …]` | Außentüren des Gebäudes auf Etage 0 in WELT-Metern (`boundary_entry.outside_door_frames`, gelesen aus dem gecachten Location-Block über `world_ops.location_entry_geometry`): Raum-Öffnungen mit `to: "outside"` sowie Hüllentüren (`room: "__floor__0"`). `(x, z)` = Türmitte, `(out_x, out_z)` = Auswärts-Einheitsnormale in Welt-Achsen, `width_m` = lichte Breite, `room` = zugehöriger Raum, `level` = `0` |
 | `map3d` | `object` | **optionaler Schlüssel** — nur wenn nicht leer (inkl. der abgeleiteten `floors`-Ersatzangabe aus den Raum-Layouts) |
 | `layout_sig` | `str` (10) | **optionaler Schlüssel** — nur wenn mindestens ein Raum ein Layout hat ODER `map3d` nicht leer ist (AV3D-2⁺). Die Signatur deckt **beides** ab: die Raum-Layouts **und** die szenenformenden `map3d`-Metadaten des Ortes (gezeichnete `boundary`, Grenz-Durchgänge, `rotation`, `plan_width_m`, `storey_height_m`, `floors` …). Ändert sich eines von beiden, holt der Client die Szene neu — ein gezeichnetes Tor erreicht so auch einen laufenden Client (E5 B11) |
 
@@ -979,12 +983,13 @@ Eine Location-Zeile trägt genau ihre Kartengeometrie plus die
 `characters` · `events_by_location` · `game_time` · `game_rate` · `world_bounds` ·
 `locations_rev` · `terrain_sig` · `height_sig` · `explored_sig` · `world_props` ·
 `world_props_sig` · `fogged` · `max_step_height_m` · `max_slope_deg` ·
+`door_tolerance` · `gate_tolerance_m` ·
 `motion_now` · `order_seq` (both § A11b) ·
 `sync` (§ A11, "Required root field `sync`") ·
 `backdrop` (**optionaler Schlüssel** — nur wenn die Fernkulisse eingeschaltet
 ist, § A17).
 
-Zwanzig feste Schlüssel plus `backdrop`. Gebaut werden sie in
+Zweiundzwanzig feste Schlüssel plus `backdrop`. Gebaut werden sie in
 `world_ops.build_worldmap_payload`; wer die Liste ändert, ändert
 `scripts/smoke_docs_schnittstellen_3d.py` mit, das sie gegen ein hier
 gebautes Payload hält.
@@ -1006,6 +1011,8 @@ gebautes Payload hält.
 | `order_seq` | `int` | The highest order `seq` handed out, read **before** the character rows are built (§ A11b, "Rows without `order`"). `0` while no order was ever published. |
 | `max_step_height_m` | `float` | Welt-Einstellung `game.max_step_height_m` (Default 0,4; validiert und geklemmt auf [0,05; 5]). Höchste Stufe, die eine Figur nimmt — Teil des Höhen-Gates von `POST /play/pos` (§ A15 Nr. 9) |
 | `max_slope_deg` | `float` | Welt-Einstellung `game.max_slope_deg` (Default 40; geklemmt auf [10; 89]). Steilste Steigung, die eine Figur erklimmt — dasselbe Gate |
+| `door_tolerance` | `{"along_pad_m": float, "across_m": float}` | Tür-Toleranzen aus `boundary_entry` (`DOOR_ALONG_PAD_M = 0.3`, `DOOR_ACROSS_M = 1.5`): ein Punkt steht an einer Außentür (`at_door`), wenn `|along| <= width_m/2 + along_pad_m` entlang der Wand und `|across| <= across_m` entlang der Auswärts-Normalen (§ B1 Nr. 13, § A15) |
+| `gate_tolerance_m` | `float` | Tor-Toleranz aus `boundary_entry` (`GATE_TOLERANCE_M = 1.5` m): maximaler Abstand zu einem Zaun-Tor (`at_gate`, § B1 Nr. 13, § A15) |
 | `backdrop` | `{"height_m","seed","arcs"} \| fehlt` | Die **Fernkulisse** (§ A17) — reine Optik. Fehlt der Schlüssel, ist sie aus (oder der Server ist älter); beides ist für den Client derselbe Zustand |
 
 **`GET /world/locations?view=3d` — Ortsdetails nach Bedarf:** Die Antwort
@@ -3940,7 +3947,7 @@ treat a transmitted zero-length segment as timeless.
   `total_m − progress_m` höchstens ein Ticker-Takt weit (5 echte s ×
   `speed_m_s` der Reise, unabhängig vom Zeitfaktor),
   gilt die Figur als auf dem Schlussanflug und bekommt den Raum hinter der
-  angepeilten Tür (`entry_room` der Öffnung). Sonst ist es der ANKUNFTSRAUM
+  angepeilten Außentür. Sonst ist es der ANKUNFTSRAUM
   des Ziels — dann ist die Figur irgendwo anders ins Gebäude gelaufen und
   hat auf den Raum hinter jener Tür keinen Anspruch. Der Umkreis war für die
   häufigste Geometrie falsch: läuft der Schlussanflug WANDPARALLEL auf die
@@ -4512,16 +4519,20 @@ kann ihn nicht löschen, nur benennen.
   Id** — die reservierte Konstante bleibt Server-Sache und wird in keinem
   Renderer nachgebaut. `POST /play/enter-room` bildet ein leeres `room_id`
   auf sie ab und schickt sie durch dieselbe Regel-Prüfung wie jeden anderen
-  Raum: eine Block-Regel kann auch die Grundfläche sperren.
+  Raum: eine Block-Regel kann auch die Grundfläche sperren. Nennt
+  `POST /play/enter-room` eine `room_id`, die nicht zur aktuellen Location
+  gehört, antwortet der Server mit **409** `{"reason": "not_in_location", "location_id": <aktuelle id oder "">}` (vorher 400).
 - **Name am Raum**, wie bei jedem anderen; ohne Namen greift überall dasselbe
   übersetzte Wort (`get_ground_name`). Das frühere Location-Feld
   `ground_name` ist ersatzlos weg.
 - **Ankommen:** `entry_room` ist damit **optional** — gesetzt = man kommt
-  dort an, leer = man kommt auf der Grundfläche an. Das entscheidet EINE
-  Funktion für jeden Ankunftsweg (`world.get_arrival_room_id`: Avatar-
-  Schritt, Reise, Scheduler, Bewegungs-Skills, Admin-Versetzung). Eine
-  Boundary-Öffnung mit Raumverweis schlägt beides (§ B1 Nr. 13).
-  **Seit 2026-09-28** schlägt der ANGEFRAGTE Raum einer Reise alle drei:
+  dort an, leer = man kommt auf der Grundfläche an. Das gilt **nur** für
+  Reise, Teleport, Scheduler, Bewegungs-Skills und Admin-Versetzung
+  (`world.get_arrival_room_id`), niemals als Austrittsregel und nicht beim
+  freien Hineinlaufen (dort entscheidet `boundary_entry.room_at_point`,
+  § B1 Nr. 13).
+  **Seit 2026-09-28** schlägt der ANGEFRAGTE Raum einer Reise die
+  Ankunftsregel:
   `start_journey(…, target_room=, target_pose=)` legt ihn auf die Reise
   (SetLocation „Cafe, Hauptraum", Auto-Schlaf mit `home_room`), und die
   Ankunft (`travel_engine._requested_room`) nimmt ihn, wenn er noch ein Raum
@@ -4812,10 +4823,11 @@ deshalb nicht in einem Raum, sondern in der Hülle.
   (`roomDoor('__floor__<level>')` findet sie als dessen Außentür), und wer
   durch sie hineinläuft, steht im Flur — das entscheidet die
   Raumwechsel-Regel aus § A13b (kein Rechteck hält die Figur, Etage 0, innen
-  im Etagenumriss), nicht die Tür. Das Angebot „Betreten" gehört dagegen
-  weiter zur Location-GRENZE (`boundary_openings`, § A1.3 / § B1 Nr. 13) und
-  ändert sich nicht: eine Hüllentür liegt innerhalb des Fußabdrucks, sie ist
-  eine Schwelle zum Durchlaufen, kein Ortswechsel.
+  im Etagenumriss), nicht die Tür. **Türen auf dem Gebäudeumriss (Etage 0)
+  SIND Ein- und Ausgänge des Gebäudes** (für `__floor__0`, genau wie
+  Raum-Außentüren mit `to: "outside"` für ihren jeweiligen Raum, § B1 Nr. 13 /
+  § A15); `boundary_openings` sind ausschließlich Tore in einem Zaun um das
+  Grundstück, niemals Gebäudeeingänge.
 
 ---
 
@@ -4838,8 +4850,10 @@ je eine Sperre selbst ab.
   brauchen die Etage eines geometrielosen Raums und leiten sie nicht selbst
   her.
 - **`POST /play/pos` → Absage-Payload** — die Reihenfolge der Gates ist die
-  Begründung, die der Spieler liest: EXIT (`may_leave` + `check_leave`) vor
-  ENTRY (Öffnungs-Nähe, `accessible_when`, `check_access`), erste Absage
+  Begründung, die der Spieler liest: EXIT (`boundary_entry.may_leave` +
+  `check_leave`) vor ENTRY (`boundary_entry.may_enter` — Tor-Nähe bei
+  eingezäuntem Grundstück, Außentür-Nähe beim Betreten eines ummauerten
+  Raums — plus `accessible_when` und `check_access`), erste Absage
   gewinnt. Die Kette steht ausgeschrieben in **§ A15**. (Der frühere
   Himmelsrichtungs-Kompass `GET /world/avatar/neighbors` ist mit dem
   Kachel-Schritt zusammen gestrichen — auf einer Meter-Karte gibt es keine
@@ -4943,7 +4957,7 @@ auseinanderstehen):
 | 5 | **Schrittweite** gegen die vergangene Zeit seit der letzten AKZEPTIERTEN Meldung (Client-`t_ms`, sonst Serverzeit) | 409 `too_far` |
 | 6 | **Location des Punktes** ableiten (`location_at_point`) — entscheidet Nr. 7 | — |
 | 7 | Gelände `passability_at` am Punkt (§ A1.5) — **nur in der WILDNIS** (`location_id == ""`); NUR die Passierbarkeit, das Tempo wird hier nie geprüft | 409 `impassable` |
-| 8 | **Location-Übergang** — EXIT vor ENTRY | 403 (siehe unten) |
+| 8 | **Location-Übergang** — EXIT vor ENTRY | 403 `leave_blocked` / `no_opening` / `no_door` (siehe unten) |
 | 9 | **Höhe** des Punktes gegen den letzten gültigen — nur BERGAUF (Steigung immer, Stufe zusätzlich unter 1 m; ein Abstieg geht seit 2026-08-28 immer durch — siehe unten) | 409 `too_steep` |
 
 **Die Erlaubnis in Nr. 5 hat DREI Terme**, und der dritte ist keine
@@ -5007,31 +5021,43 @@ automatisch. **Die Gate-Kette oben ändert sich dadurch NICHT** — das Tempo
 ist keine Erlaubnis, es wird nirgends geprüft, es wird gelaufen.
 
 **Der Übergang (Nr. 8).** Gleiche Location oder Wildnis → Wildnis ist frei.
-Sonst:
+Sonst (Geometrie aus `world_ops.location_entry_geometry(location_id)`):
 
-* **EXIT** — `boundary_entry.may_leave` mit dem Raum, in dem der Avatar
-  steht: über eine NAHE Öffnung aus dem Raum, den sie verlinkt, aus dem
-  `entry_room` über jede Kante, oder frei, wenn die Location gar keinen
-  Eintrittsraum deklariert. **UND** `rules.check_leave` — die Regel-Hälfte,
-  die jeder andere Bewegungspfad fragt (`/play/travel`, der Reise-Ticker, der
-  SetLocation-Skill, der Scheduler). Geometrie allein ist nicht das Tor:
-  eine `confine`- oder Gefahr-Regel muss auch gegen die FÜSSE halten, sonst
-  hebt der Bewegungskanal still auf, was `/play/notices` dem Spieler im
-  selben Moment sagt.
-* **ENTRY** — der Punkt muss innerhalb **1,5 m** eines Öffnungs-Weltpunkts
-  des Ziels liegen (§ A1.1 / § B1 Nr. 13), und `accessible_when` +
-  Zugangsregeln (`check_access`) müssen passen. Das sind exakt die Gates, die
-  `/play/travel` vor dem Losgehen anlegt; ein Läufer, der daran vorbeispazieren
-  könnte, machte jedes davon zur Dekoration (E3-C1).
-* **FREIE GRENZE (Entscheidung E4 Task 5).** Eine Location **ohne jede
-  autorisierte Öffnung** hat eine freie Grenze: sie hat nie gesagt, wo ihr Weg
-  hinein ist — das Spiegelbild von `may_leave`s „kein Eintrittsraum = überall
-  hinaus". Ohne diese Regel wäre ein gemalter Platz, eine Wiese oder jeder
-  Flächenort eine Wand, und man KANN um sie herum nicht für jede
-  Anlaufrichtung eine Öffnung zeichnen. **Hat** eine Location Öffnungen, sind
-  genau die ihre Wege hinein und alles andere ist Wand (Strenge-Entscheidung
-  2026-08-04). Die Regel-Gates gelten in beiden Fällen — die freie Grenze
-  nimmt die GEOMETRISCHE Hälfte des Tors weg, nie die Regeln.
+* **EXIT** — `boundary_entry.may_leave(location, geo, current_room, x, z) -> (ok, reason)`:
+  * Aus einem **ummauerten Raum** kommt man nur an einer seiner Außentüren auf
+    Etage 0 hinaus (`at_door`: `|along| <= width_m/2 + 0.3` m,
+    `|across| <= 1.5` m); aus einem **eingezäunten Grundstück**
+    (`fenced(location) == True`) nur an einem seiner Tore (`at_gate`, innerhalb
+    `1.5` m). Andernfalls **403 `leave_blocked`**.
+  * **Keine-Falle-Regel:** ein nicht eingezäunter Ort ohne jede Außentür auf
+    Etage 0 lässt aus jedem Raum hinaus.
+  * **`entry_room` ist niemals eine Austrittsregel** — es bestimmt
+    ausschließlich den Ankunftsraum für Reise, Teleport und Scheduler.
+  * **UND** `rules.check_leave` — die Regel-Hälfte, die jeder andere
+    Bewegungspfad fragt (`/play/travel`, der Reise-Ticker, der
+    SetLocation-Skill, der Scheduler). Geometrie allein ist nicht das Tor:
+    eine `confine`- oder Gefahr-Regel muss auch gegen die FÜSSE halten, sonst
+    hebt der Bewegungskanal still auf, was `/play/notices` dem Spieler im
+    selben Moment sagt.
+* **ENTRY** — `boundary_entry.may_enter(location, geo, x, z) -> (ok, reason, room)`:
+  * **Eingezäuntes Grundstück** (`fenced(location) == True`): der Punkt muss
+    innerhalb `GATE_TOLERANCE_M = 1.5` m eines Tors liegen (`at_gate`), sonst
+    **403 `no_opening`**.
+  * **Gebäude / ummauerter Raum:** führt der Punkt in einen ummauerten Raum
+    (oder über die Gebäudekontur in `__floor__0`), muss er an einer seiner
+    Etage-0-Außentüren liegen (`at_door`: `|along| <= width_m/2 + 0.3` m,
+    `|across| <= 1.5` m), sonst **403 `no_door`**. Gebäudewände kollidieren
+    auch von außen.
+  * **Zielraum:** `room_at_point(geo, x, z)` — der Etage-0-Raum am Punkt;
+    innerhalb der Gebäudekontur ohne Raum → `__floor__0`; sonst `__ground__`.
+  * **UND** `accessible_when` + Zugangsregeln (`check_access`). Das sind exakt
+    die Gates, die `/play/travel` vor dem Losgehen anlegt; ein Läufer, der
+    daran vorbeispazieren könnte, machte jedes davon zur Dekoration (E3-C1).
+* **FREIE GRENZE (nicht eingezäunt).** Eine Location ohne `boundary_openings`
+  ist nicht eingezäunt (`fenced == False`) und an ihrer Grundstücksgrenze frei
+  begehbar. Gebäudewände und Außentüren im Inneren sowie alle Regel-Gates
+  gelten trotzdem. **Hat** eine Location `boundary_openings`, ist das
+  Grundstück eingezäunt und nur durch diese Tore betret- und verlassbar.
 * **Location → Location** (angrenzende oder **verschachtelte** Fußabdrücke —
   eine Hütte auf einem Dorfplatz) ist beides: EXIT der alten, dann ENTRY der
   neuen.
@@ -5156,14 +5182,15 @@ abhängt, welche Location ihn besitzt — und weil ein Eintritt, den die Geometr
 erlaubt, nicht mit „zu steil" beantwortet werden darf, wenn in Wahrheit eine
 Regel greift.
 
-**ÖFFNUNGEN SIND RAMPENENDEN.** Eine autorisierte Öffnung liegt auf der Kante
+**ÖFFNUNGEN SIND RAMPENENDEN.** Ein autorisiertes Zauntor liegt auf der Kante
 eines Ortes — also genau dort, wo der Boden auf sein Plateau steigt —, und eine
-Öffnung IST per Definition der Weg hinein. Jeder Punkt innerhalb der
-Übergangs-Toleranz von 1,5 m (`_POS_OPENING_TOLERANCE_M`) einer Öffnung der
-abgeleiteten ODER der aktuellen Location ist deshalb von Nr. 8 ausgenommen, und
-zwar an BEIDEN Enden des Schritts (eine Überquerung hat einen Fuß auf jeder
-Seite). Ohne die Ausnahme wäre ein Ort auf eigenem Plateau hinter seiner
-eigenen Tür verschlossen.
+Gebäude-Außentür auf Etage 0 ist ebenfalls ein definierter Weg hinein. Jeder
+Punkt innerhalb der Tor-Toleranz von 1,5 m (`GATE_TOLERANCE_M`,
+`app/core/boundary_entry.py`) eines Zauntors ODER innerhalb der Tür-Toleranzbox
+(`boundary_entry.at_door`) einer Etage-0-Außentür der abgeleiteten ODER der
+aktuellen Location ist deshalb von Nr. 8 ausgenommen, und zwar an BEIDEN Enden
+des Schritts (eine Überquerung hat einen Fuß auf jeder Seite). Ohne die Ausnahme
+wäre ein Ort auf eigenem Plateau hinter seiner eigenen Tür verschlossen.
 
 An einem PLANIERENDEN Ort (§ A16.4) ist am Weltrelief ohnehin nichts zu
 überqueren: der gepinnte Ring reicht eine Zelle ÜBER den Fußabdruck hinaus,
@@ -6950,7 +6977,7 @@ stellt nur fest; **Floor-Plan-Editor und 3D-Client zeigen es an, mehr nicht**
 der stabile Schlüssel, `message` der englische Server-Satz (eine Oberfläche
 darf einen `kind`, den sie kennt, übersetzen und fällt sonst auf den Text
 zurück; Zahlen stehen NIE im `message`, sondern in eigenen Feldern, weil der
-Satz als Ganzes übersetzt wird). Hier beschrieben sind sieben Gebäude-Befunde und die Einrichtungsbefunde — die
+Satz als Ganzes übersetzt wird). Hier beschrieben sind acht Gebäude-Befunde und die Einrichtungsbefunde — die
 Etagen-Grundriss-Befunde stehen in § A6, `room_outside_boundary` in der
 v6-Präambel Nr. 9 und die Selbstschnitt-Warnung
 (`boundary_self_intersection`) in deren Nr. 1, wo sie ohne Namen steht:
@@ -7001,6 +7028,10 @@ v6-Präambel Nr. 9 und die Selbstschnitt-Warnung
   und Outdoor-/`no_walls`-Zonen verbindet den Raum mit draußen. Einmal **je
   Raum** mit `room_id` und `level`. Schweigt, solange es gar keine Außentür
   gibt — das sagt schon `no_building_entrance`.
+- **`gate_blocked_by_building`** — ein Zaun-Tor (`map3d.boundary_openings`)
+  liegt nicht auf offenem Grund, sondern auf einem ummauerten Raum auf Etage 0
+  oder innerhalb der Gebäudekontur. Tore gehören in den Grundstückszaun auf
+  offenem Grund; Gebäude werden über ihre Außentüren betreten (§ B1 Nr. 13).
 
 **Einrichtungsbefunde** (2026-10-20, `app/core/furnish_findings.py`) — gemessen
 an den Rezept-Platzierungen (`at`/`yaw`/`offset_y` komponiert, `dims` der

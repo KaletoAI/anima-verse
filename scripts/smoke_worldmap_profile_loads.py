@@ -465,6 +465,13 @@ def align_to_baseline(old_payload, new_payload, *, avatar, fogged, journeys):
     # Plan E3 task 4: the motion clock and the order counter (none published).
     old["motion_now"] = round(MOTION_NOW, 3)
     old["order_seq"] = 0
+    # Entry semantics: root tolerances and per-location fenced + doors.
+    old["door_tolerance"] = {"along_pad_m": 0.3, "across_m": 1.5}
+    old["gate_tolerance_m"] = 1.5
+    old["locations"] = [
+        {**loc, "fenced": bool(loc.get("openings") or []), "doors": []}
+        for loc in (old.get("locations") or [])
+    ]
     # Measured ages depend on execution time, not profile-read behavior.
     # Require both age keys but exclude their values; retain any other
     # sync keys so an unexpected addition still fails strict comparison.

@@ -3184,24 +3184,12 @@ def _layout_rewrites(layout: Dict[str, Any], normalized: Dict[str, Any],
         _refuse_rewritten(where, geometry, entry["layout"], _LAYOUT_TOL)
     if isinstance(layout.get("boundary_openings"), list):
         stored = normalized.get("boundary_openings") or []
-        _refuse_rewritten("boundary_openings", layout["boundary_openings"], stored,
-                          _LAYOUT_TOL)
-        ids = {str(r.get("id")) for r in loc.get("rooms") or []
-               if isinstance(r, dict) and r.get("id")}
-        ids |= {e["room_id"] for e in normalized.get("rooms") or []}
-        by_name = {str(r.get("name") or "").strip().lower(): str(r.get("id"))
-                   for r in loc.get("rooms") or [] if isinstance(r, dict) and r.get("id")}
-        by_name.update({str(e.get("name") or "").strip().lower(): e["room_id"]
-                        for e in normalized.get("rooms") or []})
-        for i, op in enumerate(stored):
-            ref = op.get("room")
-            if not ref or ref in ids:
-                continue
-            if ref.lower() in by_name:
-                op["room"] = by_name[ref.lower()]
-                continue
-            raise ToolRefusal(f"'boundary_openings[{i}].room' {ref!r} is no room of this "
-                              f"place — an id, or the name of a room this plan creates")
+        submitted = [
+            {k: v for k, v in op.items() if k != "room"}
+            if isinstance(op, dict) else op
+            for op in layout["boundary_openings"]
+        ]
+        _refuse_rewritten("boundary_openings", submitted, stored, _LAYOUT_TOL)
     if isinstance(layout.get("stairs"), list):
         _refuse_rewritten("stairs", layout["stairs"], normalized.get("stairs") or [],
                           _LAYOUT_TOL)
@@ -3361,6 +3349,14 @@ def _layout_pass(layout: Dict[str, Any], loc: Dict[str, Any],
     _layout_rewrites(layout, normalized, loc)
     _carry_room_content(normalized, loc)
     kept = [str(w.get("message") or w.get("code")) for w in warnings]
+    if isinstance(layout.get("boundary_openings"), list) and any(
+        isinstance(op, dict) and "room" in op
+        for op in layout["boundary_openings"]
+    ):
+        kept.append(
+            "boundary_openings[].room is gone — a gate leads onto the plot; "
+            "the room follows from where one stands"
+        )
     return normalized, kept + _layout_reach_warnings(normalized, loc)
 
 

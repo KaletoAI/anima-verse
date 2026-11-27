@@ -162,10 +162,10 @@ export class ApiError extends Error {
 }
 
 /** The refusal of a game call, read the way the server writes it: a `detail`
- *  object with `reason` + `message` is text FOR the player, a plain string
- *  detail is technical ("room not in current location") and only ever reaches
- *  the console. Callers tell the two apart by `reason` — an empty one means
- *  there is nothing worth showing. */
+ *  object with `reason` + `message` is text FOR the player, a `detail` object
+ *  without `message` (e.g. `/play/enter-room` 409 `{reason: "not_in_location",
+ *  location_id}`) or a plain string detail is technical and only ever reaches
+ *  the console. Callers tell the two apart by `reason` / `message`. */
 async function refusal(res: Response): Promise<ApiError> {
   let detail: unknown = null;
   try {
@@ -574,12 +574,12 @@ export async function fetchTerrainLayers(keys: readonly string[] = []
 }
 
 /** Move the avatar into another room of its current location — the same call
- *  the HUD's room chips make. Throws an `ApiError` on any refusal (a rule, a
- *  room the server does not have at this location). Whether that is shown is
- *  the caller's call: the room walk stays silent (the next poll shows what
- *  holds), the elevator ride announces a refusal that carries a `reason` —
- *  today `/play/enter-room` writes one for `party_follower` only, every other
- *  refusal is technical text and stays out of the player's face. `signal` lets
+ *  the HUD's room chips make. Throws an `ApiError` on any refusal: 403 for
+ *  `party_follower` or `block_enter` (with player-facing `message`), or 409
+ *  with `{reason: "not_in_location", location_id}` when the room is not in the
+ *  avatar's current location. Whether a refusal is shown is the caller's call:
+ *  the room walk stays silent (the next poll shows what holds), the elevator
+ *  ride announces a refusal that carries a player-facing message. `signal` lets
  *  the caller put a deadline on it: only ONE room change may be in flight, so
  *  a request that never answers would bar every further one until reload. */
 export async function enterRoom(roomId: string, signal?: AbortSignal): Promise<void> {

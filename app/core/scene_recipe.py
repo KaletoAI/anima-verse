@@ -2206,8 +2206,8 @@ def threshold_base_y(sides: List[Tuple[float, Optional[float]]]) -> float:
     the wall the gap was cut from is the floor, exactly as before.
 
     Two rooms → the HIGHER standing height wins: one steps OVER a threshold,
-    never into it. An outside door has ONE side, the room's — the ground side
-    is what the boundary marks cover.
+    never into it. An outside door has ONE side, the room's — the other side
+    meets the plot surface.
 
     A pure function on purpose: this rule is the whole computation, and the
     smoke feeds it the numbers of the finding directly instead of reading them
@@ -2265,6 +2265,7 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any],
               shell_levels: Set[int], doorways: List[Dict[str, Any]],
               recipes: List[Dict[str, Any]],
               flights: Optional[List[Dict[str, Any]]] = None,
+              boundary_openings: Optional[List[Dict[str, Any]]] = None,
               ) -> List[Dict[str, Any]]:
     """Findings instead of silent repairs (plan-betreten-und-tueren.md § 4.3).
 
@@ -2415,6 +2416,35 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any],
         })
     out.extend(_narrowed_storey_problems(location, map3d, recipes,
                                          flights or []))
+    if boundary_openings:
+        from app.core.world_geometry import point_in_polygon
+        contour0 = _outline_world(map3d, 0)
+        walled_rooms0 = [
+            _room_outline_world(r) for r in recipes
+            if not r.get("is_ground")
+            and int(r.get("level") or 0) == 0
+            and not (r.get("no_walls") or r.get("always_visible"))
+        ]
+        walled_rooms0 = [poly for poly in walled_rooms0 if len(poly) >= 3]
+        for gate in boundary_openings:
+            at_w = gate.get("at_world")
+            inw = gate.get("inward")
+            if not (isinstance(at_w, (list, tuple)) and len(at_w) >= 2
+                    and isinstance(inw, (list, tuple)) and len(inw) >= 2):
+                continue
+            qx = float(at_w[0]) + float(inw[0]) * 0.25
+            qz = float(at_w[1]) + float(inw[1]) * 0.25
+            in_contour = len(contour0) >= 3 and point_in_polygon(qx, qz, contour0)
+            in_room = any(point_in_polygon(qx, qz, poly) for poly in walled_rooms0)
+            if in_contour or in_room:
+                out.append({
+                    "kind": "gate_blocked_by_building",
+                    "location_id": str(location.get("id") or ""),
+                    "message": "A gate of the plot lies on a building — a gate "
+                               "must sit on open ground; buildings are entered "
+                               "through their outside doors.",
+                })
+                break
     return out
 
 
@@ -4166,22 +4196,17 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
 
 def _boundary_openings(map3d: Dict[str, Any],
                        extent: float) -> List[Dict[str, Any]]:
-    """Location-edge pass-throughs (plan-area-detail-scenes.md) in world
-    metres — where a road enters and leaves the cell.
+    """Fence gates on the plot boundary in local metres.
 
-    Geometry plus the room link, and both are read: the 3D client offers
-    "enter" at an opening and walks the figure in through it (``main.ts``),
-    while the server decides entry and departure on the same data
-    (``boundary_entry``). Still open is the journey walk-through — an opening
-    pair plus the linked room's hull is a path across the cell.
+    A location with non-empty ``boundary_openings`` is fenced: one enters and
+    leaves the plot only through these gates. Buildings are entered through
+    their level-0 outside doors, so gates carry no room link.
 
-    SINCE v6 (Nr. 5) an opening sits on a POLYGON EDGE: ``edge`` is the
-    0-based index of the boundary edge (edge i = point i → i+1) and ``at``
-    runs along that edge. The letters N/E/S/W are gone with the square, and
-    with them the only place a consumer could have re-derived a point: the
-    payload carries the finished ``at_world`` and the ``inward`` normal,
-    computed by ``world_geometry.polygon_edge_frame`` — the same function the
-    entry gate reads, so picture and rule cannot drift.
+    ``edge`` is the 0-based index of the boundary edge (edge i = point i ->
+    point i+1) and ``at`` runs along that edge. The payload carries the
+    finished ``at_world`` (location-local metres) and ``inward`` normal from
+    ``world_geometry.polygon_edge_frame`` — the same function ``boundary_entry``
+    reads, so picture and rule cannot drift.
     """
     from app.core.world_geometry import polygon_edge_frame
     boundary = _boundary_local(map3d, extent)
@@ -4209,9 +4234,6 @@ def _boundary_openings(map3d: Dict[str, Any],
             "type": str(op.get("type") or "passage"),
             "inward": [_r(nx), _r(nz)],
         }
-        room = op.get("room")
-        if isinstance(room, str) and room.strip():
-            entry["room_id"] = room.strip()
         out.append(entry)
     return out
 
@@ -4963,7 +4985,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         # author's back (§ 4.3). Always present, empty when all is well;
         # editor and 3D client only display it.
         "problems": (_problems(location, map3d, shell_levels, doorways,
-                               recipes, flights)
+                               recipes, flights, boundary)
                      + corridor_problems + hull_problems
                      # WHAT THE ROOMS HOLD and WHETHER THEY CAN BE REACHED
                      # (2026-10-20, ``furnish_findings``): measured on the
@@ -5439,6 +5461,30 @@ def _compose_stored(location: Dict[str, Any],
                          building_meta=building_meta,
                          room_metas=room_metas,
                          surface_kinds=library_kinds())
+
+
+def compose_uncached(location: Dict[str, Any], location_id: str,
+                     ) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Compose a stored location's scene without touching ``_scene_cache``.
+
+    Records the read set in ``_scene_reads`` (just like :func:`scene_and_etag`)
+    so subsequent :func:`scene_etag` calls cover the same dependencies, and
+    returns ``(payload, key)``. Intended for bulk callers (e.g.
+    ``world_ops._build_location_block``) that only extract lightweight derived
+    data and must not evict the 32-slot ``_scene_cache`` LRU.
+    """
+    if not location_id:
+        return _compose_stored(location, location_id), ""
+    payload, reads, key = compose_recorded(
+        location, location_id, lambda: _compose_stored(location, location_id))
+    try:
+        reads_key = _reads_key(location_id)
+    except Exception:   # noqa: BLE001 — no world: nothing to remember
+        reads_key = None
+    if reads_key is not None:
+        with _scene_reads_lock:
+            _scene_reads[reads_key] = reads
+    return payload, key
 
 
 def scene_and_etag(location: Dict[str, Any], location_id: str, etag: str = "",

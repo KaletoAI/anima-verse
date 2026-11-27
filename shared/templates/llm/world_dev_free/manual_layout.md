@@ -46,13 +46,13 @@ Real sizes (a person is 1.70 m tall; keep rooms within realistic `max_m2` guidel
   "rooms": [
     {"id": "r1a2b3c4", "x": -8, "y": -6, "w": 8, "d": 6, "level": 0, "room_type": "tavern",
      "openings": [
+       {"edge": 2, "at": 0.5, "width_m": 1.0, "type": "door", "to": "outside"},
        {"edge": 1, "at": 0.5, "width_m": 0.9, "type": "door", "to": "r9f8e7d6"},
        {"edge": 0, "at": 0.3, "width_m": 1.2, "height_m": 1.4, "sill_m": 0.9, "type": "window"}]},
     {"id": "r9f8e7d6", "x": 0, "y": -6, "w": 4, "d": 6},
     {"name": "Guest room", "description": "A low chamber over the taproom.",
      "x": -8, "y": -6, "w": 5, "d": 6, "level": 1}
   ],
-  "boundary_openings": [{"edge": 0, "at": 0.5, "width_m": 3, "room": "r1a2b3c4"}],
   "stairs": [{"at": [-7.4, -5.5], "from_level": 0, "dir_deg": 0}],
   "storey_height_m": 3
 }
@@ -87,11 +87,9 @@ by the building panel's button, not by you.
   inside the shared stretch. One door in the shared wall suffices for both rooms — it is
   mirrored onto the neighbour's wall automatically.
 
-### `boundary_openings` — how one gets onto the plot
+### `boundary_openings` — gates in a fenced plot
 
-A list of gaps in the place's OUTLINE (gate, street mouth), one object each — a single gate is a list of one: `edge` = index into `map3d.boundary` (edge `i`
-runs from point `i` to point `i+1`), `at` `0`…`1`, `width_m` from 0.5 m up to the plot's width, optional `room` (where one
-arrives: a room id, or the name of a room of the place or of this plan). Sending the list replaces the stored one; leave it out to keep what is there.
+Use ONLY for a FENCED plot (yard wall, hedge, town gate): once a place has `boundary_openings`, characters can enter and leave the plot only through them. Without `boundary_openings` the plot boundary is open on every side. Buildings get NO `boundary_openings` — they are entered through outside doors (`to: "outside"` on a level-0 room wall). One object per gate: `edge` = index into `map3d.boundary` (edge `i` runs from point `i` to point `i+1`), `at` `0`…`1`, `width_m` from 0.5 m up to the plot's width. Sending the list replaces the stored one; leave it out to keep what is there.
 
 ### `stairs` — one entry per flight
 
@@ -108,7 +106,7 @@ arrives: a room id, or the name of a room of the place or of this plan). Sending
 
 ### `entry_room`, `storey_height_m`
 
-- `entry_room` — the room one enters and leaves the place through (an id, or the `name` of a
+- `entry_room` — the arrival room for travel, teleport and scheduler (an id, or the `name` of a
   room this plan creates). Pick one that touches the outside — a hallway, taproom, yard.
 - `storey_height_m` — the height of one storey in metres, 2.6…4.5 (absent = 3).
 

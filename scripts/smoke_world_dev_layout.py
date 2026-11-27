@@ -297,9 +297,6 @@ for label, rooms_or_layout, needle in [
         {"edge": 0, "at": 0.5, "width_m": 50}]}, "would be stored as 20.0"),
     ("(j) bo at 3", {"rooms": [TAP_RECT], "boundary_openings": [
         {"edge": 0, "at": 3, "width_m": 3}]}, "would be stored as 1.0"),
-    ("(j) bo room r_nope", {"rooms": [TAP_RECT], "boundary_openings": [
-        {"edge": 0, "at": 0.5, "width_m": 3, "room": "r_nope"}]},
-     "is no room of this place"),
     ("(j) storey x", {"rooms": [TAP_RECT], "storey_height_m": "x"}, "must be a number"),
     ("(j) storey null", {"rooms": [TAP_RECT], "storey_height_m": None},
      "must be a number"),
@@ -379,7 +376,9 @@ res = call("set_room_layout", {"location_id": LID, "layout": {
 check("(k) restored flight: no reach warning", res.ok and "stair flight from" not in res.line
       and "no stair flight reaches" not in res.line, res.line)
 bo = ((get_location_by_id(LID) or {}).get("map3d") or {}).get("boundary_openings") or []
-check("(k) plot opening room resolved to the id", [b.get("room") for b in bo] == [TAP], bo)
+check("(k) plot opening stored without room", bo == [{"edge": 0, "at": 0.5, "width_m": 3.0, "type": "passage"}], bo)
+check("(k) dropped boundary_openings[].room noted in tool result",
+      "boundary_openings[].room is gone" in res.line, res.line)
 res = call("set_room_layout", {"location_id": LID, "layout": {
     "rooms": [{"name": "Attic", "description": "Under the roof.",
                "x": -8, "y": -6, "w": 5, "d": 6, "level": 2}],

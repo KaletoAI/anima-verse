@@ -393,6 +393,7 @@ def build_nav_context() -> NavContext:
     global _CACHE
     from app.core.boundary_entry import opening_world_points
     from app.core.relief import get_max_slope_deg, get_max_step_height_m
+    from app.core.world_ops import location_entry_geometry
     from app.models.heightfield import draws_built_floor, height_sig
     from app.models.terrain import list_areas, terrain_sig
     from app.models.world import list_locations
@@ -403,6 +404,12 @@ def build_nav_context() -> NavContext:
     for loc in locations:
         for _edge, point in opening_world_points(loc):
             openings.append((float(point[0]), float(point[1])))
+        lid_str = str(loc.get("id") or "")
+        if lid_str:
+            for door in location_entry_geometry(lid_str).get("doors") or []:
+                pt = door.get("at_world")
+                if pt and len(pt) >= 2:
+                    openings.append((float(pt[0]), float(pt[1])))
         # ONE derivation of the outline per location per context — every cell
         # test below runs on these world points (see :class:`Region`).
         world_pts = boundary_world_points(loc)

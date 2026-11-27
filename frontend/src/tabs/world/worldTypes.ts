@@ -339,14 +339,15 @@ export interface Map3D {
    *  server, so nothing writes both. Absent = the location has only a pin
    *  and is drawn as a square (transition state). */
   boundary?: Array<[number, number]>
-  /** Pass-throughs at the LOCATION edge (a road crossing the cell east–west
-   *  = two entries). Geometry + room link only — entry_room stays the
-   *  gameplay gate. SINCE v6 (Nr. 5) `edge` is the 0-based INDEX of a
-   *  boundary edge (edge i = point i → i+1) and `at` runs along that edge;
-   *  the letters N/E/S/W are deleted, and the server drops an entry that
-   *  still carries one. */
+  /** Gates in a fenced plot at the LOCATION edge (a road crossing a fenced
+   *  plot east–west = two entries). Pure geometry — a location with non-empty
+   *  `boundary_openings` is fenced and entered/left only through its gates.
+   *  SINCE v6 (Nr. 5) `edge` is the 0-based INDEX of a boundary edge
+   *  (edge i = point i → i+1) and `at` runs along that edge; the letters
+   *  N/E/S/W are deleted, and the server drops an entry that still carries
+   *  one. */
   boundary_openings?: Array<{ edge: number; at: number
-    width_m: number; type?: 'passage'; room?: string }>
+    width_m: number; type?: 'passage' }>
   /** Doors in the BUILDING SHELL of one storey (§ 6 of the storey-corridor
    *  spec) — the front door of a storey whose front IS the corridor. A
    *  corridor is the complement of the rooms, so it has no wall of its own to
@@ -485,12 +486,12 @@ export interface Location {
   npc_slots?: NpcSlot[]
   terrain?: string
   map3d?: Map3D
-  /** Server verdict: does this location carry any boundary pass-through?
-   *  Openings CHANNEL entry — they are the only ways in once a location draws
-   *  any. Without one the boundary is FREE (E4 task 5): entry anywhere along
-   *  the edge, rule gates unchanged. The editor displays the flag, it does not
-   *  judge. */
-  has_entrance?: boolean
+  /** Server verdict: is this plot fenced (non-empty `boundary_openings`)?
+   *  When true, characters enter and leave the plot only through its gates;
+   *  when false, the plot boundary is open on every side (rule gates and
+   *  building walls/doors still apply). The editor displays the flag, it does
+   *  not judge. */
+  fenced?: boolean
   /** Server flag: the image prompts of the LOCATION changed — same meaning
    *  as the room's own flag, see `Room.prompt_changed`. */
   prompt_changed?: boolean

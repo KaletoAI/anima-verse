@@ -946,12 +946,10 @@ def _remap_room_refs(loc: Dict[str, Any], room_id_map: Dict[str, str]) -> None:
 
     The import mints a new id for every room but the reserved ground, so a
     reference that still names the SOURCE world's id is a dangling one — the
-    same class of bug the ``gallery_meta`` remap fixes for images. Three
-    fields carry a room id; ``entry_room`` is remapped by the caller, the two
-    here sit inside the geometry:
+    same class of bug the ``gallery_meta`` remap fixes for images.
+    ``entry_room`` is remapped by the caller; the reference inside the geometry
+    is:
 
-    * ``map3d.boundary_openings[].room`` — which room a pass-through at the
-      LOCATION edge leads into (§ A13a),
     * ``rooms[].layout.openings[].to`` — a wall opening's connectivity target.
       The literal ``outside`` is not a room and is left alone; so is any other
       id the map does not know, which then simply stays dangling instead of
@@ -959,11 +957,6 @@ def _remap_room_refs(loc: Dict[str, Any], room_id_map: Dict[str, str]) -> None:
     """
     if not room_id_map:
         return
-    map3d = loc.get("map3d")
-    if isinstance(map3d, dict):
-        for op in (map3d.get("boundary_openings") or []):
-            if isinstance(op, dict) and op.get("room") in room_id_map:
-                op["room"] = room_id_map[op["room"]]
     for room in (loc.get("rooms") or []):
         if not isinstance(room, dict):
             continue

@@ -743,10 +743,10 @@ export interface SceneProblem {
   prop_names?: string[]
 }
 
-/** Pass-through at the LOCATION edge (§ B1 Nr. 13) — where a road enters and
- *  leaves the cell. Pure geometry + room link, metres in the scene frame
- *  around the anchor pin like every other scene coordinate; `inward` is the
- *  measured inward unit normal of that edge.
+/** Gate at the LOCATION edge (§ B1 Nr. 13) — a pass-through in a fenced
+ *  plot. Pure geometry, metres in the scene frame around the anchor pin like
+ *  every other scene coordinate; `inward` is the measured inward unit normal
+ *  of that edge.
  *
  *  SINCE v6 `edge` is the 0-based INDEX of the boundary polygon's edge
  *  (edge i = point i -> i+1) — the letters N/E/S/W are gone with the square,
@@ -762,8 +762,6 @@ export interface SceneBoundaryOpening {
   width_m: number
   /** "passage" today — vocabulary open, like room openings */
   type: string
-  /** room this opening routes into (the server accepts entry here) */
-  room_id?: string
   inward: [number, number]
 }
 

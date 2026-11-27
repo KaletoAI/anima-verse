@@ -24,14 +24,16 @@ POLYLINE with baked times:
         "gait": "walk",                      # "walk" | "run" (journey_gait),
                                              # baked at the start like speed
         "entry_edge": 2,                     # BOUNDARY EDGE INDEX of the
-                                             # target's opening the route
-                                             # aims at (None = boundary-rim
-                                             # fallback)
+                                             # target's plot gate the route
+                                             # aims at (None for outside doors
+                                             # and boundary-rim fallbacks)
     }
 
-``entry_edge`` is what lets the ARRIVAL route into the right room: a location
-with several doors links each of them to its own room, and only the journey
-knows which one it walked to. Baked at the start like ``t_cum``.
+``entry_edge`` records which plot-fence gate the journey aimed at (``None``
+when aiming at a building outside door or a boundary-rim point). On arrival,
+the room comes from the level-0 outside door at the journey's goal point,
+otherwise from the arrival rule (``world.get_arrival_room_id``). Baked at the
+start like ``t_cum``.
 
 ``t_cum`` is baked ONCE at the start from ``nav_grid.segment_costs`` (which
 already carries the terrain ``speed_factor``) divided by the travel speed —
@@ -521,7 +523,7 @@ def _boundary_rim_point(loc: Dict[str, Any],
     outlines have no "facing edge" to speak of).
 
     (Whether a location may be entered at all is a gameplay question —
-    ``boundary_entry.has_entrance`` and the access rules answer it, not this
+    ``boundary_entry.fenced`` and the access rules answer it, not this
     geometry.)
     """
     from app.core.world_geometry import boundary_world_points
@@ -567,20 +569,34 @@ def _opening_point(loc: Dict[str, Any],
 
 def _arrival_point(loc: Dict[str, Any],
                    toward: Point) -> Optional[Tuple[Optional[int], Point]]:
-    """Where a journey ENDS on ``loc``, as ``(entry_edge, point)``: the
-    authored opening nearest to ``toward``, else the nearest point on the
-    boundary rim — the latter with edge ``None``, because a made-up geometric
-    point is no authored entrance and makes no statement about the room.
+    """Where a journey ENDS on ``loc``, as ``(entry_edge, point)``:
 
-    A location without an opening has a FREE boundary (E4 task 5) — it can be
-    entered, it just never said where. The nearest rim point is then as good
-    a goal as any, and the MISSING edge is what tells the arrival check that
-    no authored opening was walked to (so the ordinary arrival room decides).
-    The rule gates stay where they belong: at the arrival check, not here.
+    - Fenced plot (non-empty ``boundary_openings``): the nearest gate
+      ``(edge, point)``.
+    - Unfenced location whose ``entry_room`` is non-empty, WALLED
+      (not :func:`boundary_entry.room_is_open`), and has at least one level-0
+      outside door: the nearest such door's outer point ``door + outward * 0.5``,
+      edge ``None``.
+    - Otherwise: the nearest point on the boundary rim, edge ``None``.
     """
-    found = _opening_point(loc, toward)
-    if found is not None:
-        return found
+    from app.core.boundary_entry import fenced, room_is_open
+    if fenced(loc):
+        found = _opening_point(loc, toward)
+        if found is not None:
+            return found
+    else:
+        entry_room = str(loc.get("entry_room") or "").strip()
+        lid = str(loc.get("id") or "")
+        if lid and entry_room and not room_is_open(loc, entry_room):
+            from app.core.world_ops import location_entry_geometry
+            doors = location_entry_geometry(lid).get("doors") or []
+            entry_doors = [d for d in doors if d.get("room") == entry_room]
+            if entry_doors:
+                best = min(entry_doors, key=lambda d: math.dist(
+                    (d["at_world"][0], d["at_world"][1]), toward))
+                px = round(best["at_world"][0] + best["outward"][0] * 0.5, 2)
+                pz = round(best["at_world"][1] + best["outward"][1] * 0.5, 2)
+                return (None, (px, pz))
     rim_point = _boundary_rim_point(loc, toward)
     return None if rim_point is None else (None, rim_point)
 
@@ -1565,33 +1581,37 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
         _settle_point_arrival(name, journey, st)
         return
 
-    from app.core.boundary_entry import opening_entry_room
+    from app.core.boundary_entry import at_door, room_at_point
     from app.core.places import inside as places_inside
     from app.core.room_stand import stand_up
+    from app.core.world_ops import location_entry_geometry
     from app.models.character import (clear_pose_intent, get_movement_target,
                                       record_access_denied,
                                       save_character_current_location,
                                       save_character_current_room,
                                       set_character_pos)
-    from app.models.world import (get_arrival_room_id, get_location_by_id,
-                                  get_location_name)
+    from app.models.world import get_location_by_id, get_location_name
 
     target_id = journey["target"]
     target = get_location_by_id(target_id) or {}
-    # The arrival room: an authored opening WITH a room link answers the
-    # question by itself, and the journey remembers which opening it walked to
-    # — a location with several doors therefore routes into the right room.
-    # Everything else falls back to the one arrival rule (declared entry room,
-    # otherwise the ground) — including a crossing that did NOT happen at that
-    # opening, which has no claim on the room behind it.
-    entry_edge = journey.get("entry_edge")
+    # The arrival room: if the journey reached its goal and the journey's goal
+    # point (last waypoint, produced by _arrival_point) lies at a level-0
+    # outside door, arrive in that door's room; otherwise derive the room from
+    # the arrival point (goal point when at_goal, else the caught position).
     at_goal = _at_goal(journey, st)
-    entry_room = (opening_entry_room(target, entry_edge)
-                  if isinstance(entry_edge, int)
-                  and not isinstance(entry_edge, bool)
-                  and at_goal else "")
+    geo = location_entry_geometry(target_id)
+    wps = journey.get("waypoints") or []
+    goal_pt = (float(wps[-1][0]), float(wps[-1][1])) if wps else st["pos"]
+    entry_room = ""
+    if at_goal:
+        gx, gz = goal_pt
+        for door in geo.get("doors") or []:
+            if at_door(door, gx, gz):
+                entry_room = str(door.get("room") or "")
+                break
     if not entry_room:
-        entry_room = get_arrival_room_id(target)
+        px, pz = goal_pt if at_goal else st["pos"]
+        entry_room = room_at_point(geo, px, pz)
     # The room the character ASKED for outranks both — the door only says
     # where one comes in, not where one was going. It still has to pass its
     # own access check (a rule may have flipped on the road); refused, the

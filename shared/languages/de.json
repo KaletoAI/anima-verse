@@ -1138,7 +1138,7 @@
     "No model is selected for this tier — the clients fall back to the next available one.": "Für diese Stufe ist kein Modell ausgewählt — die Clients nehmen die nächstbeste vorhandene.",
     "No outfit pieces": "Keine Outfit-Teile",
     "No outside door on the ground floor: this building cannot be entered from outside. Draw a door leading outside on one of its ground-floor rooms, or a door on the building outline of the hallway storey (map3d.hull_openings).": "Keine Außentür im Erdgeschoss: Dieses Gebäude kann nicht von außen betreten werden. In einem seiner Erdgeschoss-Räume eine nach außen führende Tür zeichnen — oder eine Tür auf der Gebäudekontur der Flur-Etage (map3d.hull_openings).",
-    "No pass-through drawn: characters may enter anywhere along the boundary. Draw openings to channel entry.": "Kein Durchgang gezeichnet: Charaktere können überall an der Grenze eintreten. Durchgänge zeichnen, um den Zutritt zu lenken.",
+    "No pass-through drawn: the plot is open on every side. Draw pass-throughs to fence it — then it is entered only through them.": "Kein Durchgang gezeichnet: Das Grundstück ist zu allen Seiten offen. Durchgänge zeichnen, um es einzuzäunen — dann ist es nur noch über sie betretbar.",
     "No places": "Keine Orte",
     "No places yet": "Noch keine Orte",
     "No places yet.": "Noch keine Plätze.",
@@ -7512,6 +7512,10 @@
     "A reward can only use a permanent object: this one is removed when the quest ends": "Eine Belohnung kann nur ein dauerhaftes Objekt verwenden: dieses wird entfernt, wenn die Quest endet",
     "Read aloud": "Vorlesen",
     "Stop reading aloud": "Vorlesen beenden",
-    "World Dev writes long nested tool calls — use a strong model (e.g. Claude Opus). Small or flash models often break the JSON.": "World-Dev schreibt lange, verschachtelte Tool-Aufrufe — nutze ein starkes Modell (z. B. Claude Opus). Kleine oder Flash-Modelle zerstören oft das JSON."
+    "World Dev writes long nested tool calls — use a strong model (e.g. Claude Opus). Small or flash models often break the JSON.": "World-Dev schreibt lange, verschachtelte Tool-Aufrufe — nutze ein starkes Modell (z. B. Claude Opus). Kleine oder Flash-Modelle zerstören oft das JSON.",
+    "You cannot leave here — use a door or a gate.": "Hier kannst du nicht hinaus — nutze eine Tür oder ein Tor.",
+    "The fence has no gate here.": "Hier hat der Zaun kein Tor.",
+    "There is no door here.": "Hier gibt es keine Tür.",
+    "A gate of the plot lies on a building — a gate must sit on open ground; buildings are entered through their outside doors.": "Ein Tor des Grundstücks liegt an einem Gebäude — ein Tor muss auf offenem Boden liegen; Gebäude werden durch ihre Außentüren betreten."
   }
 }

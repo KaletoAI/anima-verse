@@ -82,7 +82,6 @@ export interface LayoutBoundaryOpening {
   edge: number
   at: number
   width_m: number
-  room?: string
 }
 
 export interface LayoutDraftNormalized {

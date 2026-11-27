@@ -1018,8 +1018,7 @@ for _loc in _house["locations"]:
         _map3d = dict(_loc.get("map3d") or {})
         # Edge 1 of the square boundary = the EAST side (v6 Nr. 5).
         _map3d["boundary_openings"] = [{"edge": 1, "at": 0.5,
-                                        "width_m": 2.0, "type": "passage",
-                                        "room": ""}]
+                                        "width_m": 2.0, "type": "passage"}]
         _loc["map3d"] = _map3d
 _save_world_data(_house)
 ctx = nav_grid.build_nav_context()
@@ -1057,6 +1056,35 @@ blind = nav_grid._Search(_replace(ctx, openings=()),
                          (2260.0, 58.0), (2258.0, 56.0))
 check("RED COUNTER-PROBE: without the openings it is too steep",
       blind.too_steep(near_cell), True)
+
+# An outside door (without boundary_openings) is a ramp end too and moves the cache key.
+_house_door = _load_world_data()
+for _loc in _house_door["locations"]:
+    if _loc.get("id") == HOUSE:
+        _loc["map3d"].pop("boundary_openings", None)
+        _loc["rooms"] = [
+            {"id": "__ground__", "name": "Ground"},
+            {"id": "hall", "name": "Hall", "layout": {
+                "x": -4.0, "y": -4.0, "w": 8.0, "d": 8.0, "level": 0,
+                "openings": [{"edge": "E", "at": 0.5, "width_m": 1.2,
+                              "type": "door", "to": "outside"}],
+            }},
+        ]
+_save_world_data(_house_door)
+door_ctx = nav_grid.build_nav_context()
+check("an outside door is included in nav_grid openings as a ramp end",
+      (2204.0, 30.0) in door_ctx.openings, True)
+door_search = nav_grid._Search(door_ctx, (2260.0, 58.0), (2258.0, 56.0))
+check("the cell at the outside door is NOT blocked for its height",
+      door_search.too_steep(near_cell), False)
+# Restore HOUSE to its gate-only fixture for the remaining checks below.
+_house_restore = _load_world_data()
+for _loc in _house_restore["locations"]:
+    if _loc.get("id") == HOUSE:
+        _loc["rooms"] = [{"id": "__ground__", "name": "Ground"}]
+        _loc["map3d"]["boundary_openings"] = [{"edge": 1, "at": 0.5,
+                                               "width_m": 2.0, "type": "passage"}]
+_save_world_data(_house_restore)
 approx("the control cell lies 5.099 m from the opening",
        math.hypot(2199 - 2204, 29 - 30), 5.0990195, 1e-6)
 check("...so it stays blocked — the exemption is local",

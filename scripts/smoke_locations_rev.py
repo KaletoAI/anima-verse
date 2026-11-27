@@ -8,7 +8,7 @@ A matching validator builds zero payloads. World writes, boot replacement and
 recognised library kinds change the revision; unsupported files do not.
 The full seed preserves its stored id, name, rooms order; the loader appends
 decency, style_hint, swim_allowed, activity_hint, yaw_deg defaults. The
-pre-Task-3 composer then appended image_count, has_entrance, surface_kind.
+pre-Task-3 composer then appended image_count, fenced, surface_kind.
 (No boundary_problems is appended because this seed has no drawn boundary.)
 All storage and the surface library are disposable.
 Usage: ./.venv/bin/python scripts/smoke_locations_rev.py
@@ -85,7 +85,7 @@ async def main():
             full = (await client.get("/world/locations")).json()["locations"][0]
             assert list(full) == ["id", "name", "rooms", "decency", "style_hint",
                                   "swim_allowed", "activity_hint", "yaw_deg",
-                                  "image_count", "has_entrance", "surface_kind"], list(full)
+                                  "image_count", "fenced", "surface_kind"], list(full)
             world.upsert_location({"id": "smoke", "name": "Changed", "rooms": []}, sync_world=True)
             assert world_ops.locations_rev() != rev
             rev = world_ops.locations_rev()

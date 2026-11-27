@@ -608,7 +608,7 @@ MAP3D_IN = {
     "boundary": L_BOUNDARY,
     # 6 points = 6 edges, so indices 0..5 exist. Edge 2 is C->D, edge 5 F->A.
     "boundary_openings": [
-        {"edge": 2, "at": 0.25, "width_m": 6.0, "room": HUT},
+        {"edge": 2, "at": 0.25, "width_m": 6.0},
         {"edge": 5, "at": 0.5, "width_m": 4.0},
     ],
     "storey_height_m": 3.5,
@@ -679,8 +679,7 @@ MAP3D_OUT = {
     "wall_kind": "brick",
     "area_model": True, "area_detail": True,
     "boundary_openings": [
-        {"edge": 2, "at": 0.25, "width_m": 6.0, "type": "passage",
-         "room": HUT},
+        {"edge": 2, "at": 0.25, "width_m": 6.0, "type": "passage"},
         {"edge": 5, "at": 0.5, "width_m": 4.0, "type": "passage"},
     ],
 }
@@ -753,10 +752,9 @@ check("map3d.boundary", (new_loc.get("map3d") or {}).get("boundary"),
       L_BOUNDARY)
 check("map3d.plan_width_m neu abgeleitet",
       (new_loc.get("map3d") or {}).get("plan_width_m"), 20.0)
-check("map3d.boundary_openings mit Kantenindex + neuer Raum-id",
+check("map3d.boundary_openings mit Kantenindex",
       (new_loc.get("map3d") or {}).get("boundary_openings"),
-      [{"edge": 2, "at": 0.25, "width_m": 6.0, "type": "passage",
-        "room": HUT_NEW},
+      [{"edge": 2, "at": 0.25, "width_m": 6.0, "type": "passage"},
        {"edge": 5, "at": 0.5, "width_m": 4.0, "type": "passage"}])
 check("map3d Rest unveraendert",
       {k: v for k, v in (new_loc.get("map3d") or {}).items()
