@@ -2945,7 +2945,8 @@ def composite_outdated(record: Any) -> bool:
     a view is re-composited from its stored draft at its next use (no hub job; without a stored
     draft following its front it is rendered again, counted in the estimate): a meshed shape's view before the
     shape is meshed (``shape_view`` — a shape already meshed from it keeps it, ``shape_view_shas``); an outfit's
-    view is a copy of its shape's and follows the shape's."""
+    view is a copy of its shape's and follows the shape's. A head-changing shape's view made without the draft's
+    head or draft alpha inside the head zone is caught separately by ``head_composite_outdated``."""
     if not isinstance(record, dict) or record.get("fit") != "composite":
         return False
     composite = record.get("composite")
@@ -2960,11 +2961,57 @@ def composite_outdated(record: Any) -> bool:
     return bool(composite.get("ok")) and bool(view_composite.check(composite))
 
 
+def head_composite_outdated(record: Any, *, head_changed: bool) -> bool:
+    """Whether a composite record (``edit_composite`` on the front, ``composite`` on back/side) is outdated for a
+    shape whose head changes: such a shape needs the draft's head on every view (Ruling A21) and the draft's alpha
+    inside the head zone (``head.alpha == "draft"`` when ``alpha == "base"``)."""
+    if not head_changed:
+        return False
+    if not isinstance(record, dict):
+        return True
+    head = record.get("head")
+    if not isinstance(head, dict):
+        return True
+    return record.get("alpha") == "base" and head.get("alpha") != "draft"
+
+
+def _view_head_outdated(view: str, meta: Dict[str, Any], *, head_changed: bool) -> bool:
+    """Whether a stored view's sidecar ``meta`` carries a broken head composite (``head_composite_outdated``).
+    An already meshed shape's views carry ``outfit_body.shape_inputs.hair`` so they are recognised without the
+    caller; a plain/copied view (no ``edit_composite`` on the front, or ``fit`` != ``"composite"`` on back/side)
+    is not judged here."""
+    if not isinstance(meta, dict):
+        return False
+    if view == "front":
+        if "edit_composite" not in meta:
+            return False
+        record = meta.get("edit_composite")
+    else:
+        if meta.get("fit") != "composite":
+            return False
+        record = meta.get("composite")
+    changed = head_changed or bool(_dict_of(_dict_of(meta.get("outfit_body")).get("shape_inputs")).get("hair"))
+    return head_composite_outdated(record, head_changed=changed)
+
+
+def front_wears_clothing(front: Optional[Path]) -> bool:
+    """Whether the dressed ``front`` wears any clothing: False only when its sidecar has the ``dress_text`` key
+    with an empty/blank value (a hair-only edit, hairstyles D4 — the head change is not clothing), else True
+    (also when ``front`` is None or older sidecars omit ``dress_text``). Read-only, sidecar only."""
+    if front is None:
+        return True
+    meta = _ref_sidecar(front)
+    if "dress_text" not in meta:
+        return True
+    return bool(str(meta.get("dress_text") or "").strip())
+
+
 def front_garment_region(front: Optional[Path]) -> Optional[float]:
     """The garment region of the DRESSED ``front`` (round 2026-11-25, ``view_composite`` EMPTY): its edit
     composite's put-on region (sidecar ``edit_composite.coverage.region`` — every dressed front since Ruling A125 is
-    such an edit), else None (unknown: the old EMPTY rule applies). Read-only, the sidecar only."""
-    if front is None:
+    such an edit), else None (unknown: the old EMPTY rule applies). Returns None when ``front_wears_clothing`` is
+    False (a hair-only edit). Read-only, the sidecar only."""
+    if front is None or not front_wears_clothing(front):
         return None
     record = _ref_sidecar(front).get("edit_composite")
     coverage = record.get("coverage") if isinstance(record, dict) else None
@@ -3010,7 +3057,7 @@ def view_lost_clothing(character_name: str, view: str, signature: str, front: Op
     file identity). The Body sub-tab's red note beside the view (round 2026-11-25); planning never measures."""
     from app.core import view_composite
     from app.core.model_refs import find_ref_image
-    if view not in DRAFT_VIEWS or front is None:
+    if view not in DRAFT_VIEWS or front is None or not front_wears_clothing(front):
         return False
     if empty_view_refused(character_name, view, signature, front):
         return True
@@ -3139,9 +3186,11 @@ def refused_views(character_name: str, signature: str, on: str, *, current) -> D
     return out
 
 
-def shape_view_refusals(character_name: str, shape: str, bsig: str) -> Dict[str, str]:
+def shape_view_refusals(character_name: str, shape: str, bsig: str, *,
+                        head_changed: bool = False) -> Dict[str, str]:
     """``refused_views`` of the meshed shape ``shape`` on the plain body ``bsig`` (Ruling FR-I3)."""
-    return refused_views(character_name, shape, bsig, current=lambda v: shape_view(character_name, v, shape, bsig))
+    return refused_views(character_name, shape, bsig,
+                         current=lambda v: shape_view(character_name, v, shape, bsig, head_changed=head_changed))
 
 
 # --- Refusals of the outfit model's assembly (Ruling A61) -------------------------------------------------------
@@ -3356,7 +3405,8 @@ def _composite_extra(view: str, bsig: str, base_view: Path, draft: Path,
 def _composite_attempt(character_name: str, view: str, *, stem: Path, draft: Path,
                        base_views: Dict[str, Optional[Path]], extra: Dict[str, Any],
                        front: Optional[Path] = None,
-                       front_region: Optional[float] = None) -> Tuple[Path, Dict[str, Any]]:
+                       front_region: Optional[float] = None,
+                       head: bool = False) -> Tuple[Path, Dict[str, Any]]:
     """The composite of ``draft`` onto the base view into ``stem.png``
     (``view_composite.compose``, rule "outfit", RGBA in the base view's
     frame) with its sidecar (``composite_sidecar``) and its result
@@ -3367,7 +3417,7 @@ def _composite_attempt(character_name: str, view: str, *, stem: Path, draft: Pat
     front's is judged by the face cue, Ruling A16), ``base_body_gates.
     noise_gate`` and ``framing_gate`` against the base view. A composite
     that failed its checks is not gated (``guard`` etc. are ``{}``).
-    A head that differs (``head_match`` of ``front`` below
+    A head that differs (``head=True`` or ``head_match`` of ``front`` below
     ``HEAD_MATCH_MIN``) is taken from the draft as well
     (``view_composite.compose(head=True)``, Ruling A21) — never a bald head
     on the haired plain back. ``front_region``: the dressed front's garment
@@ -3375,16 +3425,21 @@ def _composite_attempt(character_name: str, view: str, *, stem: Path, draft: Pat
     front wears clothing is refused, never an EMPTY view (round 2026-11-25);
     the front's ``front_garment_bands`` on the base front go along too — a
     draft that keeps too little of a band the front is dressed in (a lost
-    shirt) is refused as well (``view_composite.clothing_lost``)."""
+    shirt) is refused as well (``view_composite.clothing_lost``). Neither
+    ``front_region`` nor ``front_bands`` is passed for a hair-only front
+    (``front_wears_clothing`` False)."""
     from app.core import base_body_gates, view_composite
     base_view = base_views[view]
     path = stem.with_suffix(".png")
-    match = head_match(front, base_views.get("front")) if front is not None else None
-    other_head = {"head": True} if match is not None and match < HEAD_MATCH_MIN else {}
-    known: Dict[str, Any] = {"front_region": front_region} if front_region is not None else {}
-    bands = front_garment_bands(front, base_views.get("front"))
-    if bands is not None:
-        known["front_bands"] = bands   # round 2026-11-25: a band of the front's clothing lost here refuses the draft
+    match = head_match(front, base_views.get("front")) if front is not None and not head else None
+    other_head = {"head": True} if head or (match is not None and match < HEAD_MATCH_MIN) else {}
+    known: Dict[str, Any] = {}
+    if front_wears_clothing(front):
+        if front_region is not None:
+            known["front_region"] = front_region
+        bands = front_garment_bands(front, base_views.get("front"))
+        if bands is not None:
+            known["front_bands"] = bands   # round 2026-11-25: a band of the front's clothing lost here refuses the draft
     record = view_composite.compose(base_view, draft, path, rule="outfit", base_alpha=True, **known, **other_head)
     path.with_suffix(".json").write_text(json.dumps(composite_sidecar(draft, view, extra, record),
                                                     ensure_ascii=False, indent=2), encoding="utf-8")
@@ -3487,7 +3542,7 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
             stem.parent.mkdir()
             attempt = _composite_attempt(character_name, view, stem=stem, draft=kept, base_views=base_views,
                                          extra=_composite_extra(view, bsig, base_view, kept, mesh_items, texture),
-                                         front=front, front_region=front_region)
+                                         front=front, front_region=front_region, head=bool(hair_edit and hair))
             attempts.append(attempt)
             first = 2
             logger.info("Dressed %s %s (%s): stored draft composite %s (%s; guard %s, noise %s)", view,
@@ -3546,7 +3601,8 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
             stem.parent.mkdir()
             attempt = _composite_attempt(character_name, view, stem=stem, draft=Path(draft), base_views=base_views,
                                          extra=_composite_extra(view, bsig, base_view, Path(draft), mesh_items,
-                                                                texture), front=front, front_region=front_region)
+                                                                texture), front=front, front_region=front_region,
+                                         head=bool(hair_edit and hair))
             attempts.append(attempt)
             result = attempt[1]
             logger.info("Dressed %s %s (%s): draft %d composite %s (%s; guard %s, noise %s)", view, character_name,
@@ -3718,14 +3774,17 @@ def shape_view_shas(character_name: str, shape: str, bsig: str) -> Dict[str, str
     (``model_refs/tpose[_<view>]_<shape>``, ``dressed_views()``) that were
     edited from the CURRENT plain body ``bsig`` (sidecar ``base_signature``
     and ``base_image_sha256`` = that base view's content); "" for a missing
-    or outdated one — what ``figure.stored_shape`` compares with the
-    shape's recorded ``views``. Read-only."""
+    or outdated one (including a head-changing shape view made by the broken
+    head composite path, ``head_composite_outdated``) — what
+    ``figure.stored_shape`` compares with the shape's recorded ``views``.
+    Read-only."""
     from app.core.model_refs import find_ref_image
     out: Dict[str, str] = {}
     for v in dressed_views():
         path = find_ref_image(character_name, _kind(v), shape)
         meta = _ref_sidecar(path)
         current = (path is not None and meta.get("base_signature") == bsig and not is_model_fit(meta)
+                   and not _view_head_outdated(v, meta, head_changed=False)
                    and meta.get("base_image_sha256") == file_sha256(find_ref_image(character_name, _kind(v), bsig)))
         out[v] = file_sha256(path) if current else ""
     return out
@@ -4081,13 +4140,15 @@ def picture_edit_prompt(character_name: str, view: str, *, profile: Dict[str, An
 
 
 def _edit_front(character_name: str, *, signature: str, refs_dir: Path, base_front: Path, prompt: Tuple[str, str],
-                common: Dict[str, Any], extra: Dict[str, Any]) -> Optional[Path]:
+                common: Dict[str, Any], extra: Dict[str, Any], head: bool = False) -> Optional[Path]:
     """The dressed front of ``signature`` (Ruling A125): an edit of the base
     front ``base_front`` (``render_view_edit``, occasion ``outfit_front``),
     then composited back onto the base front
-    (``view_composite.compose``, ``base_alpha``): the base outside the
-    change mask, the edit inside, the alpha always the base's — the
-    registration outside the garment is exact by construction. The sidecar
+    (``view_composite.compose``, ``base_alpha``, ``head=head``): the base
+    outside the change mask, the edit inside, the alpha the base's outside
+    the head zone — and when ``head`` is True (Ruling A21) the draft's head
+    and alpha inside the head zone — so registration outside the garment is
+    exact by construction. The sidecar
     is the render's with ``extra``, the base front's content
     (``base_image_sha256``) and the composite record (``edit_composite``).
     ``OutfitError`` when the composite fails its checks (the edit drew
@@ -4104,7 +4165,7 @@ def _edit_front(character_name: str, *, signature: str, refs_dir: Path, base_fro
         if draft is None:
             return None
         staged = Path(staging) / f"tpose_{signature}.png"
-        record = view_composite.compose(base_front, Path(draft), staged, rule="outfit", base_alpha=True)
+        record = view_composite.compose(base_front, Path(draft), staged, rule="outfit", base_alpha=True, head=head)
         if not record["ok"]:
             raise OutfitError(view_composite.refusal("Dressed front", [record]))
         meta = _ref_sidecar(Path(draft))
@@ -4169,7 +4230,8 @@ def _render_views(character_name: str, *, signature: str, pieces: Optional[Dict[
                                 "pose_prompt": "", "expression_prompt": "", "apply_state_modifiers": False,
                                 "mesh_input_profile": profile, "character_loras": False, **load_kwargs},
                         extra={"base_signature": on, **mesh_extra, "texture_signature": tsig,
-                               "dress_text": texts.get("front", "")})
+                               "dress_text": texts.get("front", "")},
+                        head=bool(hair_edit and hair))
                     if path is None:
                         errors.append("Dressed front edit failed")
                 except Exception as e:  # noqa: BLE001 — one view never kills the pass
@@ -5191,17 +5253,22 @@ def outfit_body_op_partial(inputs: Dict[str, Any]) -> str:
     return views_missing_message(missing, sent) + " — its mesh job from before the restart was dropped"
 
 
-def shape_view(character_name: str, view: str, shape: str, bsig: str) -> Optional[Path]:
+def shape_view(character_name: str, view: str, shape: str, bsig: str, *,
+               head_changed: bool = False) -> Optional[Path]:
     """The stored view of the shape that is current for the plain body
     ``bsig`` (``shape_view_shas``) and — the shape is meshed from it — not a
     composite of older rules (``composite_outdated``, Ruling A24: re-composited
-    from its stored draft first) nor an EMPTY composite of a dressed front
-    (``empty_view_refused``, round 2026-11-25), else None."""
+    from its stored draft first), not an outdated head composite
+    (``head_composite_outdated``, Ruling A21), nor an EMPTY composite of a
+    dressed front (``empty_view_refused``, round 2026-11-25), else None."""
     from app.core.model_refs import find_ref_image
     if not shape_view_shas(character_name, shape, bsig).get(view):
         return None
     path = find_ref_image(character_name, _kind(view), shape)
-    if path is None or composite_outdated(_ref_sidecar(path)):
+    if path is None:
+        return None
+    meta = _ref_sidecar(path)
+    if composite_outdated(meta) or _view_head_outdated(view, meta, head_changed=head_changed):
         return None
     if view != "front" and empty_view_refused(character_name, view, shape,
                                               find_ref_image(character_name, "tpose", shape)):
@@ -5209,7 +5276,8 @@ def shape_view(character_name: str, view: str, shape: str, bsig: str) -> Optiona
     return path
 
 
-def shape_view_jobs(character_name: str, shape: str, bsig: str) -> int:
+def shape_view_jobs(character_name: str, shape: str, bsig: str, *,
+                    head_changed: bool = False) -> int:
     """Hub jobs of refreshing the views of the meshed shape ``shape`` on the
     plain body ``bsig`` before it is meshed (Ruling C4; ``prepare_shape``
     renders what ``shape_view`` misses): 0 when every ``dressed_views()``
@@ -5219,14 +5287,14 @@ def shape_view_jobs(character_name: str, shape: str, bsig: str) -> int:
     front (``stored_draft``, Ruling C2: composited again on the CPU). First
     attempts only. Read-only."""
     from app.core.model_refs import find_ref_image
-    missing = [v for v in dressed_views() if shape_view(character_name, v, shape, bsig) is None]
+    missing = [v for v in dressed_views() if shape_view(character_name, v, shape, bsig, head_changed=head_changed) is None]
     if not missing:
         return 0
     if "front" in missing:
         return dressed_view_jobs()
     front = find_ref_image(character_name, "tpose", shape)
     # Ruling FR-I3: a view whose composite was refused for these inputs is drafted anew on its retry (1 job).
-    refused = shape_view_refusals(character_name, shape, bsig)
+    refused = shape_view_refusals(character_name, shape, bsig, head_changed=head_changed)
     return sum(0 if v not in refused and stored_draft(character_name, v, shape, front) is not None else 1
                for v in missing)
 
@@ -5255,17 +5323,18 @@ def render_shape_views(character_name: str, fig, views: List[str], *, items: Opt
         return {"ok": False, "error": BASE_IMAGES_MISSING}
     texts = dict(inputs["dress_text"])
     hair = str(inputs.get("hair") or "")   # the worn hairstyle's own shape (D4): its hair goes on
+    head_changed = bool(hair)
     if not texts.get("front") and not hair:
         return {"ok": False, "error": SHAPE_EMPTY}
-    todo = [v for v in views if force or shape_view(character_name, v, shape, bsig) is None]
+    todo = [v for v in views if force or shape_view(character_name, v, shape, bsig, head_changed=head_changed) is None]
     if todo:
         _render_views(character_name, signature=shape, pieces=sets.pieces, items=[], todo=todo, force=force,
                       on=bsig, registrations=registrations, texts=texts, tsig="", mesh={}, dressed=True,
                       bald=_bald_edit(character_name, profile, meshed=True),
                       profile=_worn_profile(profile, sets.pieces, []), raise_load=False,
-                      current=lambda v: shape_view(character_name, v, shape, bsig),
+                      current=lambda v: shape_view(character_name, v, shape, bsig, head_changed=head_changed),
                       hair=hair or None, hair_edit=bool(hair))
-    missing = [v for v in views if shape_view(character_name, v, shape, bsig) is None]
+    missing = [v for v in views if shape_view(character_name, v, shape, bsig, head_changed=head_changed) is None]
     if not missing:
         return {"ok": True, "error": ""}
     with _status_lock:
@@ -5442,6 +5511,7 @@ def prepare_shape(character_name: str, fig, *, items: Optional[list] = None, reb
     _sets, variant, inputs = figure_mod.shape_plan(character_name, fig, items, profile=profile)
     if inputs is None or figure_mod.shape_key_of(inputs) != shape:
         return {"ok": False, "error": SHAPE_CHANGED, "body_id": shape}
+    head_changed = bool(inputs.get("hair"))
     status_sig = signature or shape
     with keyed_lock("outfit_body", f"{character_name}:{shape}"):
         if not rebuild and figure_mod.stored_shape(
@@ -5460,7 +5530,8 @@ def prepare_shape(character_name: str, fig, *, items: Optional[list] = None, reb
         _outfit_start(character_name, status_sig, "body")
         error: Optional[str] = None
         try:
-            missing = [v for v in dressed_views() if shape_view(character_name, v, shape, bsig) is None]
+            missing = [v for v in dressed_views()
+                       if shape_view(character_name, v, shape, bsig, head_changed=head_changed) is None]
             if missing:
                 logger.info("Outfit body %s of %s: rendering its %s first — never meshed from a partial set",
                             shape, character_name, missing)
@@ -5472,11 +5543,11 @@ def prepare_shape(character_name: str, fig, *, items: Optional[list] = None, reb
                     raise OutfitError(views_missing_message(
                         still, [v for v in dressed_views() if v not in still], rendered.get("reason") or "",
                         stale=rendered.get("stale") or ()))
-            paths = {v: shape_view(character_name, v, shape, bsig) for v in dressed_views()}
+            paths = {v: shape_view(character_name, v, shape, bsig, head_changed=head_changed) for v in dressed_views()}
 
             def rerender(v: str) -> Optional[Path]:
                 render_shape_views(character_name, fig, [v], items=items, force=True)
-                return shape_view(character_name, v, shape, bsig)
+                return shape_view(character_name, v, shape, bsig, head_changed=head_changed)
 
             guard, warnings = _guard_dressed_views(character_name, shape, bsig, paths, registrations,
                                                    rerender=rerender)

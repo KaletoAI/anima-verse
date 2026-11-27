@@ -934,9 +934,11 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: boo
     (``neck_seam_de``); without it nothing changes.
 
     ``base_alpha`` (Ruling A125, an edit of the base view): the composite's
-    alpha is the base's everywhere — a garment never adds figure, the
-    silhouette (and so the registration on the mesh) is the base's by
-    construction; the record says ``alpha: "base"``."""
+    alpha is the base's everywhere except the head zone, which keeps the
+    draft's alpha (Ruling A21) — a garment never adds figure, the silhouette
+    (and so the registration on the mesh) is the base's by construction; the
+    record says ``alpha: "base"`` (and ``head.alpha: "draft"`` with
+    ``take_head``)."""
     from scipy import ndimage as ndi
     started = time.perf_counter()
     if rule not in RULES:
@@ -989,7 +991,7 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: boo
     matched, ring_offset = _seam_colour_match(base, dw, mask, skin_b, skin_d)
     out = _blend(base, matched, mask, aligned, flare, clear=zone)
     if base_alpha:
-        out[..., 3] = base[..., 3]
+        out[..., 3] = base[..., 3] if zone is None else np.where(zone, out[..., 3], base[..., 3])
         record["alpha"] = "base"
     # The registered draft as the composite sees it: the warped draft, the flare unwarped.
     registered = np.where(flare[..., None], aligned, dw)
@@ -1000,7 +1002,8 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: boo
     if zone_record is not None:
         cut = zone_record["cut_row"]
         neck_seam = _seam_de(out, mask, _lab(dw), skin_d, rows=(cut - 1, cut + 7))
-        record["head"] = {**zone_record, "neck_seam_de": None if neck_seam is None else round(neck_seam, 2)}
+        record["head"] = {**zone_record, "neck_seam_de": None if neck_seam is None else round(neck_seam, 2),
+                          **({"alpha": "draft"} if base_alpha else {})}
     record.update({
         "alignment": alignment,
         "warp": {"mean_px": round(float(magnitude.mean()), 2), "p95_px": round(float(np.percentile(magnitude, 95)), 2),
@@ -1108,7 +1111,8 @@ def compose(base_view: Path, draft: Path, target: Path, *, rule: str = "outfit",
     ``rule``: "outfit" (a dressed view) or "piece" (a worn back).
     ``mask_target``: where the support goes (``write_support``).
     ``head``: the draft's head comes too (Ruling A21, ``_composite``).
-    ``base_alpha``: the alpha is the base's everywhere (Ruling A125).
+    ``base_alpha``: the alpha is the base's everywhere except the head zone,
+    which keeps the draft's alpha (Ruling A125).
     ``front_region``: the dressed front's garment region (EMPTY, module docstring).
     ``front_bands``: the dressed front's ``garment_bands`` (``clothing_lost``).
     Returns the record (``composite_arrays``). ``CompositeError`` on the

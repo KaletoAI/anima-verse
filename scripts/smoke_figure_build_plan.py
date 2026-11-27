@@ -227,7 +227,7 @@ def install_stubs():
         return plan
     base_body.base_refresh_plan = refresh_plan
     figure._shape_stored = lambda c, shape, bsig: W.stored(shape)
-    base_body.shape_view = lambda c, v, shape, bsig: (Path("v") if W.stored(shape) else None)
+    base_body.shape_view = lambda c, v, shape, bsig, *, head_changed=False: (Path("v") if W.stored(shape) else None)
     # The views stored before count on a current plain body only; a view the Build's own ``dressed`` made
     # counts on the plain body it was made from, an outdated one too (``made``; Ruling C4: ``_dressed`` checks).
     base_body.dressed_image = lambda c, v, sig, bsig, fig=None: (

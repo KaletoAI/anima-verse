@@ -599,12 +599,17 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
     shape_stored = meshed and not rebased and figure._shape_stored(character_name, wanted.shape, bsig)
     if meshed and (rebased or not shape_stored):
         # Ruling C4: every view the shape needs is refreshed before it is meshed (a stale one re-made).
-        views = set_jobs if rebased else base_body.shape_view_jobs(character_name, wanted.shape, bsig)
+        head_changed = False
+        if not rebased:
+            _sets, _variant, shape_in = figure.shape_plan(character_name, wanted, None, profile=profile)
+            head_changed = bool((shape_in or {}).get("hair"))
+        views = set_jobs if rebased else base_body.shape_view_jobs(
+            character_name, wanted.shape, bsig, head_changed=head_changed)
         stages = model3d.mesh_hub_stages(character_name, wanted.shape)
         step = Step("shape", "Body shape: " + " + ".join(([f"views {views}"] if views else []) + stages),
                     views + len(stages), manual=take_out)
-        steps.append(step if rebased else _refused(step, base_body.shape_view_refusals(character_name,
-                                                                                         wanted.shape, bsig)))
+        steps.append(step if rebased else _refused(step, base_body.shape_view_refusals(
+            character_name, wanted.shape, bsig, head_changed=head_changed)))
 
     # STEP_ORDER: the own-mesh pieces before the template drapes — a drape's key folds in the accepted fit of
     # an own-mesh piece it hangs over (a boot under trousers, A237), so the fit lands first and the drape is made
