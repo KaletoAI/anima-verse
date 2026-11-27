@@ -668,7 +668,7 @@ export function LocationEditor({ location, items, allLocations, onChanged, onDir
           here as a full-width row above everything — one select, the whole
           width of the page, above a plan that had none to spare. It is a
           setting OF this floor plan (the fallback every door opening on it
-          inherits), so it now lives in the inspector's Level tab, handed down
+          inherits), so it now lives in the inspector's Doors & windows panel, handed down
           as `onDefaultDoorProp`. */}
       <PlanSplit
         sideLabel={t('3D')}

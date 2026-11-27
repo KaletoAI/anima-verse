@@ -1,52 +1,62 @@
 /**
  * PlanToolbar — the vertical 44 px icon strip left of the floor plan. Purely
  * presentational: every handler and all state live in RoomLayoutEditor, the
- * toolbar only decides which icon is armed, disabled or contextual. The groups
- * run top-down from the outermost shape inwards: the LOCATION BOUNDARY (the
- * plot), the BUILDING tools (the house on it) — both only when the editor may
- * write map3d — and the ROOM tools; the marker tool lives in the
- * side panel next to the marker list. Tooltips carry the explanations that
- * used to sit as hint texts and checkbox labels next to the plan.
+ * toolbar only decides which icon is armed, current, disabled or contextual.
+ * The groups run top-down from the outermost shape inwards: Select, the
+ * LOCATION BOUNDARY (the plot), the BUILDING tools (the house on it) — both
+ * only when the editor may write map3d — the ROOM tools (including markers and
+ * props), and Check (findings). Each tool activates its own single panel in the
+ * inspector dock. Tooltips carry the explanations that used to sit as hint
+ * texts and checkbox labels next to the plan.
  *
- * With the YARD selected (§ A13a) every ROOM tool is disabled and says why in
- * its tooltip: the location surface has no rectangle, no hull and no walls to
- * work on. The building tools and the prop palette are unaffected.
+ * With the YARD selected (§ A13a) every ROOM geometry tool is disabled and says
+ * why in its tooltip: the location surface has no rectangle, no hull and no
+ * walls to work on. The building tools, markers and the prop palette are
+ * unaffected.
  */
 import { useI18n } from '../../i18n/I18nProvider'
 import { STAIR_MAX } from './planGeometry'
+import type { PlanPanel } from './planTools'
 
 /** Click-to-place modes of the floor-plan editor ('' = plain selection). */
 export type PlanMode = '' | 'marker' | 'marker-move' | 'outline'
   | 'elevator' | 'stairs' | 'door' | 'window' | 'draw-room' | 'curve'
   | 'boundary-door' | 'boundary' | 'hull-door'
 
-function Tool({ icon, title, onClick, active = false, danger = false,
-  disabled = false, small = false }: {
+function Tool({ icon, title, onClick, active = false, current = false,
+  danger = false, disabled = false, small = false, badge }: {
   icon: string
   title: string
   onClick: () => void
   active?: boolean
+  current?: boolean
   danger?: boolean
   disabled?: boolean
   /** Text label instead of a single glyph (the ✓ (n) commit buttons). */
   small?: boolean
+  badge?: number
 }) {
   return (
     <button
       type="button"
-      className={`ga-btn ga-btn-sm${active ? ' ga-btn-primary' : ''}${danger ? ' ga-btn-danger' : ''}`}
+      className={`ga-btn ga-btn-sm${active ? ' ga-btn-primary' : ''}${!active && current ? ' ga-plan-tool-current' : ''}${danger ? ' ga-btn-danger' : ''}`}
       style={small ? { fontSize: 11 } : undefined}
       disabled={disabled}
       title={title}
       onClick={onClick}
     >
       {icon}
+      {badge ? <span className="ga-plan-badge">{badge}</span> : null}
     </button>
   )
 }
 
 interface PlanToolbarProps {
   mode: PlanMode
+  panel: PlanPanel
+  onPanel: (p: PlanPanel) => void
+  findingCount: number
+  onSelectTool: () => void
   /** A shape is selected on the plan. Together with `ground` it decides the
    *  room tools: they need a selection that is not the yard. */
   hasSelection: boolean
@@ -76,7 +86,7 @@ interface PlanToolbarProps {
    *  corridor is what the door leads into, and only the ground floor's
    *  hallway is opted into. Unlike the other tools this one is HIDDEN rather
    *  than disabled where it does not apply — a storey without a hallway has
-   *  no contour door to explain, and the level inspector is where the switch
+   *  no contour door to explain, and the Storey panel is where the switch
    *  that would create one lives. */
   canHullDoor: boolean
   canSuggest: boolean
@@ -97,7 +107,7 @@ interface PlanToolbarProps {
    *  in (user finding 2026-08-20). */
   noSelectionHint: string
   propsOpen: boolean
-  /** The placed-prop pick list is open in the side panel (📋 tool). */
+  /** The placed-prop pick list is open in the Props panel (📋 tool). */
   propListOpen: boolean
   onMode: (m: PlanMode) => void
   onRotate: () => void
@@ -114,7 +124,8 @@ interface PlanToolbarProps {
 }
 
 export function PlanToolbar({
-  mode, hasSelection, selectionRotation, hasOutline, hasBoundary,
+  mode, panel, onPanel, findingCount, onSelectTool,
+  hasSelection, selectionRotation, hasOutline, hasBoundary,
   outlineDraftLen, hasElevator, stairCount, editLevel, building, canHullDoor,
   canSuggest,
   canFitToModel, canCurve, ground, groundHint, noSelectionHint, onFitToModel,
@@ -141,6 +152,12 @@ export function PlanToolbar({
 
   return (
     <div className="ga-plan-toolbar">
+      <Tool
+        icon="↖"
+        current={panel === 'select'}
+        onClick={onSelectTool}
+        title={t('Select — click shapes on the plan; no tool armed.')}
+      />
       {building ? (
         <>
           <span className="ga-plan-toolbar-group">{t('Plot')}</span>
@@ -151,6 +168,7 @@ export function PlanToolbar({
           <Tool
             icon="🟩"
             active={mode === 'boundary'}
+            current={panel === 'plot'}
             disabled={!hasBoundary}
             onClick={() => onMode('boundary')}
             title={hasBoundary
@@ -158,6 +176,12 @@ export function PlanToolbar({
               : t('No boundary drawn yet — use “Draw boundary” in the banner above the plan to lay down a first square, then reshape it here.')}
           />
           <span className="ga-plan-toolbar-group">{t('Build')}</span>
+          <Tool
+            icon="▤"
+            current={panel === 'storey'}
+            onClick={() => onPanel('storey')}
+            title={t('Storey settings — floor and wall textures, the footprint of this storey, contour doors.')}
+          />
           {outlining ? (
             <>
               <Tool
@@ -173,6 +197,7 @@ export function PlanToolbar({
           ) : (
             <Tool
               icon="🏗"
+              current={panel === 'storey'}
               onClick={() => onMode('outline')}
               title={editLevel === 0
                 ? t('Draw the building outline as a polygon in local metres — the 3D client renders floor plates and walls from it. Storeys above inherit it unless they draw their own.')
@@ -193,6 +218,7 @@ export function PlanToolbar({
           <Tool
             icon="🛗"
             active={mode === 'elevator'}
+            current={panel === 'elevator'}
             onClick={() => onMode('elevator')}
             title={t('Place the elevator with one click — it serves ALL levels (the client builds the shaft).')}
           />
@@ -203,10 +229,11 @@ export function PlanToolbar({
           {/* A staircase is placed per STOREY JUMP, unlike the elevator: the
               click drops a flight that starts on the level being edited and
               arrives one storey up. Turning and removing happen on the
-              selected flight, in the row below the plan. */}
+              selected flight, in the Stairs panel. */}
           <Tool
             icon="🪜"
             active={mode === 'stairs'}
+            current={panel === 'stairs'}
             onClick={() => onMode('stairs')}
             title={t('Place a staircase with one click — it starts at the level you are editing and leads ONE storey up (a climb over two storeys needs two flights). Click the symbol on the plan to turn or remove it. Now: level {level} → {up}, {n} of {max} flights placed.')
               .replace('{level}', String(editLevel))
@@ -217,15 +244,17 @@ export function PlanToolbar({
           <Tool
             icon="⇥"
             active={mode === 'boundary-door'}
+            current={panel === 'plot'}
             onClick={() => onMode('boundary-door')}
-            title={t('Entry/exit at the location edge — click near a boundary edge; a road crossing the cell gets one on each side. Edit edge, width and linked room below the plan.')}
+            title={t('Entry/exit at the location edge — click near a boundary edge; a road crossing the cell gets one on each side. Edit edge, width and linked room in the Plot panel.')}
           />
           {canHullDoor ? (
             <Tool
               icon="🏠"
               active={mode === 'hull-door'}
+              current={panel === 'storey'}
               onClick={() => onMode('hull-door')}
-              title={t('Front door ON THE BUILDING CONTOUR — for a storey whose hallway is its front: the corridor has no walls of its own, so the door is cut into the shell. Click near a contour edge; size, hinge and door prop are edited in the Storey tab.')}
+              title={t('Front door ON THE BUILDING CONTOUR — for a storey whose hallway is its front: the corridor has no walls of its own, so the door is cut into the shell. Click near a contour edge; size, hinge and door prop are edited in the Storey panel.')}
             />
           ) : null}
         </>
@@ -247,6 +276,7 @@ export function PlanToolbar({
       ) : (
         <Tool
           icon="⬠"
+          current={panel === 'room'}
           disabled={!shape}
           onClick={() => onMode('draw-room')}
           title={shapeHint(t('Redraw the room hull as a polygon — replaces the shape; openings are cleared, markers stay.'))}
@@ -275,6 +305,7 @@ export function PlanToolbar({
       <Tool
         icon="🚪"
         active={mode === 'door'}
+        current={panel === 'openings'}
         disabled={!shape}
         onClick={() => onMode('door')}
         title={shapeHint(t('Door — then click a room edge; on a shared wall it opens BOTH rooms. Drag it along the edge, edit it below.'))}
@@ -282,6 +313,7 @@ export function PlanToolbar({
       <Tool
         icon="🪟"
         active={mode === 'window'}
+        current={panel === 'openings'}
         disabled={!shape}
         onClick={() => onMode('window')}
         title={shapeHint(t('Window — then click a room edge (sill 0.9 m, edit below). Exterior walls open to the outside.'))}
@@ -293,8 +325,19 @@ export function PlanToolbar({
         title={t('Doors on shared walls, an entrance for otherwise closed rooms, windows on exterior walls ≥ 2.5 m — never overwrites existing openings.')}
       />
       <Tool
+        icon="🎯"
+        active={mode === 'marker' || mode === 'marker-move'}
+        current={panel === 'markers'}
+        disabled={!hasSelection}
+        onClick={() => onMode('marker')}
+        title={hasSelection
+          ? t('Place a marker — then click inside the room; a character taking a pose of this place type is seated on it.')
+          : noSelectionHint}
+      />
+      <Tool
         icon="🪑"
-        active={propsOpen}
+        active={panel === 'props' && propsOpen}
+        current={panel === 'props'}
         onClick={onProps}
         title={t('Show the prop library in the panel next to the plan.')}
       />
@@ -303,7 +346,8 @@ export function PlanToolbar({
           has placements even though it has no geometry (§ A13a). */}
       <Tool
         icon="📋"
-        active={propListOpen}
+        active={panel === 'props' && propListOpen}
+        current={panel === 'props'}
         disabled={!hasSelection}
         onClick={onPropList}
         title={hasSelection
@@ -319,6 +363,15 @@ export function PlanToolbar({
         disabled={!shape}
         onClick={onUnplace}
         title={shapeHint(t('Remove from the floor plan — the 3D client auto-grids this room again.'))}
+      />
+
+      <span className="ga-plan-toolbar-group">{t('Check')}</span>
+      <Tool
+        icon="⚠"
+        current={panel === 'findings'}
+        badge={findingCount}
+        onClick={() => onPanel('findings')}
+        title={t('Findings — legend, warnings and server findings for this floor plan.')}
       />
     </div>
   )

@@ -2087,6 +2087,10 @@ select.ga-input optgroup {
   text-align: center;
 }
 
+.ga-plan-toolbar .ga-btn.ga-plan-tool-current {
+  box-shadow: inset 0 0 0 2px var(--accent, #58a6ff);
+}
+
 .ga-plan-toolbar-group {
   font-size: 9px;
   text-transform: uppercase;
@@ -2211,9 +2215,8 @@ select.ga-input optgroup {
   .ga-plan-split-side { width: auto !important; margin-top: 12px; }
 }
 
-/* Inspector dock right of the plan: three tabs, one visible at a time, so a
-   selection, the storey settings and the findings no longer stack below the
-   canvas and eat its height. */
+/* Inspector dock right of the plan: single dynamic pane following the active
+   tool in the toolbar, with a header naming that tool and a fold button. */
 .ga-plan-inspector {
   flex: 0 0 auto;
   width: 300px;
@@ -2227,19 +2230,12 @@ select.ga-input optgroup {
   width: 30px;
 }
 
-.ga-plan-inspector-tabs {
+.ga-plan-inspector-head {
   display: flex;
-  gap: 2px;
-}
-
-.ga-plan-inspector-tabs .ga-btn {
-  flex: 1 1 0;
-  min-width: 0;
-  padding: 3px 2px;
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid var(--border, #30363d);
+  padding-bottom: 4px;
 }
 
 .ga-plan-inspector-body {

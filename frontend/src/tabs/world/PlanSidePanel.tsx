@@ -1,10 +1,10 @@
 /**
- * PlanSidePanel — the context column right of the floor plan. Everything that
- * belongs to the SELECTED shape and is not a click tool lives here: room info
- * (name, rotation, always-visible), how the room's FLOOR meets the ground
- * around it, the place-type vocabulary + the marker list, and the room
- * shell's surface kinds. The 🪑 tool opens the prop palette below them. Purely
- * presentational — RoomLayoutEditor owns the state and hands in the callbacks.
+ * PlanSidePanel — the Room panel inside the inspector dock. Everything that
+ * belongs to the SELECTED room shell and is not a click tool lives here: room
+ * info (name, rotation, always-visible), how the room's FLOOR meets the ground
+ * around it, walls, room height, and the room shell's surface kinds. Markers,
+ * props and Furnish live in their own panels. Purely presentational —
+ * RoomLayoutEditor owns the state and hands in the callbacks.
  *
  * WATER IS NOT EDITED HERE ANY MORE (W1, 2026-08-21). The three per-room dials
  * (level, depth, shore ramp) drove a second, weaker water with its own bake
@@ -18,18 +18,12 @@
  *
  * The YARD (§ A13a) is a shape here too, and the difference is what it does
  * NOT have: no shell block, no surfaces — it is the location surface, not a
- * built room. Furnish, markers and the palette work on it like anywhere else.
+ * built room. Furnish, markers and the palette work on it in their own panels.
  */
 import { useI18n } from '../../i18n/I18nProvider'
 import { SliderInput } from '../../components/SliderInput'
-import { PlanPropList } from './PlanPropList'
-import { PropsPalette } from './PropsPalette'
 import { SurfaceKindSelect } from './SurfaceKindSelect'
-import type { PropFull } from '../props/propTypes'
-import type { PropDims } from './PlanCanvas'
 import type { MapWaterRef, Room, RoomLayout, SurfaceKind } from './worldTypes'
-import { groupKeys, groupLabel } from './placeTypes'
-import type { PoseGroupSpec } from './placeTypes'
 
 /** Widest transition a floor may be given, in metres — the server window of
  *  `layout.edge_blend_m` (`terrain_layers.sanitize_edge_blend`). */
@@ -54,18 +48,6 @@ interface PlanSidePanelProps {
    *  author's own name or the ONE shared default. Never a second word for
    *  the same room. */
   groundName: string
-  /** The pose catalog's PLACE TYPES (`GET /poses` → `groups`) — the 🎯
-   *  tool drops a marker of `markerGroup`; the select shows the label and
-   *  stores the key. */
-  groups: Record<string, PoseGroupSpec>
-  markerGroup: string
-  onMarkerGroup: (group: string) => void
-  markerSel: number | null
-  onSelectMarker: (index: number | null) => void
-  /** The 🎯 place tool — armed state + toggle (it lives HERE, next to the
-   *  marker list it feeds, not in the left toolbar). */
-  markerMode: boolean
-  onArmMarker: () => void
   onAlwaysVisible: (value: boolean) => void
   /** The room's own turn in degrees (contract v6 addendum): it turns the
    *  WHOLE room about its rect centre. The toolbar's ↻ steps 90°, this is
@@ -95,63 +77,28 @@ interface PlanSidePanelProps {
    *  payload (`floor_plan[].map_water`), or null. Read-only: it names the
    *  area, it does not edit it. */
   mapWater: MapWaterRef | null
-  /** "✨ Furnish" (plan-room-furnish.md): opens the job dialog. The state
-   *  string ('' = no job) is shown as a badge so a running job is visible
-   *  without opening it. */
-  furnishState: string
-  furnishDisabled: boolean
-  furnishHint: string
-  onFurnish: () => void
-  /** Prop palette open (🪑 tool) — independent of the room selection. */
-  propsOpen: boolean
-  onPickProp: (prop: PropFull) => void
-  armedPropId: string
-  /** Variant the NEXT placement gets — the palette dials it, the editor
-   *  writes it into the placement it mints. */
-  armedVariant?: number
-  onArmedVariant: (value: number | undefined) => void
-  /** Pick list of the PLACED props (📋 tool): open flag, library names for
-   *  the rows, the selected placement index, and the two ways out — a pick
-   *  (the editor selects it and closes the list) or the ✕. */
-  propListOpen: boolean
-  propDims: Record<string, PropDims>
-  propSel: number | null
-  onPickPlacement: (index: number) => void
-  onClosePropList: () => void
-}
-
-/** Job state → the badge next to the Furnish button. */
-const FURNISH_BADGE: Record<string, string> = {
-  selecting: '…',
-  proposal_ready: '!',
-  generating: '⚙',
-  placing: '⚙',
-  review_ready: '✓',
-  error: '⚠',
 }
 
 export function PlanSidePanel({
   room, ground, groundName,
-  groups, markerGroup, onMarkerGroup, markerSel, onSelectMarker,
-  markerMode, onArmMarker, onAlwaysVisible, onRotation, onLayout, onNoWalls,
-  onFloorOffset,
+  onAlwaysVisible, onRotation, onLayout, onNoWalls, onFloorOffset,
   surfaceKinds, waterKinds, onSurface, mapWater,
-  furnishState, furnishDisabled, furnishHint, onFurnish,
-  propsOpen, onPickProp, armedPropId, armedVariant, onArmedVariant,
-  propListOpen, propDims, propSel, onPickPlacement, onClosePropList,
 }: PlanSidePanelProps) {
   const { t } = useI18n()
   const layout = room?.layout
-  const markers = layout?.markers || []
 
-  // Room-specific blocks — the palette below them is independent of the
-  // selection (the 🪑 tool may be open with nothing selected).
-  const roomBlock = !room || (!layout && !ground) ? (
-    <span className="ga-hint">
-      {t('Select a room on the plan — the tools work on it.')}
-    </span>
-  ) : (
-    <>
+  if (!room || (!layout && !ground)) {
+    return (
+      <div className="ga-plan-panel">
+        <span className="ga-hint">
+          {t('Select a room on the plan — the tools work on it.')}
+        </span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="ga-plan-panel">
       <div className="ga-plan-panel-title">{ground ? groundName : (room.name || room.id)}</div>
       {ground ? (
         <span className="ga-hint">
@@ -180,201 +127,121 @@ export function PlanSidePanel({
           built thing, it is the ground the built things stand on, and its
           surface comes from the location's terrain instead. */}
       {!ground && layout ? (
-      <>
-      <label className="ga-check-row" style={{ fontSize: '0.82em' }}
-        title={t('Marks an OUTDOOR room (terrace, garden, pool): shown permanently in the 3D client independent of the interior view, and it gets NO shell walls — only its floor plate.')}>
-        <input
-          type="checkbox"
-          checked={!!layout.always_visible}
-          onChange={(e) => onAlwaysVisible(e.target.checked)}
-        />
-        <span>{t('Outdoor room (always visible)')}</span>
-      </label>
-
-      {/* THE FLOOR AS A LAYER OF THE GROUND ("Ein Boden" E5a, § G3). A
-          level-0 room floor is no longer a plate laid over the terrain — it
-          is the topmost layer OF the terrain, and these dials say how it
-          meets the layers under it. The relief opt-out that used to stand
-          here is gone with the scene's own height field: there is nothing
-          left for a room to stay level against.
-
-          Only offered on storey 0: an upper floor or a basement still gets a
-          plate, and a plate has no transition to anything. */}
-      {(layout.level || 0) === 0 ? (
-        <SliderInput
-          label={t('Edge transition (m)')}
-          title={t('How far this floor fades into the ground around it. 0 draws a clean edge — parquet stops where the room stops. Turn it up and the floor washes out over that many metres, the way a sandy path runs into grass. Behind it: the floor is the topmost layer of the terrain, and this is the width the layer under it takes over in.')}
-          value={layout.edge_blend_m ?? 0}
-          min={0} max={EDGE_BLEND_MAX_M} step={0.1} fineStep="any"
-          sliderWidth={72} inputWidth={62}
-          style={{ display: 'flex' }} sliderStyle={{ flex: 1 }}
-          // 0 IS A VALUE — it is the default and the hard cut, and it has to
-          // reach the server as 0 rather than as a missing field.
-          onChange={(v) => onLayout({ edge_blend_m: v })}
-        />
-      ) : null}
-
-      {/* THE ROOM STANDS ON PAINTED WATER (W1 § 6) — a READ-ONLY reference,
-          not a dial. The room owns no mirror, no depth and no bed; it merely
-          lies on an area that does, and the line says which one so the author
-          knows where to go and edit it. Derived at compose time by containment
-          and never stored, so it cannot outlive the lake. */}
-      {mapWater ? (
-        <span className="ga-hint">
-          {t('Map ground: water — area {area} ({kind}). This room lies on painted water: the mirror, the depth, the shore ramp and the flow belong to that area on the map, not to the room. The room keeps its own walls, props and markers.')
-            .replace('{area}', mapWater.area_id)
-            .replace('{kind}', mapWater.kind)}
-        </span>
-      ) : null}
-
-      {/* Walls opt-out: open zones, pavilions, areas inside an area model.
-          The UI is positive ("render walls"), the stored field is negative —
-          so the default (no field) means walls. It describes the room SHELL,
-          which is why it stands here and not in the model strip: a wall-less
-          zone usually has no diorama at all, and there it stayed invisible
-          (E5 inventory 1a). Outdoor rooms are asked too — an open zone with
-          window openings in the plan should still be able to render
-          wall-less. */}
-      <label className="ga-check-row" style={{ fontSize: '0.82em' }}
-        title={t('Off: this room gets no walls at all — no segments, no window sill or head, no glass. Its floor and openings stay (the plan keeps drawing them), and the building outline is unaffected.')}>
-        <input
-          type="checkbox"
-          checked={!layout.no_walls}
-          onChange={(e) => onNoWalls(!e.target.checked)}
-        />
-        <span>{t('Render walls')}</span>
-      </label>
-
-      {/* Where the ROOM sits, as opposed to a model inside it. It belongs to
-          the room, not to a diorama — it used to live in the model-placement
-          strip and was therefore invisible until a room HAD a model, which is
-          exactly backwards for an outdoor zone laid onto a location model. */}
-      <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-        title={t('Fine trim of the ROOM in real metres, relative to its storey. Everything in the room moves with it: walls, props, markers, exit and any model. Leave it at 0 unless a room really needs to sit above or below the ground — it does not set a water level, that is the water field below.')}>
-        <span style={{ flex: 1 }}>{t('Room height (m)')}</span>
-        <input
-          className="ga-input"
-          type="number"
-          step={0.05}
-          style={{ width: 78 }}
-          value={layout.floor_offset_y ?? 0}
-          onChange={(e) => {
-            const v = Number(e.target.value)
-            onFloorOffset(Number.isFinite(v) && v !== 0 ? v : undefined)
-          }}
-        />
-      </label>
-      </>
-      ) : null}
-
-      <button
-        type="button"
-        className={`ga-btn ga-btn-sm${furnishState ? ' ga-btn-primary' : ''}`}
-        disabled={furnishDisabled}
-        onClick={onFurnish}
-        title={furnishHint}
-      >
-        ✨ {t('Furnish')}
-        {furnishState ? ` ${FURNISH_BADGE[furnishState] || ''}` : ''}
-      </button>
-
-      {!ground && layout ? (
-      <>
-      <div className="ga-plan-panel-title"
-        title={t('Surface-texture kinds for this room shell — the client skins floor and walls with them. Default = the global kind / the client fallback.')}>
-        {t('Surfaces')}
-      </div>
-      {surfaceKinds.length || layout.surfaces ? SURFACE_SLOTS.map(({ key, label }) => {
-        // A FLOOR MAY NOT BE WATER (W1 § 6). The server strips such a pick at
-        // the one write path, so offering it would mean watching a selection
-        // vanish on the next save with nothing said. Only the FLOOR is
-        // filtered — a wall may wear a wet-looking texture all it likes; what
-        // is forbidden is a room claiming to BE water.
-        const options = key === 'floor'
-          ? surfaceKinds.filter((s) => !waterKinds.has(s.kind))
-          : surfaceKinds
-        return (
-          <SurfaceKindSelect
-            key={key}
-            label={label}
-            labelWidth={32}
-            value={layout.surfaces?.[key] || ''}
-            kinds={options}
-            emptyLabel="— default —"
-            onChange={(kind) => onSurface(key, kind)}
-          />
-        )
-      }) : (
-        <span className="ga-hint">
-          {t('No surface textures yet — the Surface textures tab creates them.')}
-        </span>
-      )}
-      </>
-      ) : null}
-
-      {groupKeys(groups).length ? (
         <>
-          <div className="ga-plan-panel-title">{t('Markers')}</div>
-          <div style={{ display: 'flex', gap: 4 }}>
-            <select
-              className="ga-input"
-              style={{ flex: 1, minWidth: 0 }}
-              value={markerGroup}
-              onChange={(e) => onMarkerGroup(e.target.value)}
-              title={t('Place type the 🎯 tool drops — a group of the pose catalog; the server seats characters on it.')}
-            >
-              {groupKeys(groups).map((k) => (
-                <option key={k} value={k}>{groupLabel(groups, k)}</option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className={`ga-btn ga-btn-sm${markerMode ? ' ga-btn-primary' : ''}`}
-              onClick={onArmMarker}
-              title={t('Place a marker — then click inside the room; a character taking a pose of this place type is seated on it.')}
-            >
-              🎯
-            </button>
-          </div>
-        </>
-      ) : null}
-      {markers.map((m, i) => (
-        <button
-          key={m.id || `${m.group}-${i}`}
-          type="button"
-          className={`ga-btn ga-btn-sm${markerSel === i ? ' ga-btn-primary' : ''}`}
-          style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-          onClick={() => onSelectMarker(markerSel === i ? null : i)}
-          title={t('Select this marker to adjust capacity, facing, height or the preview pose, or to remove it.')}
-        >
-          🎯 {i + 1} · {groupLabel(groups, m.group)}{(m.capacity || 1) > 1 ? ` ×${m.capacity}` : ''}
-        </button>
-      ))}
-    </>
-  )
+          <label className="ga-check-row" style={{ fontSize: '0.82em' }}
+            title={t('Marks an OUTDOOR room (terrace, garden, pool): shown permanently in the 3D client independent of the interior view, and it gets NO shell walls — only its floor plate.')}>
+            <input
+              type="checkbox"
+              checked={!!layout.always_visible}
+              onChange={(e) => onAlwaysVisible(e.target.checked)}
+            />
+            <span>{t('Outdoor room (always visible)')}</span>
+          </label>
 
-  return (
-    <div className="ga-plan-panel">
-      {/* The pick list stands FIRST: it is a transient picker the 📋 tool
-          opened on purpose, and it closes itself with the pick. */}
-      {propListOpen && room ? (
-        <PlanPropList
-          roomName={ground ? groundName : (room.name || room.id || '')}
-          placements={layout?.props || []}
-          dims={propDims}
-          selected={propSel}
-          onPick={onPickPlacement}
-          onClose={onClosePropList}
-        />
-      ) : null}
-      {roomBlock}
-      {propsOpen ? (
-        <PropsPalette
-          onPick={onPickProp}
-          armedPropId={armedPropId}
-          armedVariant={armedVariant}
-          onArmedVariant={onArmedVariant}
-        />
+          {/* THE FLOOR AS A LAYER OF THE GROUND ("Ein Boden" E5a, § G3). A
+              level-0 room floor is no longer a plate laid over the terrain — it
+              is the topmost layer OF the terrain, and these dials say how it
+              meets the layers under it. The relief opt-out that used to stand
+              here is gone with the scene's own height field: there is nothing
+              left for a room to stay level against.
+
+              Only offered on storey 0: an upper floor or a basement still gets a
+              plate, and a plate has no transition to anything. */}
+          {(layout.level || 0) === 0 ? (
+            <SliderInput
+              label={t('Edge transition (m)')}
+              title={t('How far this floor fades into the ground around it. 0 draws a clean edge — parquet stops where the room stops. Turn it up and the floor washes out over that many metres, the way a sandy path runs into grass. Behind it: the floor is the topmost layer of the terrain, and this is the width the layer under it takes over in.')}
+              value={layout.edge_blend_m ?? 0}
+              min={0} max={EDGE_BLEND_MAX_M} step={0.1} fineStep="any"
+              sliderWidth={72} inputWidth={62}
+              style={{ display: 'flex' }} sliderStyle={{ flex: 1 }}
+              // 0 IS A VALUE — it is the default and the hard cut, and it has to
+              // reach the server as 0 rather than as a missing field.
+              onChange={(v) => onLayout({ edge_blend_m: v })}
+            />
+          ) : null}
+
+          {/* THE ROOM STANDS ON PAINTED WATER (W1 § 6) — a READ-ONLY reference,
+              not a dial. The room owns no mirror, no depth and no bed; it merely
+              lies on an area that does, and the line says which one so the author
+              knows where to go and edit it. Derived at compose time by containment
+              and never stored, so it cannot outlive the lake. */}
+          {mapWater ? (
+            <span className="ga-hint">
+              {t('Map ground: water — area {area} ({kind}). This room lies on painted water: the mirror, the depth, the shore ramp and the flow belong to that area on the map, not to the room. The room keeps its own walls, props and markers.')
+                .replace('{area}', mapWater.area_id)
+                .replace('{kind}', mapWater.kind)}
+            </span>
+          ) : null}
+
+          {/* Walls opt-out: open zones, pavilions, areas inside an area model.
+              The UI is positive ("render walls"), the stored field is negative —
+              so the default (no field) means walls. It describes the room SHELL,
+              which is why it stands here and not in the model strip: a wall-less
+              zone usually has no diorama at all, and there it stayed invisible
+              (E5 inventory 1a). Outdoor rooms are asked too — an open zone with
+              window openings in the plan should still be able to render
+              wall-less. */}
+          <label className="ga-check-row" style={{ fontSize: '0.82em' }}
+            title={t('Off: this room gets no walls at all — no segments, no window sill or head, no glass. Its floor and openings stay (the plan keeps drawing them), and the building outline is unaffected.')}>
+            <input
+              type="checkbox"
+              checked={!layout.no_walls}
+              onChange={(e) => onNoWalls(!e.target.checked)}
+            />
+            <span>{t('Render walls')}</span>
+          </label>
+
+          {/* Where the ROOM sits, as opposed to a model inside it. It belongs to
+              the room, not to a diorama — it used to live in the model-placement
+              strip and was therefore invisible until a room HAD a model, which is
+              exactly backwards for an outdoor zone laid onto a location model. */}
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+            title={t('Fine trim of the ROOM in real metres, relative to its storey. Everything in the room moves with it: walls, props, markers, exit and any model. Leave it at 0 unless a room really needs to sit above or below the ground — it does not set a water level, that is the water field below.')}>
+            <span style={{ flex: 1 }}>{t('Room height (m)')}</span>
+            <input
+              className="ga-input"
+              type="number"
+              step={0.05}
+              style={{ width: 78 }}
+              value={layout.floor_offset_y ?? 0}
+              onChange={(e) => {
+                const v = Number(e.target.value)
+                onFloorOffset(Number.isFinite(v) && v !== 0 ? v : undefined)
+              }}
+            />
+          </label>
+
+          <div className="ga-plan-panel-title"
+            title={t('Surface-texture kinds for this room shell — the client skins floor and walls with them. Default = the global kind / the client fallback.')}>
+            {t('Surfaces')}
+          </div>
+          {surfaceKinds.length || layout.surfaces ? SURFACE_SLOTS.map(({ key, label }) => {
+            // A FLOOR MAY NOT BE WATER (W1 § 6). The server strips such a pick at
+            // the one write path, so offering it would mean watching a selection
+            // vanish on the next save with nothing said. Only the FLOOR is
+            // filtered — a wall may wear a wet-looking texture all it likes; what
+            // is forbidden is a room claiming to BE water.
+            const options = key === 'floor'
+              ? surfaceKinds.filter((s) => !waterKinds.has(s.kind))
+              : surfaceKinds
+            return (
+              <SurfaceKindSelect
+                key={key}
+                label={label}
+                labelWidth={32}
+                value={layout.surfaces?.[key] || ''}
+                kinds={options}
+                emptyLabel="— default —"
+                onChange={(kind) => onSurface(key, kind)}
+              />
+            )
+          }) : (
+            <span className="ga-hint">
+              {t('No surface textures yet — the Surface textures tab creates them.')}
+            </span>
+          )}
+        </>
       ) : null}
     </div>
   )

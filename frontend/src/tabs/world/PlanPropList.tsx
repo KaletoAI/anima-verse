@@ -1,6 +1,6 @@
 /**
  * PlanPropList — the props PLACED in the selected shape, as a pick list in
- * the side panel (📋 tool). It exists because a placed prop is otherwise only
+ * the Props panel (📋 tool). It exists because a placed prop is otherwise only
  * reachable by clicking its footprint on the plan, and a small piece under a
  * bigger one, or one whose footprint hides in a crowded corner, takes several
  * cycling clicks to land on (user request 2026-09-12). Purely presentational:
@@ -60,7 +60,7 @@ export function PlanPropList({
             style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                      textAlign: 'left' }}
             onClick={() => onPick(i)}
-            title={t('Select this prop — its strip opens below the plan.')}
+            title={t('Select this prop — its settings open in this panel.')}
           >
             {i + 1} · {nameOf(p)}
             {support ? ` ↳ ${nameOf(support)}` : ''}

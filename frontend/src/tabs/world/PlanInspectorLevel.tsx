@@ -1,15 +1,13 @@
 /**
  * PlanInspectorLevel — everything that belongs to the STOREY the editor is
- * standing on, plus the two settings that belong to the whole plan and had
- * nowhere better to live.
+ * standing on (rendered inside the inspector's Storey panel).
  *
  * WHAT MOVED HERE AND WHY. The floor and wall texture pickers used to sit in
  * the header row between the level buttons and the zoom, each behind a brown
  * or a brick emoji — two selects competing with the level switch for a line
- * that is supposed to say WHERE one is. The default door prop stood one row
- * higher still, alone, at the full width of the page, above a plan that had
- * none to spare. Both are settings OF this floor plan, so they belong in the
- * inspector, and the storey is where the floor and the walls are decided.
+ * that is supposed to say WHERE one is. Both are settings OF this storey, so
+ * they belong in the inspector's Storey panel. (The location's default door
+ * prop and window style live in the Doors & windows panel.)
  *
  * THE FOOTPRINT PER STOREY (§ G) lives here for the same reason: "how wide is
  * the building on this floor" is a fact about the storey. The three buttons
@@ -17,9 +15,7 @@
  * drop it and inherit again — because a storey has exactly two states, its own
  * shape or somebody else's, and the middle button is the bridge between them.
  */
-import { LocationWindowDefault } from './WindowStylePicker'
 import { useI18n } from '../../i18n/I18nProvider'
-import { LocationDoorDefault } from './DoorPropPicker'
 import { PlanHullOpeningStrip } from './PlanHullOpeningStrip'
 import { SurfaceKindSelect } from './SurfaceKindSelect'
 import { HULL_OPENING_MAX, outlineSourceLevel } from './planGeometry'
@@ -28,15 +24,11 @@ import type { HullOpening, Map3D, SurfaceKind } from './worldTypes'
 interface Props {
   level: number
   map3d?: Map3D
-  /** Absent = this editor may not write map3d; then only the door default is
-   *  offered, which lives on the location and not in the 3D block. */
+  /** Absent = this editor may not write map3d. */
   onMap3d?: (key: keyof Map3D, value: unknown) => void
   surfaceKinds: SurfaceKind[]
-  defaultWindowStyle?: string
   defaultDoorStyle?: string
   defaultDoorPropId: string
-  onDefaultWindowStyle?: (id: string) => void
-  onDefaultDoorProp?: (id: string, style: string) => void
   /** The footprint tool is armed FOR THIS STOREY right now. */
   drawingOutline: boolean
   /** There IS an inherited shape to copy — without one the fork button would
@@ -63,7 +55,7 @@ interface Props {
 }
 
 export function PlanInspectorLevel({
-  level, map3d, onMap3d, surfaceKinds, defaultDoorPropId, defaultDoorStyle, onDefaultDoorProp, defaultWindowStyle, onDefaultWindowStyle,
+  level, map3d, onMap3d, surfaceKinds, defaultDoorPropId, defaultDoorStyle,
   drawingOutline, canForkOutline, onDrawOutline, onForkOutline, onDropOutline,
   levelOutline, drawingHull, onDrawHull, hullSel, onSelectHull,
 }: Props) {
@@ -307,16 +299,6 @@ export function PlanInspectorLevel({
             </label>
           ) : null}
         </>
-      ) : null}
-
-      {onDefaultWindowStyle ? <LocationWindowDefault styleId={defaultWindowStyle || ''}
-        onChange={onDefaultWindowStyle} /> : null}
-
-      {/* THE PLACE'S OWN DOOR — the fallback every door opening on this plan
-          inherits, and the first option the opening panel offers. */}
-      {onDefaultDoorProp ? (
-        <LocationDoorDefault propId={defaultDoorPropId} styleId={defaultDoorStyle || ''}
-          onChange={onDefaultDoorProp} />
       ) : null}
     </div>
   )

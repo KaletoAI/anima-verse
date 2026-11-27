@@ -76,9 +76,16 @@ import {
 import { FurnishDialog, useFurnishJob } from './FurnishDialog'
 import { NEED_ID_PREFIX } from './furnishTypes'
 import { BuildingAssistantPanel } from './BuildingAssistantPanel'
-import { PlanInspector, type InspectorTab } from './PlanInspector'
+import { PlanInspector } from './PlanInspector'
+import { panelForMode, type PlanPanel } from './planTools'
 import { PlanInspectorLevel } from './PlanInspectorLevel'
 import { PlanFindings } from './PlanFindings'
+import { PlanPassThroughs } from './PlanPassThroughs'
+import { PlanMarkerList } from './PlanMarkerList'
+import { PlanPropList } from './PlanPropList'
+import { PropsPalette } from './PropsPalette'
+import { LocationDoorDefault } from './DoorPropPicker'
+import { LocationWindowDefault } from './WindowStylePicker'
 import { PlanElevatorStrip } from './PlanElevatorStrip'
 import { PlanRoomPicker } from './PlanRoomPicker'
 import { PlanStairStrip } from './PlanStairStrip'
@@ -177,9 +184,9 @@ interface RoomLayoutEditorProps {
    *  not exist for them. */
   unsaved?: boolean
   /** The location's `default_door_prop_id`. The opening panel names the door
-   *  an opening inherits when it chooses nothing, and the inspector's Storey
-   *  tab edits it — it is a setting OF this plan, and it used to stand as a
-   *  lone full-width row above the whole editor. */
+   *  an opening inherits when it chooses nothing, and the inspector's Doors &
+   *  windows panel edits it — it is a setting OF this plan, and it used to
+   *  stand as a lone full-width row above the whole editor. */
   defaultWindowStyle?: string
   defaultDoorStyle?: string
   defaultDoorPropId?: string
@@ -243,6 +250,24 @@ function hullsOf(list: Room[], level: number, skipId = ''): PolyRoom[] {
 
 const NO_PREVIEW_POSES: Record<string, string> = {}
 
+/** Vertical hairline separator inside the top toolbar. */
+function Sep() {
+  return (
+    <span aria-hidden style={{ width: 1, alignSelf: 'stretch',
+      background: 'var(--border, #30363d)', margin: '0 2px' }} />
+  )
+}
+
+/** Job state → the badge next to the Furnish button. */
+const FURNISH_BADGE: Record<string, string> = {
+  selecting: '…',
+  proposal_ready: '!',
+  generating: '⚙',
+  placing: '⚙',
+  review_ready: '✓',
+  error: '⚠',
+}
+
 export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', map3d, onMap3d, placedOnMap = true, fenced, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, previewPose = NO_PREVIEW_POSES, onPreviewPose, unsaved = false, defaultDoorPropId = '', defaultDoorStyle = '', onDefaultDoorProp, defaultWindowStyle = '', onDefaultWindowStyle, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -283,9 +308,8 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
   const [outlineLevel, setOutlineLevel] = useState(0)
   const outlineLevelRef = useRef(outlineLevel)
   outlineLevelRef.current = outlineLevel
-  // Which pane the inspector dock shows, and whether it is folded away. VIEW
-  // state, so it is remembered per browser and never travels with the world.
-  const [inspTab, setInspTab] = useState<InspectorTab>('selection')
+  // Which tool panel the inspector dock shows, and whether it is folded away.
+  const [panel, setPanel] = useState<PlanPanel>('select')
   const [inspCollapsed, setInspCollapsed] = useState(() => {
     try {
       return window.localStorage.getItem('av.floorplan.inspectorOff') === '1'
@@ -314,7 +338,7 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
   // placement logic is not part of this editor yet. The armed prop is just
   // the highlighted palette card; nothing on the plan reads it so far.
   const [propsOpen, setPropsOpen] = useState(false)
-  // Pick list of the PLACED props in the side panel (📋 tool) — a way to
+  // Pick list of the PLACED props in the Props panel (📋 tool) — a way to
   // select a placement by name instead of by hitting its footprint. It
   // closes itself with the pick.
   const [propListOpen, setPropListOpen] = useState(false)
@@ -325,7 +349,7 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
   // a different card is a new statement — so it resets with the pick.
   const [armedVariant, setArmedVariant] = useState<number | undefined>(undefined)
   // Selected placement (index into the selected room's layout.props) for the
-  // adjustment strip below the plan.
+  // adjustment strip in the Props panel.
   const [propSel, setPropSel] = useState<number | null>(null)
   // Ghost while placing: snapped-to-nothing cursor in PLAN fractions + the
   // yaw the R key steps in 90° increments (fine yaw lives in the strip).
@@ -394,7 +418,7 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
   // "Not on the plan" chips (first placement) and the redraw tool.
   const [drawTarget, setDrawTarget] = useState('')
   // Selected opening (index into the selected room's openings) for the
-  // per-opening controls below the plan.
+  // per-opening controls in the Doors & windows panel.
   const [openingSel, setOpeningSel] = useState<number | null>(null)
   // Place type the 🎯 tool drops (a pose-catalog group key, never a clip).
   const [markerGroup, setMarkerGroup] = useState('')
@@ -408,17 +432,17 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
   // Selected marker (index into the selected room's markers) for the
   // per-marker controls: facing, height offset, remove.
   const [markerSel, setMarkerSel] = useState<number | null>(null)
-  // Elevator selected on the plan → the slider row below fine-tunes it.
+  // Elevator selected on the plan → the Elevator panel fine-tunes it.
   const [elevatorSel, setElevatorSel] = useState(false)
   // Selected staircase — the INDEX in map3d.stairs, which is the flight's
   // identity here. The `stair` number a scene payload carries is NOT: it
   // counts the flights the server accepted, so a refused entry shifts it.
   const [stairSel, setStairSel] = useState<number | null>(null)
   // Selected boundary pass-through (index into map3d.boundary_openings) —
-  // highlights its bar on the frame and its edit row below the plan.
+  // highlights its bar on the frame and its edit row in the Plot panel.
   const [selectedBoundary, setSelectedBoundary] = useState<number | null>(null)
   // Selected door on the building contour (index into map3d.hull_openings) —
-  // its glyph on the contour and its strip in the Storey tab. Storey-scoped
+  // its glyph on the contour and its strip in the Storey panel. Storey-scoped
   // like the pass-through is plot-scoped, so picking a room does not clear
   // it; both surfaces that read it check the storey themselves.
   const [hullSel, setHullSel] = useState<number | null>(null)
@@ -426,13 +450,13 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
   // the plan — right where the click happened, and never a window.alert.
   const [hullHint, setHullHint] = useState('')
   /** Pick a door on the contour AND SHOW ITS STRIP: it is edited in the Storey
-   *  tab, so a click on the glyph out on the plan has to open that tab —
+   *  panel, so a click on the glyph out on the plan has to open that panel —
    *  otherwise selecting a door looks like it did nothing (the same move the
    *  status line makes for the findings). */
   const selectHull = useCallback((i: number | null) => {
     setHullSel(i)
     if (i !== null) {
-      setInspTab('level')
+      setPanel('storey')
       setInspCollapsedStored(false)
     }
   }, [setInspCollapsedStored])
@@ -1247,7 +1271,7 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
   // Esc cancels any armed mode and the current draft; R steps the placement
   // ghost's yaw by 90°; Del/Backspace drops the selected furnishing ghost
   // (never while typing in a field). A ghost that CARRIES others asks first —
-  // the confirmation bar below the plan, never a browser dialog.
+  // the confirmation bar in the Props panel, never a browser dialog.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName || ''
@@ -2143,6 +2167,8 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
     setHullHint('')
     if (m === 'outline') setOutlineLevel(level)
     setClickMode(m)
+    const nextPanel = panelForMode(m)
+    if (nextPanel) setPanel(nextPanel)
     planLog('armed', { mode: m, ...(m === 'outline' ? { level } : {}) })
   }, [clickMode, selected, selectedRoom, groundSel, cancelDraw, level])
 
@@ -2172,6 +2198,7 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
     setArmedProp('')
     setPropGhost(null)
     setClickMode('draw-room')
+    setPanel('room')
   }, [setSelected])
 
   // Room shell: pick the surface-texture kind for floor or wall. Empty keys
@@ -2306,74 +2333,514 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
   const figureAt: [number, number] = figurePos
     ?? [view.x0 + view.size * 0.12, view.z0 + view.size * 0.86]
 
-  // A CLICK ON THE PLAN IS A REQUEST TO SEE WHAT WAS CLICKED. Without this
-  // the inspector could sit on the storey settings while the author drags a
-  // prop, and the strip that edits it would be one tab away — the exact
-  // stacking problem the dock was built to remove, only sideways.
+  // A click on the plan switches the inspector to the matching tool panel.
+  // Picking another room/yard stays put while working in props, markers,
+  // openings or room so the author can switch rooms without leaving the tool.
   useEffect(() => {
-    if (selected || propSel !== null || markerSel !== null
-        || openingSel !== null || stairSel !== null || elevatorSel) {
-      setInspTab('selection')
+    if (propSel !== null) { setPanel('props'); return }
+    if (markerSel !== null) { setPanel('markers'); return }
+    if (openingSel !== null) { setPanel('openings'); return }
+    if (stairSel !== null) { setPanel('stairs'); return }
+    if (elevatorSel) { setPanel('elevator'); return }
+    if (selectedBoundary !== null) { setPanel('plot'); return }
+    if (selected) {
+      setPanel((cur) => (
+        cur === 'props' || cur === 'markers' || cur === 'openings' || cur === 'room'
+          ? cur : 'room'
+      ))
     }
-  }, [selected, propSel, markerSel, openingSel, stairSel, elevatorSel])
+  }, [selected, propSel, markerSel, openingSel, stairSel, elevatorSel, selectedBoundary])
 
-  // How much the findings tab is holding, and what the selection tab is about
-  // — the label says WHAT is selected, which is worth more on a tab than the
-  // word "Selection" is.
+  // Disarm any picked prop when leaving the Props panel so a click under
+  // another tool cannot drop a prop that is no longer visible anywhere.
+  useEffect(() => {
+    if (panel !== 'props') {
+      setArmedProp('')
+      setArmedVariant(undefined)
+      setPropGhost(null)
+    }
+  }, [panel])
+
   // WHAT THE BADGE COUNTS: things waiting to be fixed. The server's findings
   // and the leftover rooms — not the pass-throughs (data the author placed)
   // and not the ℹ note about a location without one, which describes a legal
   // state and would paint a red badge on a plan with nothing wrong.
   const findings = (scene?.problems || []).length + tinyRooms.length
-  const selectionLabel = propSel !== null ? t('Prop')
-    : markerSel !== null ? t('Marker')
-      : openingSel !== null ? t('Opening')
-        : stairSel !== null ? t('Stairs')
-          : elevatorSel ? t('Lift')
-            : groundSel ? t('Yard')
-              : selectedRoom ? t('Room')
-                : t('Nothing')
+
+  const selectedTitle = selectedRoom
+    ? (groundSel ? yardName : (selectedRoom.name || selectedRoom.id || ''))
+    : undefined
+  const inspectorSubtitle = panel === 'storey'
+    ? t('Storey {n}').replace('{n}', String(level))
+    : (panel === 'room' || panel === 'openings' || panel === 'props' || panel === 'markers')
+      ? selectedTitle
+      : undefined
+
+  const furnishState = furnish.status?.state || ''
+  // Furnish reads the SAVED world, not the draft (the job runs server-side):
+  // a freshly drawn room that is not saved yet would 409 with "no floor plan"
+  // — the same rule Generate-in-scene already enforces (user finding
+  // 2026-08-20, bedroom level 1).
+  const furnishDisabled = !selectedRoom || unsaved
+  const furnishHint = !selectedRoom
+    ? t('Select a room with a floor plan first.')
+    : unsaved
+      ? t('Save the location first — furnishing works on the saved floor plan.')
+      : groundSel
+        ? t('Let the LLM furnish the yard: it picks library props and a solver places them inside the location boundary, clear of the rooms and the entrances.')
+        : t('Let the LLM furnish this room: it picks library props, proposes the missing pieces and a solver places them.')
+
+  // Pick a room WITHOUT touching the plan (PlanRoomPicker).
+  const roomPicker = (
+    <PlanRoomPicker
+      placed={placedRooms}
+      unplaced={unplaced}
+      hasYard={!!groundRoom}
+      yardPlaced={!!yardLay}
+      yardName={yardName}
+      selected={selected}
+      onSelect={setSelected}
+      onSelectYard={() => { setLevel(0); setSelected(GROUND_ROOM_ID) }}
+      drawTarget={drawTarget}
+      drawing={clickMode === 'draw-room'}
+      onDraw={armDrawFor}
+    />
+  )
+
+  const renderPanel = (): ReactNode => {
+    switch (panel) {
+      case 'select':
+        return (
+          <>
+            <span className="ga-hint">
+              {t('Click a shape on the plan, or pick a room below.')}
+            </span>
+            {roomPicker}
+          </>
+        )
+      case 'room':
+        return (
+          <>
+            <PlanSidePanel
+              room={selectedRoom || null}
+              ground={groundSel}
+              groundName={yardName}
+              onAlwaysVisible={(v) => updateLayout(selectedRoom?.id || '', {
+                always_visible: v || undefined,
+              })}
+              onRotation={setRotation}
+              onLayout={(patch) => updateLayout(selectedRoom?.id || '', patch)}
+              onNoWalls={(v) => updateLayout(selectedRoom?.id || '', {
+                no_walls: v || undefined,
+              })}
+              onFloorOffset={(v) => updateLayout(selectedRoom?.id || '', {
+                floor_offset_y: v,
+              })}
+              surfaceKinds={surfaceKinds}
+              waterKinds={waterKinds}
+              onSurface={setSurface}
+              mapWater={selectedMapWater}
+            />
+            {/* Model calibration strip (rotation fix, room width, walkable floor)
+                — placed BEFORE the model-placement strip so the three calibration
+                anchors read in order: width_m → walk_y → model_offset_y. */}
+            {children}
+            {/* Model-placement strip: X/Y sliders + height for the selected
+                room's diorama model — mirrors the prop strip; ↺ recentres. */}
+            {selectedRoom && !groundSel && hasRect(selectedRoom.layout)
+              && modelDims[selectedRoom.id || ''] ? (
+              <PlanModelPlacement
+                layout={selectedRoom.layout}
+                onPatch={(patch) => updateLayout(selectedRoom.id || '', patch)}
+              />
+            ) : null}
+            {roomPicker}
+          </>
+        )
+      case 'openings':
+        return (
+          <>
+            {selectedRoom && openingSel !== null
+              && selectedRoom.layout?.openings?.[openingSel] ? (
+              <PlanOpeningStrip
+                opening={selectedRoom.layout.openings[openingSel]}
+                index={openingSel}
+                otherRooms={rooms.filter((r) => r.id && r.id !== selectedRoom.id
+                  && !isFloorRoom(r.id))}
+                // A WINDOW leads nowhere: only a door and a passage are routed into
+                // the storey's corridor (§ A13b), so only they may say so.
+                corridorName={selectedRoom.layout.openings[openingSel].type === 'window'
+                  ? '' : corridorOfLevel(selectedRoom.layout?.level || 0)}
+                defaultWindowStyle={defaultWindowStyle}
+                defaultDoorStyle={defaultDoorStyle}
+                defaultDoorPropId={defaultDoorPropId}
+                onPatch={(patch) => {
+                  const list = (selectedRoom.layout?.openings || [])
+                    .map((o, i) => {
+                      if (i !== openingSel) return o
+                      const next = { ...o, ...patch }
+                      if (next.window_style === undefined) delete next.window_style
+                      return next
+                    })
+                    .filter((_, i) => !(patch === null && i === openingSel))
+                  if (patch === null) setOpeningSel(null)
+                  updateLayout(selectedRoom.id || '', { openings: list })
+                }}
+              />
+            ) : (
+              <span className="ga-hint">
+                {t('Arm 🚪 or 🪟 and click a room edge, or click an existing opening on the plan.')}
+              </span>
+            )}
+            {onDefaultWindowStyle ? (
+              <LocationWindowDefault styleId={defaultWindowStyle || ''}
+                onChange={onDefaultWindowStyle} />
+            ) : null}
+            {/* THE PLACE'S OWN DOOR — the fallback every door opening on this plan
+                inherits, and the first option the opening panel offers. */}
+            {onDefaultDoorProp ? (
+              <LocationDoorDefault propId={defaultDoorPropId || ''} styleId={defaultDoorStyle || ''}
+                onChange={onDefaultDoorProp} />
+            ) : null}
+            {roomPicker}
+          </>
+        )
+      case 'props':
+        return (
+          <>
+            <button
+              type="button"
+              className={`ga-btn ga-btn-sm${furnishState ? ' ga-btn-primary' : ''}`}
+              disabled={furnishDisabled}
+              onClick={() => setFurnishOpen(true)}
+              title={furnishHint}
+            >
+              ✨ {t('Furnish')}
+              {furnishState ? ` ${FURNISH_BADGE[furnishState] || ''}` : ''}
+            </button>
+            {!selectedRoom ? (
+              <span className="ga-hint">
+                {t('Pick a room or the yard first — props are placed into it.')}
+              </span>
+            ) : null}
+            {/* The pick list stands FIRST: it is a transient picker the 📋 tool
+                opened on purpose, and it closes itself with the pick. */}
+            {propListOpen && selectedRoom ? (
+              <PlanPropList
+                roomName={groundSel ? yardName : (selectedRoom.name || selectedRoom.id || '')}
+                placements={selectedRoom.layout?.props || []}
+                dims={ghostDims}
+                selected={propSel}
+                onPick={(i) => {
+                  // The pick IS the selection — and the list has done its job.
+                  setPropSel(i)
+                  setPropListOpen(false)
+                }}
+                onClose={() => setPropListOpen(false)}
+              />
+            ) : null}
+            {selectedRoom && propSel !== null
+              && selectedRoom.layout?.props?.[propSel] ? (() => {
+              const list = selectedRoom.layout?.props || []
+              const placement = list[propSel]
+              // COMPOSED poses (decision E1): everything below asks WHERE the pieces
+              // really stand, which for a child is not what it stores.
+              const withDims = withPropHeights(list, ghostDims)
+              const composed = composePlacements(withDims)
+              const pose = composed[propSel]
+              const patchProp = (patch: Partial<typeof placement> | null) => {
+                // A delete takes the whole subtree: a piece whose support is gone
+                // has no frame left to be positioned in (`dependentIndices`).
+                const doomed = patch === null
+                  ? new Set(dependentIndices(list, propSel))
+                  : new Set<number>()
+                const next = list
+                  .map((p, i) => (i === propSel && patch ? { ...p, ...patch } : p))
+                  .filter((_, i) => !doomed.has(i))
+                if (patch === null) setPropSel(null)
+                updateLayout(selectedRoom.id || '',
+                             { props: next.length ? next : undefined })
+              }
+              // Everything standing on this exact spot — the same turned-box test
+              // that cycles the selection through a stack, asked at the placement's
+              // own spot instead of at the cursor. Same ASCENDING-BY-INDEX order as
+              // there (later placement wins ties = topmost), so the counter in the
+              // strip reads from the bottom. The selection always hits its own
+              // footprint, hence it is always in here.
+              const stackHits = propsAtPoint(
+                selectedRoom.layout || {}, selOrigin,
+                pose.at[0] - selOrigin[0], pose.at[1] - selOrigin[1],
+              )
+              // WHICH of them carries the piece — the topmost surface that is not
+              // part of this piece's own subtree (`pickSupport`, which owns both
+              // rules and is checked by `scripts/smoke_placement_compose.mjs`). The
+              // plan never computes the resulting HEIGHT: what is stored is the
+              // relation, and the metres are composed server-side.
+              const support = pickSupport(withDims, composed, propSel, stackHits)
+              // SET IT DOWN ON THAT PIECE. What is written is the parent link plus
+              // the pose in the support's frame — no height at all: the server
+              // composes it from the support's top surface, so plan, preview and 3D
+              // client cannot each arrive at their own answer.
+              const placeOnTop = () => {
+                if (support === null) return
+                const supportId = list[support].id || newId()
+                const rel = toSupportFrame(pose.at, pose.yaw, composed[support])
+                const next = list.map((p, i) => {
+                  if (i === support) return { ...p, id: supportId }
+                  if (i !== propSel) return p
+                  return { ...p, on: supportId,
+                           at: [rM(rel.at[0]), rM(rel.at[1])] as [number, number],
+                           yaw: rel.yaw ? rM(rel.yaw) : undefined,
+                           offset_y: undefined }
+                })
+                updateLayout(selectedRoom.id || '', { props: next })
+              }
+              // BACK ONTO THE FLOOR: the link goes and the composed pose becomes the
+              // stored one, so the piece does not move while it is set down.
+              const placeOnFloor = () => {
+                patchProp({ on: undefined, offset_y: undefined,
+                            at: [rM(pose.at[0]), rM(pose.at[1])],
+                            yaw: pose.yaw ? rM(pose.yaw) : undefined })
+              }
+              const supportIdx = placement.on
+                ? list.findIndex((p) => p.id === placement.on) : -1
+              return (
+                <PlanPropStrip
+                  placement={placement}
+                  index={propSel}
+                  name={ghostDims[placement.prop_id]?.name}
+                  origin={selOrigin}
+                  size={{ w: selLay?.w || 0, d: selLay?.d || 0 }}
+                  ground={groundSel}
+                  stackHits={stackHits}
+                  support={supportIdx >= 0 ? {
+                    label: list[supportIdx].label
+                      || ghostDims[list[supportIdx].prop_id]?.name
+                      || list[supportIdx].prop_id,
+                    width_m: ghostDims[list[supportIdx].prop_id]?.width_m || 1,
+                    depth_m: ghostDims[list[supportIdx].prop_id]?.depth_m || 1,
+                  } : undefined}
+                  dependents={dependentIndices(list, propSel).length - 1}
+                  onPlaceOnTop={support !== null ? placeOnTop : undefined}
+                  onPlaceOnFloor={placeOnFloor}
+                  onPatch={patchProp}
+                />
+              )
+            })() : null}
+            {/* A GHOST DELETE THAT TAKES OTHERS WITH IT asks here (decision E1):
+                Del on a pending piece that carries others states how many go before
+                the click that drops them. In-app, never `window.confirm`. */}
+            {ghostDrop ? (
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center',
+                            flexWrap: 'wrap' }}>
+                <span className="ga-hint">
+                  {t('Also removes {n} piece(s) standing on it.')
+                    .replace('{n}', String(ghostDrop.dependents))}
+                </span>
+                <button
+                  type="button"
+                  className="ga-btn ga-btn-sm"
+                  onClick={() => { dropGhost(ghostDrop.index); setGhostDrop(null) }}
+                >
+                  × {t('Remove all')}
+                </button>
+                <button
+                  type="button"
+                  className="ga-btn ga-btn-sm"
+                  onClick={() => setGhostDrop(null)}
+                >
+                  {t('Cancel')}
+                </button>
+              </div>
+            ) : null}
+            {propsOpen ? (
+              <PropsPalette
+                onPick={(p) => {
+                  // Arming the prop tool drops any other armed mode/draft; picking
+                  // the armed prop again disarms.
+                  setClickMode('')
+                  setOutlineDraft([])
+                  setHoverSnap(null)
+                  setDrawTarget('')
+                  setArmedProp((cur) => (cur === p.id ? '' : p.id))
+                  // Another card is another object — its variants are not this one's.
+                  setArmedVariant(undefined)
+                }}
+                armedPropId={armedProp}
+                armedVariant={armedVariant}
+                onArmedVariant={setArmedVariant}
+              />
+            ) : null}
+            {roomPicker}
+          </>
+        )
+      case 'markers':
+        return (
+          <>
+            <PlanMarkerList
+              groups={poseCatalog.groups}
+              markerGroup={markerGroup}
+              onMarkerGroup={setMarkerGroup}
+              markers={selectedRoom?.layout?.markers || []}
+              markerSel={markerSel}
+              onSelectMarker={setMarkerSel}
+            />
+            {selectedRoom && markerSel !== null
+              && selectedRoom.layout?.markers?.[markerSel] ? (
+              <PlanMarkerStrip
+                marker={selectedRoom.layout.markers[markerSel]}
+                index={markerSel}
+                catalog={poseCatalog}
+                origin={selOrigin}
+                size={{ w: selLay?.w || 0, d: selLay?.d || 0 }}
+                ground={groundSel}
+                mode={clickMode}
+                onMode={setClickMode}
+                previewPose={previewPose}
+                onPreviewPose={onPreviewPose}
+                onPatch={(patch) => {
+                  const markers = (selectedRoom.layout?.markers || [])
+                    .map((m, i) => (i === markerSel ? { ...m, ...patch } : m))
+                    .filter((_, i) => !(patch === null && i === markerSel))
+                  if (patch === null) setMarkerSel(null)
+                  updateLayout(selectedRoom.id || '', { markers })
+                }}
+              />
+            ) : null}
+            {roomPicker}
+          </>
+        )
+      case 'stairs':
+        // THE FLIGHT AND THE STOREY BELONG TOGETHER. Every path that changes
+        // the level clears the selection (they all run through `setSelected`),
+        // and picking a flight pulls the plan to its own storey — so this
+        // guard has nothing to hide today. It is the invariant written down:
+        // the Stairs panel never states the steps and the run of a flight
+        // the plan beside it is not showing.
+        return stairSel !== null && map3d?.stairs?.[stairSel]
+          && map3d.stairs[stairSel].from_level === level ? (
+          <PlanStairStrip
+            index={stairSel}
+            flight={map3d.stairs[stairSel]}
+            composed={sceneFlightAt(stairSel)}
+            view={view}
+            mode={clickMode}
+            onMode={setClickMode}
+            surfaceKinds={surfaceKinds}
+            onPatch={(next) => {
+              const list = map3d.stairs || []
+              if (!next) {
+                const rest = list.filter((_, i) => i !== stairSel)
+                onMap3d?.('stairs', rest.length ? rest : undefined)
+                setStairSel(null)
+                return
+              }
+              onMap3d?.('stairs',
+                list.map((st, i) => (i === stairSel ? next : st)))
+            }}
+          />
+        ) : (
+          <span className="ga-hint">
+            {t('Click on the plan with 🪜 armed to place a flight, or click an existing staircase.')}
+          </span>
+        )
+      case 'elevator':
+        return map3d?.elevator ? (
+          <PlanElevatorStrip
+            at={map3d.elevator}
+            kind={map3d.elevator_kind || ''}
+            surfaceKinds={surfaceKinds}
+            onKind={(kind) => onMap3d?.('elevator_kind', kind || undefined)}
+            view={view}
+            mode={clickMode}
+            onMode={setClickMode}
+            onMove={(at) => onMap3d?.('elevator', at)}
+          />
+        ) : (
+          <span className="ga-hint">
+            {t('Click on the plan with 🛗 armed to place the elevator.')}
+          </span>
+        )
+      case 'storey':
+        return (
+          <PlanInspectorLevel
+            level={level}
+            map3d={map3d}
+            onMap3d={onMap3d
+              ? (key, value) => onMap3d(key as never, value as never)
+              : undefined}
+            surfaceKinds={surfaceKinds}
+            defaultDoorStyle={defaultDoorStyle}
+            defaultDoorPropId={defaultDoorPropId || ''}
+            drawingOutline={clickMode === 'outline' && outlineLevel === level}
+            canForkOutline={levelOutlinePts.length >= 3}
+            onDrawOutline={() => armMode('outline')}
+            onForkOutline={() => writeLevelOutline(level,
+              levelOutlinePts.map((p) => [p[0], p[1]] as [number, number]))}
+            onDropOutline={() => writeLevelOutline(level, null)}
+            levelOutline={levelOutlinePts}
+            drawingHull={clickMode === 'hull-door'}
+            onDrawHull={() => armMode('hull-door')}
+            hullSel={hullSel}
+            onSelectHull={selectHull}
+          />
+        )
+      case 'plot':
+        return (
+          <PlanPassThroughs
+            map3d={map3d}
+            onMap3d={onMap3d
+              ? (key, value) => onMap3d(key as never, value as never)
+              : undefined}
+            boundaryM={boundaryM}
+            planW={planW}
+            selectedBoundary={selectedBoundary}
+            onSelectBoundary={setSelectedBoundary}
+            fenced={fenced}
+          />
+        )
+      case 'findings':
+        return (
+          <>
+            <PlanFindings
+              hasBoundary={hasBoundary}
+              placedOnMap={placedOnMap}
+              tinyRooms={tinyRooms}
+              tinyRoomM={TINY_ROOM_M}
+              problems={scene?.problems || []}
+              problemText={problemText}
+            />
+            {findings === 0 ? (
+              <span className="ga-hint">{t('Nothing to report.')}</span>
+            ) : null}
+          </>
+        )
+    }
+  }
+
+  const hasKitBlock = Boolean(locationId && (
+    (unsaved && buildingKit)
+    || kitPreview
+    || (kitPreview || kitSummary)?.skipped.length
+    || kitSummary
+  ))
 
   return (
     <div className="ga-form" style={{ gap: 6 }}>
-      <div className="ga-form-section-label">{t('Room layout (floor plan)')}
-        {locationId && onReload && <button className="ga-btn ga-btn-sm" style={{ marginLeft: 8 }}
-          aria-expanded={assistantLocation === locationId}
-          onClick={() => setAssistantLocation((current) => current === locationId ? '' : locationId)}>{t('Building assistant')}</button>}
-      </div>
-      {locationId && <div className="ga-form">
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          <label>{t('Kit')} <select className="ga-input" value={buildingKit}
-            disabled={kitBusy || !!kitPreview || !kitCatalog}
-            onChange={(e) => { setBuildingKit(e.target.value); setKitSummary(null) }}>
-            <option value="">—</option>
-            {kitCatalog?.kits.map((kit) => <option key={kit.id} value={kit.id}>{kit.name}</option>)}
-          </select></label>
-          <button className="ga-btn ga-btn-sm" disabled={unsaved || kitBusy || !buildingKit || !!kitPreview}
-            onClick={() => { void furnishBuilding(true) }}>🧩 {t('Furnish empty rooms from kit')}</button>
-        </div>
-        {unsaved && <div className="ga-hint">{t('Save the location first — furnishing works on the saved floor plan.')}</div>}
-        {kitPreview && <div className="ga-form">
-          <div className="ga-hint">{t('Furnish {n} empty rooms with the {kit} kit?')
-            .replace('{n}', String(kitPreview.rooms.length))
-            .replace('{kit}', kitCatalog?.kits.find((k) => k.id === buildingKit)?.name || buildingKit)}</div>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button className="ga-btn ga-btn-sm ga-btn-primary" disabled={unsaved || kitBusy}
-              onClick={() => { void furnishBuilding(false) }}>{t('Furnish')}</button>
-            <button className="ga-btn ga-btn-sm" disabled={kitBusy} onClick={() => setKitPreview(null)}>{t('Cancel')}</button>
-          </div>
-        </div>}
-        {(kitPreview || kitSummary)?.skipped.length ? <ul className="ga-hint">
-          {(kitPreview || kitSummary)!.skipped.map((room) => <li key={room.room_id}>
-            {room.name || room.room_id}: {skipReason(room.reason)}</li>)}
-        </ul> : null}
-        {kitSummary && <ul className="ga-hint">{kitSummary.rooms.map((room) => <li key={room.room_id}>
-          {t('{room}: {placed} placed, {unplaced} unplaced').replace('{room}', room.name || room.room_id)
-            .replace('{placed}', String(room.placed)).replace('{unplaced}', String(room.unplaced))}
-          {room.missing_roles.length > 0 && ' · ' + t('Roles without a kit prop: {roles}').replace('{roles}', room.missing_roles.join(', '))}
-        </li>)}</ul>}
-      </div>}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        {locationId && onReload ? (
+          <>
+            <button
+              type="button"
+              className={`ga-btn ga-btn-sm${assistantLocation === locationId ? ' ga-btn-primary' : ''}`}
+              aria-expanded={assistantLocation === locationId}
+              onClick={() => setAssistantLocation((current) => current === locationId ? '' : locationId)}
+            >
+              {t('Building assistant')}
+            </button>
+            <Sep />
+          </>
+        ) : null}
         <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
           title={t('0 = ground floor, negative = basement. Saved with the location.')}>
           {t('Level')}
@@ -2407,8 +2874,7 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
             ))}
           </span>
         ) : null}
-        <span aria-hidden style={{ width: 1, alignSelf: 'stretch',
-          background: 'var(--border, #30363d)', margin: '0 2px' }} />
+        <Sep />
         {/* Underlay toggles — up here instead of the tool column, they are
             view state, not tools. */}
         <button
@@ -2461,8 +2927,7 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
             ))}
           </select>
         </label>
-        <span aria-hidden style={{ width: 1, alignSelf: 'stretch',
-          background: 'var(--border, #30363d)', margin: '0 2px' }} />
+        <Sep />
         <button type="button" className="ga-btn ga-btn-sm"
           disabled={planZoom <= 1}
           onClick={() => setPlanZoom((z) => Math.max(1, z - 0.25))}
@@ -2481,8 +2946,35 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
           title={t('Zoom the 2D plan in for precise placement (mouse wheel over the plan works too).')}>
           ➕
         </button>
+        {locationId ? (
+          <>
+            <Sep />
+            <select
+              className="ga-input"
+              style={{ width: 'auto', maxWidth: 160 }}
+              title={t('Furniture kit')}
+              aria-label={t('Furniture kit')}
+              value={buildingKit}
+              disabled={kitBusy || !!kitPreview || !kitCatalog}
+              onChange={(e) => { setBuildingKit(e.target.value); setKitSummary(null) }}
+            >
+              <option value="">{`— ${t('Kit')} —`}</option>
+              {kitCatalog?.kits.map((kit) => <option key={kit.id} value={kit.id}>{kit.name}</option>)}
+            </select>
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              disabled={unsaved || kitBusy || !buildingKit || !!kitPreview}
+              title={t('Furnish empty rooms from kit')}
+              aria-label={t('Furnish empty rooms from kit')}
+              onClick={() => { void furnishBuilding(true) }}
+            >
+              🧩
+            </button>
+          </>
+        ) : null}
         {/* THE STOREY'S FLOOR AND WALL TEXTURES AND THE AREA SWITCHES MOVED
-            INTO THE INSPECTOR'S "Storey" TAB (§ W3). Two selects behind a
+            INTO THE INSPECTOR'S "Storey" PANEL (§ W3). Two selects behind a
             brown and a brick emoji used to sit here, in the row that is meant
             to say WHERE one is — and they said nothing about the texture they
             held. The picker there shows the tile itself. */}
@@ -2493,6 +2985,30 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
             the world's. Local relief is authored on the map's HEIGHT AREAS
             now, and every consumer reads the one field (`h_final`). */}
       </div>
+      {hasKitBlock ? (
+        <div className="ga-form">
+          {unsaved && buildingKit && <div className="ga-hint">{t('Save the location first — furnishing works on the saved floor plan.')}</div>}
+          {kitPreview && <div className="ga-form">
+            <div className="ga-hint">{t('Furnish {n} empty rooms with the {kit} kit?')
+              .replace('{n}', String(kitPreview.rooms.length))
+              .replace('{kit}', kitCatalog?.kits.find((k) => k.id === buildingKit)?.name || buildingKit)}</div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={unsaved || kitBusy}
+                onClick={() => { void furnishBuilding(false) }}>{t('Furnish')}</button>
+              <button type="button" className="ga-btn ga-btn-sm" disabled={kitBusy} onClick={() => setKitPreview(null)}>{t('Cancel')}</button>
+            </div>
+          </div>}
+          {(kitPreview || kitSummary)?.skipped.length ? <ul className="ga-hint">
+            {(kitPreview || kitSummary)!.skipped.map((room) => <li key={room.room_id}>
+              {room.name || room.room_id}: {skipReason(room.reason)}</li>)}
+          </ul> : null}
+          {kitSummary && <ul className="ga-hint">{kitSummary.rooms.map((room) => <li key={room.room_id}>
+            {t('{room}: {placed} placed, {unplaced} unplaced').replace('{room}', room.name || room.room_id)
+              .replace('{placed}', String(room.placed)).replace('{unplaced}', String(room.unplaced))}
+            {room.missing_roles.length > 0 && ' · ' + t('Roles without a kit prop: {roles}').replace('{roles}', room.missing_roles.join(', '))}
+          </li>)}</ul>}
+        </div>
+      ) : null}
 
       {/* NO BOUNDARY DRAWN. The location's footprint IS the drawn polygon, and
           `plan_width_m` is only its derived bounding-box width — not an input
@@ -2605,6 +3121,15 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
         minWidth: 0 }}>
       <PlanToolbar
         mode={clickMode}
+        panel={panel}
+        onPanel={setPanel}
+        findingCount={findings}
+        onSelectTool={() => {
+          if (clickMode) cancelDraw()
+          setArmedProp('')
+          setPropGhost(null)
+          setPanel('select')
+        }}
         hasSelection={!!selectedRoom}
         selectionRotation={selectedRoom?.layout?.rotation || 0}
         hasOutline={ownLevelOutline}
@@ -2622,7 +3147,7 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
         canCurve={!groundSel && !!selectedRoom?.layout?.outline?.length}
         ground={groundSel}
         groundHint={yardNoGeometry}
-        noSelectionHint={t('Nothing is selected — these tools work on ONE shape. Pick a room with the chips under the plan; a room that has no shape yet is drawn with its own ⬠ button in the hint above the plan.')}
+        noSelectionHint={t('Nothing is selected — these tools work on ONE shape. Pick a room on the plan or in the room list of the panel; a room that has no shape yet is drawn with its own ⬠ button in the hint above the plan.')}
         onFitToModel={fitToModel}
         propsOpen={propsOpen}
         propListOpen={propListOpen}
@@ -2635,8 +3160,14 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
         onCommitRoom={commitRoomDraft}
         onCancelDraw={cancelDraw}
         onSuggest={suggestOpenings}
-        onProps={() => setPropsOpen((v) => !v)}
-        onPropList={() => setPropListOpen((v) => !v)}
+        onProps={() => {
+          if (panel === 'props' && propsOpen) setPropsOpen(false)
+          else { setPropsOpen(true); setPanel('props') }
+        }}
+        onPropList={() => {
+          if (panel === 'props' && propListOpen) setPropListOpen(false)
+          else { setPropListOpen(true); setPanel('props') }
+        }}
       />
       {/* Zoom viewport: the canvas grows with the zoom, this box scrolls it
           in BOTH axes (wheel zooms on the canvas). Its height follows the
@@ -2748,10 +3279,10 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
       </div>
       {/* THE ONE LINE UNDER THE PLAN (§ W3). Everything that used to stack
           here — the legend, the leftover-room warning, the server's findings
-          and the pass-through rows — lives in the inspector's Findings tab
-          now and costs the plan no height when there is nothing to say. What
-          is left is a pointer: how many findings are waiting, and a click
-          that opens them. */}
+          and the pass-through rows — lives in the inspector's Findings and
+          Plot panels now and costs the plan no height when there is nothing
+          to say. What is left is a pointer: how many findings are waiting,
+          and a click that opens them. */}
       <div className="ga-plan-status">
         {/* WHY THE LAST CLICK ON THE CONTOUR DID NOT LAND (§ 6). Right under
             the plan the click happened on, and it stays until the tool is
@@ -2767,7 +3298,7 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
             className="ga-btn ga-btn-sm"
             title={t('Open the findings — what the composer and this editor have to say about the plan.')}
             onClick={() => {
-              setInspTab('findings'); setInspCollapsedStored(false)
+              setPanel('findings'); setInspCollapsedStored(false)
             }}
           >
             ⚠ {t('{n} findings').replace('{n}', String(findings))}
@@ -2779,7 +3310,7 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
             className="ga-btn ga-btn-sm"
             title={t('Open the boundary pass-throughs.')}
             onClick={() => {
-              setInspTab('findings'); setInspCollapsedStored(false)
+              setPanel('plot'); setInspCollapsedStored(false)
             }}
           >
             {t('{n} pass-throughs').replace('{n}',
@@ -2789,133 +3320,26 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
       </div>
       </div>
 
-      {/* ── The inspector dock (§ W3) ────────────────────────────────────
-          Three panes as nodes, not as props: the selection pane below is
-          built from closures over the drag state, the running draft and the
-          server calls of this very component. */}
-      {assistantLocation === locationId && onReload ? <BuildingAssistantPanel
-        key={locationId} locationId={locationId} unsaved={unsaved} onReload={onReload} /> : <PlanInspector
-        tab={inspTab}
-        onTab={setInspTab}
-        collapsed={inspCollapsed}
-        onCollapsed={setInspCollapsedStored}
-        selectionLabel={selectionLabel}
-        findingCount={findings}
-        level={(
-          <PlanInspectorLevel
-            level={level}
-            map3d={map3d}
-            onMap3d={onMap3d
-              ? (key, value) => onMap3d(key as never, value as never)
-              : undefined}
-            surfaceKinds={surfaceKinds}
-            defaultWindowStyle={defaultWindowStyle}
-            defaultDoorStyle={defaultDoorStyle}
-            defaultDoorPropId={defaultDoorPropId || ''}
-            onDefaultDoorProp={onDefaultDoorProp}
-            onDefaultWindowStyle={onDefaultWindowStyle}
-            drawingOutline={clickMode === 'outline' && outlineLevel === level}
-            canForkOutline={levelOutlinePts.length >= 3}
-            onDrawOutline={() => armMode('outline')}
-            onForkOutline={() => writeLevelOutline(level,
-              levelOutlinePts.map((p) => [p[0], p[1]] as [number, number]))}
-            onDropOutline={() => writeLevelOutline(level, null)}
-            levelOutline={levelOutlinePts}
-            drawingHull={clickMode === 'hull-door'}
-            onDrawHull={() => armMode('hull-door')}
-            hullSel={hullSel}
-            onSelectHull={selectHull}
-          />
-        )}
-        findings={(
-          <PlanFindings
-            hasBoundary={hasBoundary}
-            placedOnMap={placedOnMap}
-            tinyRooms={tinyRooms}
-            tinyRoomM={TINY_ROOM_M}
-            problems={scene?.problems || []}
-            problemText={problemText}
-            map3d={map3d}
-            onMap3d={onMap3d
-              ? (key, value) => onMap3d(key as never, value as never)
-              : undefined}
-            boundaryM={boundaryM}
-            planW={planW}
-            selectedBoundary={selectedBoundary}
-            onSelectBoundary={setSelectedBoundary}
-            fenced={fenced}
-          />
-        )}
-        selection={(
-        <>
-      <PlanSidePanel
-        room={selectedRoom || null}
-        ground={groundSel}
-        groundName={yardName}
-        groups={poseCatalog.groups}
-        markerGroup={markerGroup}
-        onMarkerGroup={setMarkerGroup}
-        markerSel={markerSel}
-        onSelectMarker={setMarkerSel}
-        markerMode={clickMode === 'marker'}
-        onArmMarker={() => armMode('marker')}
-        onAlwaysVisible={(v) => updateLayout(selectedRoom?.id || '', {
-          always_visible: v || undefined,
-        })}
-        onRotation={setRotation}
-        onLayout={(patch) => updateLayout(selectedRoom?.id || '', patch)}
-        onNoWalls={(v) => updateLayout(selectedRoom?.id || '', {
-          no_walls: v || undefined,
-        })}
-        onFloorOffset={(v) => updateLayout(selectedRoom?.id || '', {
-          floor_offset_y: v,
-        })}
-        surfaceKinds={surfaceKinds}
-        waterKinds={waterKinds}
-        onSurface={setSurface}
-        mapWater={selectedMapWater}
-        furnishState={furnish.status?.state || ''}
-        // Furnish reads the SAVED world, not the draft (the job runs
-        // server-side): a freshly drawn room that is not saved yet would
-        // 409 with "no floor plan" — the same rule Generate-in-scene
-        // already enforces (user finding 2026-08-20, bedroom level 1).
-        furnishDisabled={!selectedRoom || unsaved}
-        furnishHint={!selectedRoom
-          ? t('Select a room with a floor plan first.')
-          : unsaved
-            ? t('Save the location first — furnishing works on the saved floor plan.')
-            : groundSel
-            ? t('Let the LLM furnish the yard: it picks library props and a solver places them inside the location boundary, clear of the rooms and the entrances.')
-            : t('Let the LLM furnish this room: it picks library props, proposes the missing pieces and a solver places them.')}
-        onFurnish={() => setFurnishOpen(true)}
-        propsOpen={propsOpen}
-        propListOpen={propListOpen}
-        propDims={ghostDims}
-        propSel={propSel}
-        onPickPlacement={(i) => {
-          // The pick IS the selection — and the list has done its job.
-          setPropSel(i)
-          setPropListOpen(false)
-        }}
-        onClosePropList={() => setPropListOpen(false)}
-        armedPropId={armedProp}
-        armedVariant={armedVariant}
-        onArmedVariant={setArmedVariant}
-        onPickProp={(p) => {
-          // Arming the prop tool drops any other armed mode/draft; picking
-          // the armed prop again disarms.
-          setClickMode('')
-          setOutlineDraft([])
-          setHoverSnap(null)
-          setDrawTarget('')
-          setArmedProp((cur) => (cur === p.id ? '' : p.id))
-          // Another card is another object — its variants are not this one's.
-          setArmedVariant(undefined)
-        }}
-      />
+      {/* ── The inspector dock ─────────────────────────────────────────── */}
+      {assistantLocation === locationId && onReload ? (
+        <BuildingAssistantPanel
+          key={locationId} locationId={locationId} unsaved={unsaved} onReload={onReload} />
+      ) : (
+        <PlanInspector
+          panel={panel}
+          collapsed={inspCollapsed}
+          onCollapsed={setInspCollapsedStored}
+          findingCount={findings}
+          subtitle={inspectorSubtitle}
+        >
+          {renderPanel()}
+        </PlanInspector>
+      )}
+      </div>
 
-      {/* The furnishing proposal is a MODAL and renders through a portal, so
-          it does not care that it is written inside the inspector pane. */}
+      {/* The furnishing proposal is a MODAL and renders through a portal —
+          mounted outside the panel switch so changing tools does not unmount
+          an open furnishing dialog. */}
       {furnishOpen && selectedRoom ? (
         <FurnishDialog
           locationId={locationId}
@@ -2941,251 +3365,6 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
           onClose={() => setFurnishOpen(false)}
         />
       ) : null}
-
-      {/* A GHOST DELETE THAT TAKES OTHERS WITH IT asks here (decision E1):
-          Del on a pending piece that carries others states how many go before
-          the click that drops them. In-app, never `window.confirm`. */}
-      {ghostDrop ? (
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center',
-                      flexWrap: 'wrap' }}>
-          <span className="ga-hint">
-            {t('Also removes {n} piece(s) standing on it.')
-              .replace('{n}', String(ghostDrop.dependents))}
-          </span>
-          <button
-            type="button"
-            className="ga-btn ga-btn-sm"
-            onClick={() => { dropGhost(ghostDrop.index); setGhostDrop(null) }}
-          >
-            × {t('Remove all')}
-          </button>
-          <button
-            type="button"
-            className="ga-btn ga-btn-sm"
-            onClick={() => setGhostDrop(null)}
-          >
-            {t('Cancel')}
-          </button>
-        </div>
-      ) : null}
-
-      {selectedRoom && propSel !== null
-        && selectedRoom.layout?.props?.[propSel] ? (() => {
-        const list = selectedRoom.layout?.props || []
-        const placement = list[propSel]
-        // COMPOSED poses (decision E1): everything below asks WHERE the pieces
-        // really stand, which for a child is not what it stores.
-        const withDims = withPropHeights(list, ghostDims)
-        const composed = composePlacements(withDims)
-        const pose = composed[propSel]
-        const patchProp = (patch: Partial<typeof placement> | null) => {
-          // A delete takes the whole subtree: a piece whose support is gone
-          // has no frame left to be positioned in (`dependentIndices`).
-          const doomed = patch === null
-            ? new Set(dependentIndices(list, propSel))
-            : new Set<number>()
-          const next = list
-            .map((p, i) => (i === propSel && patch ? { ...p, ...patch } : p))
-            .filter((_, i) => !doomed.has(i))
-          if (patch === null) setPropSel(null)
-          updateLayout(selectedRoom.id || '',
-                       { props: next.length ? next : undefined })
-        }
-        // Everything standing on this exact spot — the same turned-box test
-        // that cycles the selection through a stack, asked at the placement's
-        // own spot instead of at the cursor. Same ASCENDING-BY-INDEX order as
-        // there (later placement wins ties = topmost), so the counter in the
-        // strip reads from the bottom. The selection always hits its own
-        // footprint, hence it is always in here.
-        const stackHits = propsAtPoint(
-          selectedRoom.layout || {}, selOrigin,
-          pose.at[0] - selOrigin[0], pose.at[1] - selOrigin[1],
-        )
-        // WHICH of them carries the piece — the topmost surface that is not
-        // part of this piece's own subtree (`pickSupport`, which owns both
-        // rules and is checked by `scripts/smoke_placement_compose.mjs`). The
-        // plan never computes the resulting HEIGHT: what is stored is the
-        // relation, and the metres are composed server-side.
-        const support = pickSupport(withDims, composed, propSel, stackHits)
-        // SET IT DOWN ON THAT PIECE. What is written is the parent link plus
-        // the pose in the support's frame — no height at all: the server
-        // composes it from the support's top surface, so plan, preview and 3D
-        // client cannot each arrive at their own answer.
-        const placeOnTop = () => {
-          if (support === null) return
-          const supportId = list[support].id || newId()
-          const rel = toSupportFrame(pose.at, pose.yaw, composed[support])
-          const next = list.map((p, i) => {
-            if (i === support) return { ...p, id: supportId }
-            if (i !== propSel) return p
-            return { ...p, on: supportId,
-                     at: [rM(rel.at[0]), rM(rel.at[1])] as [number, number],
-                     yaw: rel.yaw ? rM(rel.yaw) : undefined,
-                     offset_y: undefined }
-          })
-          updateLayout(selectedRoom.id || '', { props: next })
-        }
-        // BACK ONTO THE FLOOR: the link goes and the composed pose becomes the
-        // stored one, so the piece does not move while it is set down.
-        const placeOnFloor = () => {
-          patchProp({ on: undefined, offset_y: undefined,
-                      at: [rM(pose.at[0]), rM(pose.at[1])],
-                      yaw: pose.yaw ? rM(pose.yaw) : undefined })
-        }
-        const supportIdx = placement.on
-          ? list.findIndex((p) => p.id === placement.on) : -1
-        return (
-          <PlanPropStrip
-            placement={placement}
-            index={propSel}
-            name={ghostDims[placement.prop_id]?.name}
-            origin={selOrigin}
-            size={{ w: selLay?.w || 0, d: selLay?.d || 0 }}
-            ground={groundSel}
-            stackHits={stackHits}
-            support={supportIdx >= 0 ? {
-              label: list[supportIdx].label
-                || ghostDims[list[supportIdx].prop_id]?.name
-                || list[supportIdx].prop_id,
-              width_m: ghostDims[list[supportIdx].prop_id]?.width_m || 1,
-              depth_m: ghostDims[list[supportIdx].prop_id]?.depth_m || 1,
-            } : undefined}
-            dependents={dependentIndices(list, propSel).length - 1}
-            onPlaceOnTop={support !== null ? placeOnTop : undefined}
-            onPlaceOnFloor={placeOnFloor}
-            onPatch={patchProp}
-          />
-        )
-      })() : null}
-
-      {/* Model calibration strip (rotation fix, room width, walkable floor)
-          — placed BEFORE the model-placement strip so the three calibration
-          anchors read in order: width_m → walk_y → model_offset_y. */}
-      {children}
-
-      {/* Model-placement strip: X/Y sliders + height for the selected
-          room's diorama model — mirrors the prop strip; ↺ recentres. */}
-      {selectedRoom && !groundSel && hasRect(selectedRoom.layout)
-        && modelDims[selectedRoom.id || ''] ? (
-        <PlanModelPlacement
-          layout={selectedRoom.layout}
-          onPatch={(patch) => updateLayout(selectedRoom.id || '', patch)}
-        />
-      ) : null}
-
-      {selectedRoom && markerSel !== null
-        && selectedRoom.layout?.markers?.[markerSel] ? (
-        <PlanMarkerStrip
-          marker={selectedRoom.layout.markers[markerSel]}
-          index={markerSel}
-          catalog={poseCatalog}
-          origin={selOrigin}
-          size={{ w: selLay?.w || 0, d: selLay?.d || 0 }}
-          ground={groundSel}
-          mode={clickMode}
-          onMode={setClickMode}
-          previewPose={previewPose}
-          onPreviewPose={onPreviewPose}
-          onPatch={(patch) => {
-            const markers = (selectedRoom.layout?.markers || [])
-              .map((m, i) => (i === markerSel ? { ...m, ...patch } : m))
-              .filter((_, i) => !(patch === null && i === markerSel))
-            if (patch === null) setMarkerSel(null)
-            updateLayout(selectedRoom.id || '', { markers })
-          }}
-        />
-      ) : null}
-
-      {selectedRoom && openingSel !== null
-        && selectedRoom.layout?.openings?.[openingSel] ? (
-        <PlanOpeningStrip
-          opening={selectedRoom.layout.openings[openingSel]}
-          index={openingSel}
-          otherRooms={rooms.filter((r) => r.id && r.id !== selectedRoom.id
-            && !isFloorRoom(r.id))}
-          // A WINDOW leads nowhere: only a door and a passage are routed into
-          // the storey's corridor (§ A13b), so only they may say so.
-          corridorName={selectedRoom.layout.openings[openingSel].type === 'window'
-            ? '' : corridorOfLevel(selectedRoom.layout?.level || 0)}
-          defaultWindowStyle={defaultWindowStyle}
-          defaultDoorStyle={defaultDoorStyle}
-          defaultDoorPropId={defaultDoorPropId}
-          onPatch={(patch) => {
-            const list = (selectedRoom.layout?.openings || [])
-              .map((o, i) => {
-                if (i !== openingSel) return o
-                const next = { ...o, ...patch }
-                if (next.window_style === undefined) delete next.window_style
-                return next
-              })
-              .filter((_, i) => !(patch === null && i === openingSel))
-            if (patch === null) setOpeningSel(null)
-            updateLayout(selectedRoom.id || '', { openings: list })
-          }}
-        />
-      ) : null}
-
-      {elevatorSel && map3d?.elevator ? (
-        <PlanElevatorStrip
-          at={map3d.elevator}
-          kind={map3d.elevator_kind || ''}
-          surfaceKinds={surfaceKinds}
-          onKind={(kind) => onMap3d?.('elevator_kind', kind || undefined)}
-          view={view}
-          mode={clickMode}
-          onMode={setClickMode}
-          onMove={(at) => onMap3d?.('elevator', at)}
-        />
-      ) : null}
-
-      {/* THE FLIGHT AND THE STOREY BELONG TOGETHER. Every path that changes
-          the level clears the selection (they all run through `setSelected`),
-          and picking a flight pulls the plan to its own storey — so this
-          guard has nothing to hide today. It is the invariant written down:
-          the row never states the steps and the run of a flight the plan above
-          it is not showing. */}
-      {stairSel !== null && map3d?.stairs?.[stairSel]
-        && map3d.stairs[stairSel].from_level === level ? (
-        <PlanStairStrip
-          index={stairSel}
-          flight={map3d.stairs[stairSel]}
-          composed={sceneFlightAt(stairSel)}
-          view={view}
-          mode={clickMode}
-          onMode={setClickMode}
-          surfaceKinds={surfaceKinds}
-          onPatch={(next) => {
-            const list = map3d.stairs || []
-            if (!next) {
-              const rest = list.filter((_, i) => i !== stairSel)
-              onMap3d?.('stairs', rest.length ? rest : undefined)
-              setStairSel(null)
-              return
-            }
-            onMap3d?.('stairs',
-              list.map((st, i) => (i === stairSel ? next : st)))
-          }}
-        />
-      ) : null}
-
-      {/* Pick a room WITHOUT touching the plan (PlanRoomPicker). */}
-      <PlanRoomPicker
-        placed={placedRooms}
-        unplaced={unplaced}
-        hasYard={!!groundRoom}
-        yardPlaced={!!yardLay}
-        yardName={yardName}
-        selected={selected}
-        onSelect={setSelected}
-        onSelectYard={() => { setLevel(0); setSelected(GROUND_ROOM_ID) }}
-        drawTarget={drawTarget}
-        drawing={clickMode === 'draw-room'}
-        onDraw={armDrawFor}
-      />
-        </>
-        )}
-      />}
-      </div>
     </div>
   )
 }
