@@ -21,7 +21,9 @@ manager, so one event loop carries the run's turn task across requests.
 WHAT IS CHECKED, and where every expected value comes from
 ----------------------------------------------------------
 
-Start state: world not frozen, no run.
+Start state: world not frozen, no run. Runs use building_models "mesh" (the
+image-based building path = building_models 'mesh'; the hull path is covered by
+smoke_world_dev_build.py).
 
  1. The schema modes are gone (plan 2026-11-25-world-dev-free-remove-schema-
     modes.md, Task 4): GET /world-dev/schemas, POST /world-dev/chat, POST
@@ -45,10 +47,10 @@ Start state: world not frozen, no run.
     anonymous -> 401 (default-deny gate). Nothing frozen, no open run.
  4. admin start with model "nope" -> 400 (llm_factory returns None ->
     ValueError in RunManager.start before create_run); world NOT frozen, no
-    open run. Empty task -> 400 likewise. Budgets are checked by the route
-    before the manager (finding 1): max_steps -3, max_steps 0,
-    max_tokens_total true and max_steps "abc" -> 400 each; still nothing
-    frozen and no open run.
+    open run. Empty task -> 400 likewise. Budgets and building_models are
+    checked by the route before the manager (finding 1): max_steps -3,
+    max_steps 0, max_tokens_total true, max_steps "abc" and building_models
+    "castle" -> 400 each; still nothing frozen and no open run.
  5. admin start {task, model "fake-model", provider "fake"} -> 200
     {"run_id": "wdr_..."}; world frozen (start froze it).
  6. second start -> 409, body {"detail": ..., "run_id": <the same id>}
@@ -104,7 +106,8 @@ Run 2 — a PRE-FROZEN world (set_world_frozen(True) before the start):
     frozen (was_frozen True restored by _close).
 
 Run 3 — a freeze click during an open run is kept (finding 6):
-23. world unfrozen, start -> 200 (was_frozen False recorded); while turn 1
+23. world unfrozen, start WITHOUT building_models -> 200 (default
+    building_models == "hull", was_frozen False recorded); while turn 1
     blocks in GATE g3, POST /world/freeze -> 200 {"frozen": true} and the
     run's was_frozen is now True (world_ops.freeze_world records it).
 24. release g3: reply "Done." has no tool call -> turn 1 hard failure ->
@@ -329,7 +332,8 @@ def main(c):
     check("2 defaults", r.status_code == 200
           and r.json() == {"max_steps": 200, "max_tokens_total": 2000000}, r.text)
 
-    body = {"task": "build a pond", "model": "fake-model", "provider": "fake"}
+    body = {"task": "build a pond", "model": "fake-model", "provider": "fake",
+            "building_models": "mesh"}
     r = c.post("/world-dev/free/start", headers=USER, json=body)
     check("3 player start -> 403", r.status_code == 403, r.status_code)
     r = c.post("/world-dev/free/start", json=body)
@@ -341,9 +345,9 @@ def main(c):
     r = c.post("/world-dev/free/start", headers=ADMIN, json={**body, "task": "  "})
     check("4 empty task -> 400", r.status_code == 400, r.text)
     for bad in ({"max_steps": -3}, {"max_steps": 0}, {"max_tokens_total": True},
-                {"max_steps": "abc"}):
+                {"max_steps": "abc"}, {"building_models": "castle"}):
         r = c.post("/world-dev/free/start", headers=ADMIN, json={**body, **bad})
-        check(f"4 bad budget {bad} -> 400", r.status_code == 400, r.text)
+        check(f"4 bad start arg {bad} -> 400", r.status_code == 400, r.text)
     check("4 nothing frozen, no run", not is_world_frozen() and wr.open_run() is None)
 
     r = c.post("/world-dev/free/start", headers=ADMIN, json=body)
@@ -506,9 +510,12 @@ def run2(c, body):
 
 def run3(c, body):
     set_world_frozen(False)
-    r = c.post("/world-dev/free/start", headers=ADMIN, json=body)
+    body_default = {k: v for k, v in body.items() if k != "building_models"}
+    r = c.post("/world-dev/free/start", headers=ADMIN, json=body_default)
     run_id = r.json().get("run_id", "") if r.status_code == 200 else ""
     check("23 start on a thawed world -> 200", bool(run_id), r.text)
+    check("23 default building_models is 'hull'",
+          wr.get_run(run_id)["building_models"] == "hull", wr.get_run(run_id))
     check("23 was_frozen False", wr.get_run(run_id)["was_frozen"] is False)
     r = c.post("/world/freeze", headers=ADMIN)
     check("23 freeze during the run -> 200",

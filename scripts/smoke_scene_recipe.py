@@ -280,7 +280,7 @@ def test_plates() -> None:
           str(p["top_y"]))
     check("thickness 0.14", near(p["thickness"], 0.14), str(p["thickness"]))
     check("level_floors has no entry for storey 1 → the default kind",
-          p["texture_kind"] == "floor", str(p.get("texture_kind")))
+          p["texture_kind"] == scene_recipe.DEFAULT_FLOOR_KIND, str(p.get("texture_kind")))
     check("contour in world metres (±5 = the 10 m square)",
           p["outline"][0] == [-5.0, -5.0] and p["outline"][2] == [5.0, 5.0],
           str(p["outline"]))

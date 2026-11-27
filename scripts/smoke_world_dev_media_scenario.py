@@ -32,7 +32,8 @@ does not need to route).
   (a) turn 1 [create_location "Demo Mill" (room "Loft"), create_character
       "Demo Mira" (female, hair black / long), "Built."] -&gt; awaiting_review,
       2 elements (one media row each).
-      Location row, hand count: gallery steps building-front, day:, night:
+      Location row, hand count (the image-based building path = building_models
+      'mesh'; the hull path is covered by smoke_world_dev_build.py): gallery steps building-front, day:, night:
       (the place itself, room id ""), day:&lt;loft&gt;, night:&lt;loft&gt; (the one
       non-corridor room) = 5, plus mesh = 6 steps. The 5 gallery steps are
       done (the gallery fake writes one image each = 5 images), mesh is
@@ -321,7 +322,7 @@ async def main():
                         "name": "Demo Mira", "gender": "female",
                         "body_slots": {"hair": {"color": "black", "length": "long"}}}}),
                     "Built."]
-    run = await rm.start("build", "fake-model", "fake", "u1")
+    run = await rm.start("build", "fake-model", "fake", "u1", building_models="mesh")
     st = await settle(rm, run)
     mill = loc_id("Demo Mill")
     loft = next((str(r["id"]) for r in (get_location_by_id(mill) or {}).get("rooms") or []

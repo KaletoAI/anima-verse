@@ -59,8 +59,12 @@ Real sizes (a person is 1.70 m tall; keep rooms within realistic `max_m2` guidel
 ```
 
 Allowed keys: `rooms` (required), `entry_room`, `boundary_openings`, `stairs`,
-`storey_height_m`, `summary` (a note on what the plan does; it is not stored). There is no `hull` here: the building's outer shell is generated
-by the building panel's button, not by you.
+`storey_height_m`, `summary` (a note on what the plan does; it is not stored). The plan writes the
+building contour (`map3d.outline` / `level_outlines`) from its CLOSED rooms automatically: closed
+rooms of one place must form ONE building (touching walls, no gaps or holes, and an upper storey
+standing on the one below) or the plan is refused. Open rooms (`open: true`) are not part of the
+contour. Room edges closer than 0.3 m are aligned to each other automatically and the result line
+says when rooms moved.
 
 ### `rooms`
 
@@ -72,7 +76,11 @@ by the building panel's button, not by you.
 - `room_type` — optional, one of `list_catalog room_types` (furnishing needs it).
 - `open` — `true` (a boolean) for an open sub-area (yard, terrace, market stall): no walls, visible from
   outside. Default `false` = a closed room.
-- `surfaces` — optional `{"floor": "<kind>", "wall": "<kind>"}` of `list_catalog surface_kinds`.
+- `surfaces` — give every CLOSED room `surfaces` `{"floor": "<kind>", "wall": "<kind>"}` from
+  `list_catalog surface_kinds` — without them the floor is plain `wooden_floor` and the walls have
+  no texture. Pick by the building's style: e.g. a log house `wooden_floor` / `log_wood`, a kitchen
+  or storeroom `dark_stone` / `fieldstone`, a town house `tiled_floor` / `plaster_infill`. Open
+  rooms may carry a floor kind too.
 - `outline` — optional, instead of a plain rectangle: 3–32 points in metres relative to the
   room's own minimum corner (spanning 0…`w`, 0…`d`), first point not repeated.
 - `openings` — a list of the holes in THIS room's walls, one object each:
@@ -153,6 +161,19 @@ the `findings` and fix them.
 - A place with rooms but no floor plan is reported by `check_run` as `no floor plan`: it
   cannot be drawn in 3D.
 
+### `build_hull` — the outer shell
+
+`build_hull{location_id, style, roof_form?}` requests the building's outer shell (facade, roof,
+windows) in a fixed style:
+
+- Requires a floor plan with at least one closed room first (`set_room_layout`).
+- `style` — one of `list_catalog hull_styles` (refused otherwise).
+- `roof_form` — optional (`gable`, `hip`, `shed`, `flat`, within the style's allowed roof forms).
+- Builds nothing during the turn — Blender builds it locally after the turn when media are on, and
+  it costs no LLM or GPU. A later `set_room_layout` in this run rebuilds it.
+- Replaces the image-based 3D model of the place. Call it once per house after `set_room_layout`
+  and before `furnish_rooms`.
+
 ## Furnishing: `furnish_rooms{location_id, kit}`
 
 Fills the EMPTY rooms of a place with furniture from a kit (`list_catalog furniture_kits`: the
@@ -167,7 +188,7 @@ The call is refused when no room qualifies; the refusal names every room with it
 result names the furnished rooms with their piece count, the roles the kit had no piece for, and
 the rooms it skipped, followed by `; findings: …` if any 3D scene findings remain — read and fix
 them. Call it once per place after its floor plan stands. There is no LLM
-furnishing and no hull here — the building panel does those. To stand ONE library prop in a room (a
+furnishing here — the building panel does that; the hull is `build_hull`. To stand ONE library prop in a room (a
 statue, a rug, a bench — even in a room that already has furniture), use `place_room_prop`
 (`find_props` lists the library; name missing props under *left open*, never create an item
 instead).

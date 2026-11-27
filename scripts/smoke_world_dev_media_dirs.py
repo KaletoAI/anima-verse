@@ -4,10 +4,10 @@ step created (plan docs/superpowers/plans/2026-11-25-world-dev-free-fixes.md,
 Task 2 / F2).
 
 A temp world and instance (paths.init BEFORE any world-DB import), an EMPTY
-ANIMATION_CLIPS_DIR; no server, no LLM, no render. The REAL producer adapters
-run; only the entry point each wraps is a fake that writes real files
+ANIMATION_CLIPS_DIR; no server, no LLM, no render. The REAL producer adapters run; only the entry point each wraps is a fake that writes real files
 (``world_ops.generate_gallery_image_core``, ``subjects.generate_building_model``),
-exactly as smoke_world_dev_media_capture.py stubs them.
+exactly as smoke_world_dev_media_capture.py stubs them (the image-based building
+path = building_models 'mesh'; the hull path is covered by smoke_world_dev_build.py).
 
 Usage:
     ./.venv/bin/python scripts/smoke_world_dev_media_dirs.py
@@ -135,9 +135,9 @@ LDIR = STORAGE / "locations" / L
 check("fixture: no gallery dir, no locations dir", not GDIR.exists() and not LDIR.exists(),
       (GDIR.exists(), LDIR.exists()))
 
-run = wr.create_run("build", "m", "p", "u", 80, 300000)
+run = wr.create_run("build", "m", "p", "u", 80, 300000, building_models="mesh")
 ctx = wdm.ProduceCtx(run_id=run, row_id=1)
-front = next(s for s in wdm.element_steps("location", L) if s.id == "building-front")
+front = next(s for s in wdm.element_steps("location", L, "mesh") if s.id == "building-front")
 
 
 async def fake_gallery(location, data):

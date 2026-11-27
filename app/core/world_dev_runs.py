@@ -40,6 +40,7 @@ logger = get_logger("world_dev_runs")
 OPEN_STATUSES = ("running", "awaiting_review", "interrupted")
 TERMINAL_STATUSES = ("accepted", "rolled_back", "rollback_incomplete")
 STATUSES = OPEN_STATUSES + TERMINAL_STATUSES
+BUILDING_MODELS = ("hull", "mesh")
 KINDS = ("read", "write", "refused")
 TARGET_KINDS = ("location", "terrain", "height", "character", "world_prop", "terrain_type",
                 "item", "relationship", "secret", "rule", "event", "quest_template")
@@ -121,6 +122,8 @@ def _run_dict(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
     d["was_frozen"] = bool(d.get("was_frozen"))
     d["media_enabled"] = bool(d.get("media_enabled", 1))
     d["media_state"] = d.get("media_state") or "open"
+    bm = str(d.get("building_models") or "").strip().lower()
+    d["building_models"] = bm if bm in BUILDING_MODELS else "hull"
     d["skipped"] = _load(d.get("skipped_json")) or []
     bounds = _load(d.get("bounds"))
     d["bounds"] = bounds if isinstance(bounds, dict) else None
@@ -146,30 +149,37 @@ def _check_status(status: str) -> None:
 def create_run(task: str, model: str, provider: str, user_id: str,
                max_steps: int, max_tokens_total: int,
                max_tokens: Optional[int] = None, effort: str = "",
-               media_enabled: bool = True) -> str:
+               media_enabled: bool = True,
+               building_models: str = "hull") -> str:
     """Insert a new ``running`` run; raises ``RunOpenError`` when one is open.
     ``media_enabled`` is the run's media switch (world_dev_media);
+    ``building_models`` is 'hull' (Blender hull) or 'mesh' (img2mesh);
     ``max_tokens`` is the per-reply cap (None = the model's default);
     ``effort`` the Effort level ('' = the model's default), stored lowercased;
-    ValueError for a level not in EFFORT_LEVELS (checked before the insert)."""
+    ValueError for an invalid effort or building_models (checked before the insert)."""
     # Lazy: world_dev_agent imports this module.
     from app.core.world_dev_agent import EFFORT_LEVELS
     effort = (effort or "").strip().lower()
     if effort and effort not in EFFORT_LEVELS:
         raise ValueError(f"unknown effort {effort!r} (allowed: {', '.join(EFFORT_LEVELS)})")
+    bm = (building_models or "").strip().lower()
+    if bm not in BUILDING_MODELS:
+        raise ValueError(f"unknown building_models {building_models!r} "
+                         f"(allowed: {', '.join(BUILDING_MODELS)})")
     run_id = "wdr_" + uuid.uuid4().hex[:12]
     try:
         with _Db() as conn:
             conn.execute(
                 "INSERT INTO world_dev_runs (id, task, model, provider, user_id, "
                 "status, max_steps, max_tokens_total, max_tokens, effort, "
-                "media_enabled, created_at) "
-                "VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)",
+                "media_enabled, building_models, created_at) "
+                "VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)",
                 (run_id, task or "", model or "", provider or "", user_id or "",
                  int(max_steps), int(max_tokens_total),
                  None if max_tokens is None else int(max_tokens),
                  effort,
                  1 if media_enabled else 0,
+                 bm,
                  utc_now_iso()))
     except sqlite3.IntegrityError as exc:
         if "idx_world_dev_runs_one_open" not in str(exc):
@@ -185,6 +195,14 @@ def get_run(run_id: str) -> Optional[Dict[str, Any]]:
         row = conn.execute("SELECT * FROM world_dev_runs WHERE id=?",
                            (run_id,)).fetchone()
     return _run_dict(row)
+
+
+def building_models_of(run_id: str) -> str:
+    """The run's normalised building_models mode ('hull' when the run is unknown)."""
+    if not run_id:
+        return "hull"
+    run = get_run(run_id)
+    return (run or {}).get("building_models") or "hull"
 
 
 def open_run() -> Optional[Dict[str, Any]]:

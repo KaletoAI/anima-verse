@@ -24,7 +24,8 @@ body_slots.hair = {color: red, length: long} has the appearance hair text
 "long red hair" (garment_hair.appearance_hair_text: the slot fragment) and
 owns no hairstyle — exactly ensure_hairstyle's "make the first one" case.
 
-Step order of an element (world_dev_media.element_steps):
+Step order of an element (world_dev_media.element_steps, the image-based building
+path = building_models 'mesh'; the hull path is covered by smoke_world_dev_build.py):
   location : building-front, day:, night:, day:<room>, night:<room> per real
              room in stored order (the ground __ground__ and the corridors
              __floor__<n> excluded), mesh.
@@ -239,7 +240,7 @@ barn = add_location("Demo Barn", "a barn")
 save_character_profile("Demo Plain", {"name": "Demo Plain", "template": "human-roleplay",
                                       "gender": "female", "age": 30}, create_new=True)
 
-run = wr.create_run("build", "m", "p", "u", 80, 300000)
+run = wr.create_run("build", "m", "p", "u", 80, 300000, building_models="mesh")
 ctx = wt.ToolCtx(run_id=run, turn=1)
 
 # (a)
@@ -273,7 +274,7 @@ check("(b) due day:<hall> only", due(run, "location", mill_id) == [f"day:{hall}"
 
 # (h) already held
 print("(h) already held")
-fp_now = {s.id: s.fp for s in wdm.element_steps("location", mill_id)}[f"day:{hall}"]
+fp_now = {s.id: s.fp for s in wdm.element_steps("location", mill_id, "mesh")}[f"day:{hall}"]
 row = wr.add_media_row(run, "location", mill_id,
                        [{"id": f"day:{hall}", "label": "x", "status": "queued", "note": "", "fp": fp_now}])
 check("(h) held step hidden", due(run, "location", mill_id) == [], due(run, "location", mill_id))

@@ -221,6 +221,7 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
   const [defaults, setDefaults] = useState<{ max_steps: number | null; max_tokens_total: number | null } | null>(null)
   // The start form's media switch: the server renders what the run builds.
   const [genMedia, setGenMedia] = usePersistentState<boolean>('worlddev.free.media', true)
+  const [buildingModels, setBuildingModels] = usePersistentState<string>('worlddev.free.buildings', 'hull')
   const [mediaOpen, setMediaOpen] = usePersistentState<boolean>('worlddev.free.mediaOpen', true)
   // The last SSE event number seen, per run — a reopened tab resumes the
   // stream behind it instead of replaying the whole buffer.
@@ -512,6 +513,7 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
         max_steps: posInt(maxCalls),
         max_tokens_total: kToTokens(maxTotalK),
         generate_media: genMedia,
+        building_models: buildingModels,
       })
       rememberEv(d.run_id, 0)
       await attach(d.run_id)
@@ -526,7 +528,7 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
     } finally {
       setBusy(false)
     }
-  }, [attach, effort, genMedia, loadRuns, maxCalls, maxTokens, maxTotalK, model, provider, rememberEv, runId, t, task, toast])
+  }, [attach, buildingModels, effort, genMedia, loadRuns, maxCalls, maxTokens, maxTotalK, model, provider, rememberEv, runId, t, task, toast])
 
   const action = useCallback(async (what: 'stop' | 'accept' | 'discard') => {
     if (!runId) return
@@ -761,6 +763,15 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
               <input type="checkbox" checked={genMedia}
                 onChange={(e) => setGenMedia(e.target.checked)} />
               <span>{t('Generate media')}</span>
+            </label>
+            <label className="ga-wd-free-field"
+              title={t('How the run builds 3D buildings: a Blender hull from the floor plan, or an image-based 3D model')}>
+              <span>{t('Buildings')}</span>
+              <select className="ga-input" value={buildingModels}
+                onChange={(e) => setBuildingModels(e.target.value)}>
+                <option value="hull">{t('Blender (from floor plan)')}</option>
+                <option value="mesh">{t('3D model (img2mesh)')}</option>
+              </select>
             </label>
             <button className="ga-btn ga-btn-primary" disabled={busy || !task.trim() || !model}
               onClick={() => { void start() }}>

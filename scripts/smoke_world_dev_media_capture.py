@@ -10,6 +10,8 @@ POINT each one wraps is replaced by a fake that writes real files into the
 element's real roots (``world_ops.generate_gallery_image_core``,
 ``subjects.generate_building_model``, ``npc_assets.render_profile_image`` /
 ``render_mesh``, ``figure_build.start`` / ``state``, ``make_hairstyle``).
+Runs use building_models "mesh" (the image-based building path = building_models
+'mesh'; the hull path is covered by smoke_world_dev_build.py).
 
 Usage:
     ./.venv/bin/python scripts/smoke_world_dev_media_capture.py
@@ -196,7 +198,7 @@ def removal(arts, label):
 
 
 def step_of(kind, ident, step_id):
-    return next(s for s in wdm.element_steps(kind, ident) if s.id == step_id)
+    return next(s for s in wdm.element_steps(kind, ident, "mesh") if s.id == step_id)
 
 
 def expect_error(fn, label):
@@ -223,7 +225,7 @@ for n in ("Demo A", "Demo B", "Demo C"):
                                                      "gender": "female", "age": 30}, create_new=True))
     get_character_dir(n, create=True)
 
-run = wr.create_run("build", "m", "p", "u", 80, 300000)
+run = wr.create_run("build", "m", "p", "u", 80, 300000, building_models="mesh")
 ctx = wdm.ProduceCtx(run_id=run, row_id=1)
 
 # ── (a) gallery ──────────────────────────────────────────────────────────

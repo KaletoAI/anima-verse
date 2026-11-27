@@ -120,7 +120,7 @@ logger = get_logger(__name__)
 #: ``models.terrain.terrain_sig`` hashes it too — that is the signature the
 #: worldmap poll carries, so a bump reaches running clients and not only the
 #: caches below.
-LAYER_CUT_VERSION = 1
+LAYER_CUT_VERSION = 2
 
 # ── The lattices ────────────────────────────────────────────────────────────
 
@@ -277,11 +277,14 @@ def edge_blend_of(entry: Optional[Dict[str, Any]]) -> float:
 #: says so by dialling ``layout.edge_blend_m`` up.
 FLOOR_EDGE_BLEND_DEFAULT_M = 0.0
 
-#: The floor kind of a CLOSED room that names none. The twin of
+#: The floor kind of a CLOSED room that names none. The default must be a kind
+#: of the shipped shared surface library (shared/surface_textures), because a
+#: kind the library lacks renders untextured; "floor" never existed there
+#: (scripts/smoke_world_dev_build.py guards this). Shared with
 #: ``scene_recipe.DEFAULT_FLOOR_KIND``: a room with walls has a floor, and if
 #: nobody said which one it is still not the meadow outside. An open ZONE that
 #: names no kind contributes no layer at all — there the terrain is the answer.
-FLOOR_KIND_DEFAULT = "floor"
+FLOOR_KIND_DEFAULT = "wooden_floor"
 
 
 class Floor(NamedTuple):

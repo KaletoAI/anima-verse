@@ -334,14 +334,15 @@ def _chat_done(task_id: Any) -> None:
     get_llm_queue().register_chat_done(task_id)
 
 
-def _render_system() -> str:
+def _render_system(building_models: str = "hull") -> str:
     from app.core import prompt_templates
     from app.core.layout_prompt import world_setup_block
     return prompt_templates.render(
         SYSTEM_TEMPLATE,
         world_setup_block=world_setup_block(),
         tool_list="\n".join(f"- {line}" for line in wt.tool_list()),
-        manual_sections=", ".join(wt.MANUAL_SECTIONS))
+        manual_sections=", ".join(wt.MANUAL_SECTIONS),
+        building_models=building_models)
 
 
 def _tag_pattern() -> "re.Pattern[str]":
@@ -489,14 +490,14 @@ class RunManager:
             st.cond.notify_all()
 
     async def _resolve(self, model: str, provider: str, max_tokens: Optional[int],
-                       effort: str = "") -> Tuple[Any, Any, str, Dict[str, float]]:
+                       effort: str = "", building_models: str = "hull") -> Tuple[Any, Any, str, Dict[str, float]]:
         from app.core.llm_cost import resolve_pricing
         resolved = await asyncio.to_thread(self.llm_factory, model, provider, max_tokens)
         if not resolved or resolved[0] is None:
             raise ValueError(f"no provider for model {model!r}")
         # Here, not in the factory: the factory seam keeps its 3 arguments.
         apply_effort(resolved[0], effort)
-        system = await asyncio.to_thread(_render_system)
+        system = await asyncio.to_thread(_render_system, building_models)
         pricing = await resolve_pricing(model, provider)
         return resolved[0], resolved[1], system, pricing
 
@@ -621,12 +622,13 @@ class RunManager:
                     max_tokens: Optional[int] = None,
                     max_steps: int = DEFAULT_MAX_STEPS,
                     max_tokens_total: int = DEFAULT_MAX_TOKENS_TOTAL,
-                    effort: str = "", media_enabled: bool = True) -> str:
+                    effort: str = "", media_enabled: bool = True,
+                    building_models: str = "hull") -> str:
         """Start a run; ValueError (nothing changed) when the task is empty,
-        the effort unknown or the model cannot be resolved, RunOpenError when
-        a run is open. `effort` is stored on the run (EFFORT_LEVELS, '' =
-        the model's default), `media_enabled` is the run's media switch
-        (world_dev_media)."""
+        the effort or building_models unknown, or the model cannot be resolved;
+        RunOpenError when a run is open. `effort` is stored on the run
+        (EFFORT_LEVELS, '' = the model's default), `media_enabled` is the run's
+        media switch (world_dev_media), `building_models` is 'hull' or 'mesh'."""
         from app.models.world import is_world_frozen, set_world_frozen
         task = (task or "").strip()
         if not task:
@@ -634,13 +636,17 @@ class RunManager:
         effort = (effort or "").strip().lower()
         if effort and effort not in EFFORT_LEVELS:
             raise ValueError(f"unknown effort {effort!r} (allowed: {', '.join(EFFORT_LEVELS)})")
+        bm = (building_models or "").strip().lower()
+        if bm not in wr.BUILDING_MODELS:
+            raise ValueError(f"unknown building_models {building_models!r} "
+                             f"(allowed: {', '.join(wr.BUILDING_MODELS)})")
         llm, instance, system, pricing = await self._resolve(model, provider, max_tokens,
-                                                             effort)
+                                                             effort, bm)
         run_id = await asyncio.to_thread(
             wr.create_run, task, model, provider, user_id,
             int(max_steps or DEFAULT_MAX_STEPS),
             int(max_tokens_total or DEFAULT_MAX_TOKENS_TOTAL), max_tokens, effort,
-            bool(media_enabled))
+            bool(media_enabled), bm)
         st = self._state(run_id)
         async with st.lock:
             recorded = False  # was_frozen holds the world's real pre-run state
@@ -696,7 +702,8 @@ class RunManager:
                 (st.llm, st.llm_instance, st.system,
                  st.pricing) = await self._resolve(run["model"], run["provider"],
                                                    run.get("max_tokens"),
-                                                   run.get("effort") or "")
+                                                   run.get("effort") or "",
+                                                   run.get("building_models") or "hull")
                 st.history = await asyncio.to_thread(self._rebuilt_history, run)
             await asyncio.to_thread(wr.set_status, run_id, "running", "")
             # The rows still queued would render a state the new turn may

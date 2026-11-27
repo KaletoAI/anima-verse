@@ -229,13 +229,20 @@ async def free_start(request: Request, user: Dict[str, Any] = Depends(require_ad
             f"unknown effort {effort!r} (allowed: {', '.join(EFFORT_LEVELS)})"))
     # The run's media switch (world_dev_media): default on, a non-bool refused.
     media_enabled = _opt_bool(data.get("generate_media"), "generate_media", default=True)
+    # How the run builds 3D buildings: 'hull' (default, Blender) or 'mesh' (img2mesh).
+    from app.core.world_dev_runs import BUILDING_MODELS
+    raw_bm = data.get("building_models")
+    building_models = "hull" if raw_bm is None or raw_bm == "" else str(raw_bm).strip().lower()
+    if building_models not in BUILDING_MODELS:
+        raise HTTPException(status_code=400, detail=(
+            f"unknown building_models {raw_bm!r} (allowed: {', '.join(BUILDING_MODELS)})"))
     try:
         run_id = await get_run_manager().start(
             str(data.get("task") or ""), model, str(data.get("provider") or ""),
             str((user or {}).get("id") or ""),
             max_tokens=max_tokens if max_tokens and max_tokens > 0 else None,
             max_steps=max_steps, max_tokens_total=max_total, effort=effort,
-            media_enabled=media_enabled)
+            media_enabled=media_enabled, building_models=building_models)
     except RunOpenError as e:
         return _run_conflict(e.run_id, str(e))
     except ValueError as e:

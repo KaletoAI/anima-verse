@@ -146,7 +146,8 @@ logger = get_logger(__name__)
 #: 19 (2026-10-27): Action binding provenance and floor-only access projection.
 #: 20 (2026-10-27): Preserve broken/stale support provenance in action bindings.
 #: 21 (2026-10-31): Source-versioned model URLs and their scene change detection.
-SCENE_RECIPE_VERSION = 21
+#: 22 (2026-11-27): default floor kind of closed rooms/plates = wooden_floor.
+SCENE_RECIPE_VERSION = 22
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
@@ -322,9 +323,10 @@ DIORAMA_CLEARANCE = 0.02
 # a surface laid over a slab (E5a).
 OVERLAY_SURFACE_LIFT = 0.01
 # The floor kind of a level plate without its own entry in map3d.level_floors —
-# and of a CLOSED room that names none (``core.terrain_layers``' twin
-# constant, which is what puts parquet rather than grass under the furniture).
-DEFAULT_FLOOR_KIND = "floor"
+# and of a CLOSED room that names none (shared constant from
+# ``core.terrain_layers``, which must exist in the shared surface library so
+# rooms without an explicit floor still render textured).
+from app.core.terrain_layers import FLOOR_KIND_DEFAULT as DEFAULT_FLOOR_KIND
 
 # The renderers' colour vocabulary — ONE place for both of them (§ B1 style).
 # Editor-only overlay colours (markers, ruler) are deliberately NOT here:

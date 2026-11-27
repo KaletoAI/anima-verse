@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import hashlib
 import json
 import math
 import re
@@ -478,6 +479,8 @@ _MAP3D_PLAN_KEYS = ("stairs", "outline", "level_outlines", "boundary_openings")
 #: map3d keys with no reader-safe agent shape: the floor-plan editor sets them.
 _MAP3D_EDITOR_KEYS = ("elevator", "elevator_kind", "level_floors", "wall_kind",
                       "level_walls", "area_model", "area_detail", "hull_openings")
+#: map3d keys written by build_hull.
+_MAP3D_HULL_KEYS = ("hull_description",)
 #: Longest location or room name a tool stores.
 MAX_NAME_CHARS = 120
 #: The decency values the location writers keep ("" = inherit / public).
@@ -1066,7 +1069,7 @@ def _drop_map3d_echo(lid: str, patch: Dict[str, Any]) -> Dict[str, Any]:
     m3 = patch.get("map3d")
     if not isinstance(m3, dict):
         return patch
-    echo_keys = [k for k in (*_MAP3D_PLAN_KEYS, *_MAP3D_EDITOR_KEYS) if k in m3]
+    echo_keys = [k for k in (*_MAP3D_PLAN_KEYS, *_MAP3D_EDITOR_KEYS, *_MAP3D_HULL_KEYS) if k in m3]
     if not echo_keys and "plan_width_m" not in m3:
         return patch
     stored = _stored_map3d(lid)
@@ -1120,6 +1123,8 @@ def _check_location_fields(data: Dict[str, Any], what: str,
                                   f"set_room_layout (read_manual layout)")
             if key in _MAP3D_EDITOR_KEYS:
                 raise ToolRefusal(f"map3d.{key} is set in the floor-plan editor")
+            if key in _MAP3D_HULL_KEYS:
+                raise ToolRefusal(f"map3d.{key} is set by build_hull — use build_hull")
         _only_keys(m3, _MAP3D_KEYS, "map3d")
         if m3.get("boundary") is not None:
             _ring(m3["boundary"], "map3d.boundary")
@@ -1810,9 +1815,9 @@ def _quest_param_text(p: Dict[str, Any]) -> str:
 #: The value lists list_catalog answers (the refusals that list values read
 #: the same sources).
 CATALOG_NAMES = ("stats", "event_categories", "event_settings", "room_types",
-                 "furniture_kits", "surface_kinds", "door_props", "terrain_kinds",
-                 "item_categories", "secret_categories", "quest_types", "quest_roles",
-                 "skills")
+                 "furniture_kits", "surface_kinds", "hull_styles", "door_props",
+                 "terrain_kinds", "item_categories", "secret_categories",
+                 "quest_types", "quest_roles", "skills")
 
 
 def _catalog_lines(name: str) -> List[str]:
@@ -1865,6 +1870,15 @@ def _catalog_lines(name: str) -> List[str]:
     if name == "surface_kinds":
         from app.core.surface_textures import library_kinds
         return sorted(library_kinds())
+    if name == "hull_styles":
+        from app.core.hull_styles import load_styles
+        out = []
+        for sid, style in sorted(load_styles().items()):
+            forms = "|".join((style.get("roof") or {}).get("forms") or [])
+            out.append(f'{sid} "{_label(style.get("name") or sid, 40)}" — '
+                       f'{_short(style.get("description"), 120)}'
+                       + (f" (roofs: {forms})" if forms else ""))
+        return out
     if name == "door_props":
         return _door_prop_ids()
     if name == "terrain_kinds":
@@ -3364,6 +3378,140 @@ def _layout_pass(layout: Dict[str, Any], loc: Dict[str, Any],
     return normalized, kept + _layout_reach_warnings(normalized, loc)
 
 
+def _layout_contour(normalized: Dict[str, Any], loc: Dict[str, Any]) -> Tuple[List[str], bool]:
+    """Derive and attach the building contour (outline / level_outlines) from
+    the closed above-ground rooms (level >= 0) as they will be stored.
+
+    Deliberate difference from ``app/core/layout_apply.py::sanitize_layout(derive_contour=True)``:
+    ``sanitize_layout`` passes ALL rooms (both closed and open rooms, plus
+    omitted rooms with layouts) to ``align_rooms`` / ``derive_contour`` (which
+    skips only cellars at ``level < 0``), and also emits ``room_not_placed``
+    and ``hull_style_unknown`` warnings. In World Dev, the contour is derived
+    ONLY from closed rooms (``not layout.get("no_walls")``) at ``level >= 0``:
+    open rooms (yard, terrace, market stall) and cellars are excluded because
+    the contour is the hull's footprint (``build_hull`` builds facade and roof
+    around it), and including open areas would wrap a building shell around
+    open ground.
+
+    Returns ``(notes, drop_hull)``. When no closed above-ground room remains,
+    ``normalized["outline"]`` is set to ``[]`` and ``normalized["level_outlines"]``
+    to ``{}`` so any previously stored contour is cleared (without touching
+    ``boundary``); if ``loc["map3d"]`` also holds a ``hull_description``,
+    ``drop_hull`` is True so ``_set_room_layout`` removes it in the same
+    journaled step. Otherwise closed rooms are aligned within 0.3 m via
+    ``layout_contour`` and contoured; contour errors refuse the whole call.
+    """
+    from app.core.layout_contour import align_rooms, derive_contour, seed_boundary
+    from app.models.world import GROUND_ROOM_ID, is_floor_room
+
+    plan_entries = normalized.get("rooms") or []
+    plan_ids = {str(e.get("room_id") or "") for e in plan_entries}
+
+    closed_meta: List[Tuple[str, Dict[str, Any], Dict[str, Any]]] = []
+    for entry in plan_entries:
+        lay = entry.get("layout")
+        if not isinstance(lay, dict) or lay.get("no_walls"):
+            continue
+        if int(lay.get("level", 0) or 0) < 0:
+            continue
+        closed_meta.append(("plan", entry, {
+            "room_id": entry["room_id"],
+            "name": entry.get("name") or entry["room_id"],
+            "layout": lay,
+        }))
+
+    for room in loc.get("rooms") or []:
+        if not isinstance(room, dict):
+            continue
+        rid = str(room.get("id") or "")
+        if not rid or rid in plan_ids or rid == GROUND_ROOM_ID or is_floor_room(rid):
+            continue
+        lay = room.get("layout")
+        if not isinstance(lay, dict) or lay.get("no_walls"):
+            continue
+        if int(lay.get("level", 0) or 0) < 0:
+            continue
+        closed_meta.append(("omitted", room, {
+            "room_id": rid,
+            "name": str(room.get("name") or rid),
+            "layout": lay,
+        }))
+
+    if not closed_meta:
+        normalized["outline"] = []
+        normalized["level_outlines"] = {}
+        old_m3 = loc.get("map3d") or {}
+        had_contour = bool(old_m3.get("outline") or old_m3.get("level_outlines"))
+        had_hull = bool(old_m3.get("hull_description"))
+        if had_contour and had_hull:
+            return ["building contour cleared (no closed room left); hull request dropped"], True
+        if had_contour:
+            return ["building contour cleared (no closed room left)"], False
+        if had_hull:
+            return ["hull request dropped"], True
+        return [], False
+
+    raw_closed = [item[2] for item in closed_meta]
+    aligned, align_warnings = align_rooms(raw_closed)
+    contour = derive_contour(aligned)
+    if contour["errors"]:
+        msgs = "; ".join(str(e.get("message") or e.get("code"))
+                         for e in contour["errors"])
+        raise ToolRefusal(
+            f"the closed rooms do not form one building, nothing was written: {msgs}; "
+            "a place is ONE building — rooms must touch along walls without gaps or "
+            "holes and an upper storey must stand on the one below; put a separate "
+            "building into its own place, or make its rooms open (open: true)"
+        )
+
+    moved_names: List[str] = []
+    max_delta = 0.0
+    for (kind, ref, orig_entry), aligned_entry in zip(closed_meta, aligned):
+        old_lay = orig_entry["layout"]
+        new_lay = aligned_entry["layout"]
+        deltas = [abs(float(new_lay[k]) - float(old_lay[k])) for k in ("x", "y", "w", "d")]
+        room_delta = max(deltas) if deltas else 0.0
+        outline_changed = new_lay.get("outline") != old_lay.get("outline")
+        if room_delta > 0.0 or outline_changed:
+            if room_delta > max_delta:
+                max_delta = room_delta
+            moved_names.append(str(orig_entry["name"]))
+            if kind == "plan":
+                for k in ("x", "y", "w", "d"):
+                    ref["layout"][k] = new_lay[k]
+                if "outline" in new_lay:
+                    ref["layout"]["outline"] = copy.deepcopy(new_lay["outline"])
+            else:
+                updated_lay = copy.deepcopy(old_lay)
+                for k in ("x", "y", "w", "d"):
+                    updated_lay[k] = new_lay[k]
+                if "outline" in new_lay:
+                    updated_lay["outline"] = copy.deepcopy(new_lay["outline"])
+                normalized["rooms"].append({
+                    "room_id": orig_entry["room_id"],
+                    "is_new": False,
+                    "name": orig_entry["name"],
+                    "description": "",
+                    "layout": updated_lay,
+                })
+
+    normalized["outline"] = contour["outline"]
+    normalized["level_outlines"] = contour["level_outlines"]
+    if contour["outline"]:
+        normalized["boundary"] = seed_boundary(contour["outline"])
+
+    notes: List[str] = []
+    if moved_names:
+        notes.append(
+            f"aligned {len(moved_names)} room(s) to the building contour "
+            f"(moved by up to {round(max_delta, 2):.2f} m): {', '.join(moved_names)}"
+        )
+    for w in align_warnings:
+        if w.get("code") == "room_too_small":
+            notes.append(str(w.get("message") or w.get("code")))
+    return notes, False
+
+
 #: Scene finding kinds reported back after layout, furnishing and prop placement.
 _SCENE_FINDING_KINDS = frozenset({
     "room_unreachable",
@@ -3430,8 +3578,9 @@ def _set_room_layout(step: _Step, args: Dict[str, Any]) -> str:
     if not isinstance(layout, dict) or not layout:
         raise ToolRefusal("'layout' must be an object with 'rooms' (read_manual layout)")
     if "hull" in layout:
-        raise ToolRefusal("'hull' is not built here — the building panel's button "
-                          "generates the hull; leave it out")
+        raise ToolRefusal("'hull' is not part of a floor plan — build the outer shell "
+                          "with build_hull{location_id, style} after the plan "
+                          "(the building panel's button does the same)")
     _only_keys(layout, _LAYOUT_KEYS, "layout")
 
     def context() -> Tuple[Dict[str, Any], List[str]]:
@@ -3441,13 +3590,17 @@ def _set_room_layout(step: _Step, args: Dict[str, Any]) -> str:
             raise ToolRefusal(f"no location {lid!r} — use find_locations")
 
     # Cheap checks before the backup: a refused first write copies nothing.
-    _layout_pass(layout, *context())
+    pre_cur, pre_kinds = context()
+    pre_norm, _ = _layout_pass(layout, pre_cur, pre_kinds)
+    _layout_contour(pre_norm, pre_cur)
     step.prepare()
     with world_write_lock:
         # The ids a plan mints for new rooms are per pass, so the write uses
         # the pass taken under the lock; a room deleted meanwhile refuses.
         cur, kinds = context()
         normalized, kept = _layout_pass(layout, cur, kinds)
+        contour_notes, drop_hull = _layout_contour(normalized, cur)
+        kept = kept + contour_notes
         before = copy.deepcopy(cur)
         step.begin("location", lid, {"op": "restore_location", "id": lid,
                                      "before": before})
@@ -3471,6 +3624,16 @@ def _set_room_layout(step: _Step, args: Dict[str, Any]) -> str:
                 if got != normalized["storey_height_m"]:
                     raise RuntimeError(f"storey_height_m {normalized['storey_height_m']} "
                                        f"was not stored (got {got!r})")
+            if drop_hull:
+                m3 = dict((get_location_by_id(lid) or {}).get("map3d") or {})
+                if "hull_description" in m3:
+                    m3.pop("hull_description", None)
+                    update_location_with_extras(lid, {"map3d": m3})
+                    got_hd = ((get_location_by_id(lid) or {}).get("map3d") or {}).get(
+                        "hull_description")
+                    if got_hd is not None:
+                        raise RuntimeError(f"hull_description was not cleared for location {lid} "
+                                           f"(got {got_hd!r})")
         after = get_location_by_id(lid) or {}
         b, w = wu.diff_keys(before, after)
         step.attach(lid, {"op": "restore_location", "id": lid, "before": b},
@@ -3486,6 +3649,127 @@ def _set_room_layout(step: _Step, args: Dict[str, Any]) -> str:
             + _warn_suffix(kept)
             + _findings_suffix(_scene_findings(lid))
             + completeness.location_suffix(step.ctx.run_id, after))
+        step.complete(w, line)
+    return line
+
+
+@_tool("build_hull", True, "build_hull{location_id, style, roof_form?}",
+       "request the outer shell (hull: facade, roof, windows) of a place's building "
+       "in a fixed style — built by Blender after the turn; needs a floor plan with "
+       "closed rooms — read_manual layout first")
+def _build_hull(step: _Step, args: Dict[str, Any]) -> str:
+    from app.blender import runner
+    from app.core import hull_geometry, hull_model, hull_styles
+    from app.core.hull_facts import hull_facts
+    from app.core.world_ops import update_location_with_extras
+    from app.models.world import get_location_by_id, world_write_lock
+
+    run_row = wr.get_run(step.ctx.run_id)
+    if run_row and run_row.get("building_models") == "mesh":
+        raise ToolRefusal(
+            "this run builds 3D-model buildings (img2mesh); start a run with "
+            "Buildings = Blender to build hulls"
+        )
+    _only_keys(args, {"location_id", "style", "roof_form"}, "build_hull")
+    lid = _str(args, "location_id", required=True)
+    style_id = _str(args, "style", required=True)
+    roof_form = _str(args, "roof_form")
+
+    styles = hull_styles.load_styles()
+    if style_id not in styles:
+        raise ToolRefusal(
+            f"unknown style {style_id!r} — one of: "
+            + ", ".join(sorted(styles))
+            + " (list_catalog hull_styles)"
+        )
+    style_doc = styles[style_id]
+    allowed_forms = list((style_doc.get("roof") or {}).get("forms") or [])
+    if roof_form is not None:
+        if roof_form not in hull_styles.ROOF_FORMS:
+            raise ToolRefusal(
+                f"unknown roof_form {roof_form!r} — one of: "
+                + ", ".join(hull_styles.ROOF_FORMS)
+            )
+        if allowed_forms and roof_form not in allowed_forms:
+            raise ToolRefusal(
+                f"roof_form {roof_form!r} is not allowed for style {style_id!r} — one of: "
+                + ", ".join(allowed_forms)
+            )
+
+    seed = int(hashlib.sha256(lid.encode()).hexdigest()[:8], 16) % 2**31
+    raw_desc: Dict[str, Any] = {
+        "style": style_id,
+        "seed": seed,
+        "overrides": {"roof_form": roof_form} if roof_form is not None else {},
+    }
+    description = hull_styles.validate_description(raw_desc, styles)
+    if roof_form is not None and (description.get("overrides") or {}).get("roof_form") != roof_form:
+        raise ToolRefusal(
+            f"roof_form {roof_form!r} is not accepted for style {style_id!r}"
+        )
+
+    def validate_location() -> Dict[str, Any]:
+        loc = get_location_by_id(lid)
+        if loc is None:
+            raise ToolRefusal(f"no location {lid!r} — use find_locations")
+        facts = hull_facts(loc, lid, description=description)
+        if not facts.get("ok"):
+            err = str(facts.get("error") or "")
+            if err == "no_outline":
+                raise ToolRefusal(
+                    "the place has no building contour yet — set_room_layout with at least one closed room first"
+                )
+            raise ToolRefusal(f"cannot build hull for location {lid!r}: {err or 'invalid geometry'}")
+        try:
+            hull_geometry.fit_budget(
+                facts, style_doc, description,
+                resolved=hull_model.resolved_materials(style_doc),
+            )
+        except ValueError as err:
+            if str(err) == "hull too large":
+                raise ToolRefusal("the building is too large for a hull in this style")
+            raise ToolRefusal(f"cannot build hull: {err}")
+        return loc
+
+    # Cheap pre-check before the backup.
+    validate_location()
+    step.prepare()
+    with world_write_lock:
+        cur = validate_location()
+        before = copy.deepcopy(cur)
+        step.begin("location", lid, {"op": "restore_location", "id": lid,
+                                     "before": before})
+
+        def reconcile():
+            b, w = wu.diff_keys(before, get_location_by_id(lid))
+            if not b:
+                return None
+            return lid, {"op": "restore_location", "id": lid, "before": b}, w
+
+        with step.writing(reconcile):
+            m3 = {**(cur.get("map3d") or {}), "hull_description": description}
+            update_location_with_extras(lid, {"map3d": m3})
+            got = ((get_location_by_id(lid) or {}).get("map3d") or {}).get("hull_description")
+            if got != description:
+                raise RuntimeError(f"hull_description was not stored for location {lid} (got {got!r})")
+        after = get_location_by_id(lid) or {}
+        b, w = wu.diff_keys(before, after)
+        step.attach(lid, {"op": "restore_location", "id": lid, "before": b},
+                    before=b)
+        shown_roof = ((description.get("overrides") or {}).get("roof_form")
+                      or ("|".join(allowed_forms) if allowed_forms else "default"))
+        line = (
+            f'hull requested for location {lid} "{after.get("name") or ""}": '
+            f'style {style_id}, roof {shown_roof}, seed {seed} '
+            f'— Blender builds it after this turn (media lane)'
+            + ("" if b else " — no change")
+        )
+        if not runner.is_available():
+            line += "; warning: Blender is not available on this server — the hull will be skipped"
+        run_row = wr.get_run(step.ctx.run_id)
+        if not (run_row and run_row.get("media_enabled")):
+            line += "; warning: media are off for this run — the hull is built only when they are switched on"
+        line = _cut(line)
         step.complete(w, line)
     return line
 

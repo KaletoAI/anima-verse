@@ -333,24 +333,67 @@ def _has_floor_plan(loc: Dict[str, Any]) -> bool:
         return True
 
 
+def _location_needs_hull(loc: Dict[str, Any]) -> bool:
+    """True when the location has at least one closed above-ground room
+    (layout dict, not no_walls, level >= 0, not ground/corridor) and no stored
+    ``map3d.hull_description`` with a non-empty style."""
+    from app.models.world import GROUND_ROOM_ID, is_floor_room
+    has_closed = False
+    for r in loc.get("rooms") or []:
+        if not isinstance(r, dict):
+            continue
+        rid = str(r.get("id") or "")
+        if not rid or rid == GROUND_ROOM_ID or is_floor_room(rid):
+            continue
+        lay = r.get("layout")
+        if not isinstance(lay, dict) or lay.get("no_walls"):
+            continue
+        try:
+            if int(lay.get("level", 0) or 0) < 0:
+                continue
+        except (TypeError, ValueError):
+            continue
+        has_closed = True
+        break
+    if not has_closed:
+        return False
+    hd = (loc.get("map3d") or {}).get("hull_description")
+    return not (isinstance(hd, dict) and isinstance(hd.get("style"), str) and hd["style"].strip())
+
+
+def _wants_hull(run_id: str, scope: Optional[Set[str]],
+                building_models: Optional[str] = None) -> bool:
+    """True when this run expects a building hull for the location: the run's
+    mode is ``hull`` and the run created or re-laid out the location."""
+    if building_models is None:
+        from app.core import world_dev_runs as wr
+        building_models = wr.building_models_of(run_id)
+    return building_models == "hull" and (scope is None or "layout" in scope)
+
+
 def location_gaps(loc: Dict[str, Any], created: bool = True,
-                  floor_plan: bool = True) -> List[str]:
+                  floor_plan: bool = True,
+                  check_hull: bool = False) -> List[str]:
     """The gaps of a stored location. ``created`` False (the run only updated
-    it and wrote no x/z for it) = nothing is checked. ``floor_plan`` False
-    (the run did not create it) skips ``no floor plan`` (E5): a place with
-    at least one real room (not the ground, not a storey corridor) and
-    nothing the scene composer can draw."""
-    if not created:
-        return []
+    it and wrote no x/z for it) skips placement and floor-plan checks.
+    ``floor_plan`` False (the run did not create it) skips ``no floor plan``
+    (E5): a place with at least one real room (not the ground, not a storey
+    corridor) and nothing the scene composer can draw. ``check_hull`` True
+    (run in ``hull`` mode and created or re-laid out by this run) reports
+    ``no building hull (build_hull)`` when closed rooms exist without a
+    ``map3d.hull_description``."""
     from app.models.world import GROUND_ROOM_ID, is_floor_room
     gaps: List[str] = []
-    if loc.get("pos_x") is None or loc.get("pos_z") is None:
-        gaps.append("unplaced (no x/z) — not a travel target")
-    real_rooms = [r for r in loc.get("rooms") or [] if isinstance(r, dict)
-                  and str(r.get("id") or "") != GROUND_ROOM_ID
-                  and not is_floor_room(str(r.get("id") or ""))]
-    if floor_plan and real_rooms and not _has_floor_plan(loc):
-        gaps.append("no floor plan (set_room_layout)")
+    if created:
+        if loc.get("pos_x") is None or loc.get("pos_z") is None:
+            gaps.append("unplaced (no x/z) — not a travel target")
+        real_rooms = [r for r in loc.get("rooms") or [] if isinstance(r, dict)
+                      and str(r.get("id") or "") != GROUND_ROOM_ID
+                      and not is_floor_room(str(r.get("id") or ""))]
+        if floor_plan and real_rooms and not _has_floor_plan(loc):
+            gaps.append("no floor plan (set_room_layout)")
+    if check_hull and _location_needs_hull(loc):
+        gaps.append("no building hull (build_hull)")
     return gaps
 
 
@@ -400,8 +443,11 @@ def run_elements(run_id: str) -> List[Tuple[str, str, Optional[Set[str]]]]:
             touched.add(key)
             if kind == "character" and op in GROUP_OF_OP:
                 groups[key].add(GROUP_OF_OP[op])
-            elif kind == "location" and op in _POSITION_OPS:
-                groups[key].add("position")
+            elif kind == "location":
+                if op in _POSITION_OPS:
+                    groups[key].add("position")
+                if done and row.get("tool") == "set_room_layout":
+                    groups[key].add("layout")
     # A terrain or height area is an element only when the run created it
     # (it has no gaps); an updated one is not listed. A character or
     # location counts when created or really changed (see the module doc).
@@ -426,7 +472,8 @@ def character_suffix(run_id: str, name: str) -> str:
 def location_suffix(run_id: str, loc: Dict[str, Any]) -> str:
     scope = element_scope(run_id, "location", str(loc.get("id") or ""))
     return suffix(location_gaps(loc, scope is None or "position" in scope,
-                                floor_plan=scope is None))
+                                floor_plan=scope is None,
+                                check_hull=_wants_hull(run_id, scope)))
 
 
 def _exists(kind: str, ident: str) -> Optional[Dict[str, Any]]:
@@ -456,10 +503,12 @@ def _exists(kind: str, ident: str) -> Optional[Dict[str, Any]]:
 def check_run_lines(run_id: str) -> Tuple[List[str], int, int]:
     """(one line per element with gaps, complete count, element count) of
     every element the run created or changed that still exists."""
+    from app.core import world_dev_runs as wr
     from app.models.character import no_config_auto_create
     lines: List[str] = []
     total = complete = 0
     media_on: Optional[bool] = None
+    building_models = wr.building_models_of(run_id)
     for kind, ident, scope in run_elements(run_id):
         row = _exists(kind, ident)
         if row is None:
@@ -472,7 +521,8 @@ def check_run_lines(run_id: str) -> Tuple[List[str], int, int]:
             label = f'character "{ident}"'
         elif kind == "location":
             gaps = location_gaps(row, scope is None or "position" in scope,
-                                 floor_plan=scope is None)
+                                 floor_plan=scope is None,
+                                 check_hull=_wants_hull(run_id, scope, building_models))
             label = f'location {ident} "{row.get("name") or ""}"'
         elif kind == "world_prop":
             gaps, label = [], f"world prop {ident}"

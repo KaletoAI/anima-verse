@@ -397,17 +397,31 @@ def _image_rooms(loc: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
-def _location_steps(loc: Dict[str, Any]) -> List[StepSpec]:
-    front_fp = _gallery_fp(loc, "", "building-front")
-    steps = [StepSpec("building-front", "building front", ("location",), front_fp, "gallery")]
+def _location_steps(loc: Dict[str, Any], building_models: str = "hull") -> List[StepSpec]:
+    steps: List[StepSpec] = []
+    front_fp = _gallery_fp(loc, "", "building-front") if building_models == "mesh" else ""
+    if building_models == "mesh":
+        steps.append(StepSpec("building-front", "building front", ("location",), front_fp, "gallery"))
     for room_id, label in [("", "")] + [(str(r["id"]), str(r.get("name") or r["id"]))
                                        for r in _image_rooms(loc)]:
         for kind in ("day", "night"):
             steps.append(StepSpec(f"{kind}:{room_id}",
                                   f"{kind} image" + (f" — {label}" if label else ""),
                                   ("location",), _gallery_fp(loc, room_id, kind), "gallery"))
-    # The automatic mesh path meshes from the building front alone (M4).
-    steps.append(StepSpec("mesh", "3D model", ("mesh_building",), front_fp, "location_mesh"))
+    if building_models == "mesh":
+        # The automatic mesh path meshes from the building front alone (M4).
+        steps.append(StepSpec("mesh", "3D model", ("mesh_building",), front_fp, "location_mesh"))
+    else:
+        hull_desc = (loc.get("map3d") or {}).get("hull_description")
+        if isinstance(hull_desc, dict) and isinstance(hull_desc.get("style"), str) and hull_desc["style"].strip():
+            from app.core.hull_facts import hull_facts
+            loc_id = str(loc.get("id") or "")
+            facts = hull_facts(loc, loc_id, description=hull_desc)
+            # Never plan a hull step when hull_facts is not ok (e.g. no_outline):
+            # a hull that cannot be built must not be queued.
+            if facts.get("ok"):
+                hull_fp = _sha(["hull", hull_desc, facts["fingerprint"]])
+                steps.append(StepSpec("hull", "building hull", (), hull_fp, "location_hull"))
     return steps
 
 
@@ -460,15 +474,16 @@ def _character_steps(name: str, profile: Dict[str, Any]) -> List[StepSpec]:
     return steps
 
 
-def _read_element(kind: str, target_id: str) -> Tuple[Optional[List[StepSpec]],
-                                                      Optional[Dict[str, Any]]]:
+def _read_element(kind: str, target_id: str,
+                  building_models: str = "hull") -> Tuple[Optional[List[StepSpec]],
+                                                          Optional[Dict[str, Any]]]:
     """(steps, profile) of an element: :func:`element_steps` plus the
     character profile the steps were built from (None for a location), so
     :func:`plan` checks the outputs on the SAME read (no second load)."""
     if kind == "location":
         from app.models.world import get_location_by_id
         loc = get_location_by_id(str(target_id))
-        return (_location_steps(loc) if loc else None), None
+        return (_location_steps(loc, building_models) if loc else None), None
     if kind == "character":
         from app.models.character import (character_row_exists, get_character_profile,
                                           no_config_auto_create)
@@ -483,10 +498,11 @@ def _read_element(kind: str, target_id: str) -> Tuple[Optional[List[StepSpec]],
     return None, None
 
 
-def element_steps(kind: str, target_id: str) -> Optional[List[StepSpec]]:
+def element_steps(kind: str, target_id: str,
+                  building_models: str = "hull") -> Optional[List[StepSpec]]:
     """The media steps of an element in run order, None when it does not
     exist (or is no media kind). Read-only; raises what the readers raise."""
-    return _read_element(kind, target_id)[0]
+    return _read_element(kind, target_id, building_models)[0]
 
 
 def note_touch(run_id: str, kind: str, target_id: Optional[str],
@@ -510,7 +526,7 @@ def note_touch(run_id: str, kind: str, target_id: Optional[str],
             return
         if (kind, ident) in wr.baselines(run_id):
             return
-        steps = element_steps(kind, ident)
+        steps = element_steps(kind, ident, wr.building_models_of(run_id))
         if steps is None:
             logger.warning("World Dev media: %s %s touched by run %s does not exist and the "
                            "step is no create — baseline 'created'", kind, ident, run_id)
@@ -550,7 +566,7 @@ def note_check_touch(run_id: str, kind: str, target_id: Optional[str],
     try:
         if (kind, ident) in wr.baselines(run_id):
             return
-        steps = element_steps(kind, ident)
+        steps = element_steps(kind, ident, wr.building_models_of(run_id))
         if steps is None:
             return
         wr.note_baseline(run_id, kind, ident,
@@ -576,7 +592,7 @@ def due_step_ids(run_id: str, kind: str, target_id: str) -> Set[str]:
         bases = wr.baselines(run_id)
         if (kind, ident) not in bases:
             return set()
-        steps, profile = _read_element(kind, ident)
+        steps, profile = _read_element(kind, ident, wr.building_models_of(run_id))
         if not steps:
             return set()
         missing = _missing_outputs(kind, ident, steps, profile)
@@ -816,12 +832,14 @@ def _missing_map(run_id: str) -> Dict[Tuple[str, str], Set[str]]:
     plan nothing; an element whose steps cannot be read is left out (then
     :func:`plan` checks it itself). Read-only."""
     from app.core import world_dev_runs as wr
-    if not _plannable(wr.get_run(run_id)):
+    run = wr.get_run(run_id)
+    if not _plannable(run):
         return {}
+    bm = (run or {}).get("building_models") or "hull"
     out: Dict[Tuple[str, str], Set[str]] = {}
     for kind, ident in wr.baselines(run_id):
         try:
-            steps, profile = _read_element(kind, ident)
+            steps, profile = _read_element(kind, ident, bm)
         except Exception:  # noqa: BLE001 — plan() reads it again and logs
             continue
         if steps:
@@ -852,12 +870,14 @@ def plan(run_id: str, missing: Optional[Dict[Tuple[str, str], Set[str]]] = None
     (``schedule`` computes it outside the media lock); an element missing
     from it is checked here."""
     from app.core import world_dev_runs as wr
-    if not _plannable(wr.get_run(run_id)):
+    run = wr.get_run(run_id)
+    if not _plannable(run):
         return []
+    bm = (run or {}).get("building_models") or "hull"
     out: List[Tuple[str, str, List[StepSpec]]] = []
     for (kind, ident), base in wr.baselines(run_id).items():
         try:
-            steps, profile = _read_element(kind, ident)
+            steps, profile = _read_element(kind, ident, bm)
         except Exception:  # noqa: BLE001 — one element never blocks the others
             logger.exception("World Dev media: steps of %s %s not readable", kind, ident)
             continue
@@ -897,6 +917,8 @@ GATE_ONLY_FAILED = ("{name}: only failed steps are left ({labels}) — a manual 
                     "(Characters → Figure)")
 GATE_PLAN_UNREADABLE = "the Build plan of {name} could not be read ({error})"
 GATE_ROUTE_UNREADABLE = "the route of {occasion} could not be read ({error})"
+GATE_BLENDER_UNAVAILABLE = "Blender is not available — the hull is built locally"
+GATE_BLENDER_UNREADABLE = "Blender availability could not be read ({error})"
 
 #: The Build mode of the media lane's ``build`` step, read by the producer AND the gate so they
 #: agree: True — a MANUAL Build (``figure_build.start(automatic=False)``, what the Figure tab's
@@ -1157,14 +1179,19 @@ def _err(e: BaseException) -> str:
 
 def step_gate(run: Any, kind: str, target_id: str, step: StepSpec) -> Optional[str]:
     """None = the step may run; else the note it is skipped with (never a
-    retry). In order: the run's media switch, the media master switch
-    (``image_generation.enabled``), for a character its pause of automatic
-    generation, for a Build in the automatic mode (``BUILD_EXPLICIT`` False
-    only) the world's automatic outfit renders
+    retry). In order: the run's media switch; for a location hull step
+    (``kind == "location"`` and ``step.id == "hull"``), only local Blender
+    availability (``runner.is_available()``) — the media master switch
+    (``image_generation.enabled``) does NOT apply because a hull is a local CPU
+    Blender job rather than a routed media generation; for every other step,
+    the media master switch (``image_generation.enabled``), for a character its
+    pause of automatic generation, for a Build in the automatic mode
+    (``BUILD_EXPLICIT`` False only) the world's automatic outfit renders
     (``model_refs.auto_renders_enabled``) and then "Build automatically",
-    then ``route_check`` for every occasion of ``step_occasions`` (the first failing one wins; a Build
-    with nothing to run gives ``build_gate``'s note). ``run`` is the run dict
-    or its id. Never raises: a reader error is a note."""
+    then ``route_check`` for every occasion of ``step_occasions`` (the first
+    failing one wins; a Build with nothing to run gives ``build_gate``'s note).
+    ``run`` is the run dict or its id. Never raises: a reader error is a
+    note."""
     name = str(target_id)
     character = name if kind == "character" else ""
     try:
@@ -1175,6 +1202,16 @@ def step_gate(run: Any, kind: str, target_id: str, step: StepSpec) -> Optional[s
         return GATE_RUN_UNREADABLE.format(error=_err(e))
     if not row or not row.get("media_enabled"):
         return GATE_RUN_OFF
+    if kind == "location" and step.id == "hull":
+        try:
+            from app.blender import runner
+            available = runner.is_available()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("World Dev media: Blender availability not readable", exc_info=True)
+            return GATE_BLENDER_UNREADABLE.format(error=_err(e))
+        if not available:
+            return GATE_BLENDER_UNAVAILABLE
+        return None
     try:
         from app.imagegen.base import media_generation_enabled
         enabled = media_generation_enabled()
@@ -1809,6 +1846,48 @@ def _produce_location_mesh(ctx: ProduceCtx, kind: str, target_id: str,
     return note, arts + created_dir()
 
 
+def _produce_location_hull(ctx: ProduceCtx, kind: str, target_id: str,
+                           step: StepSpec) -> Tuple[str, List[dict]]:
+    """The deterministic building hull (``hull_model.generate_hull``): local
+    Blender build, captured via the location's model dir diff. Every file that
+    existed in the model dir before the step is passed in ``keep`` so nothing
+    pre-existing is pruned (a discard could not restore a deleted file)."""
+    from app.core import hull_model, location_model3d
+    from app.models.world import get_location_by_id
+    lid = str(target_id)
+    loc = get_location_by_id(lid)
+    desc = ((loc or {}).get("map3d") or {}).get("hull_description")
+    if not isinstance(desc, dict) or not (isinstance(desc.get("style"), str) and desc["style"].strip()):
+        raise StepError("skipped", "no hull requested")
+    if not location_model3d.claim_job(lid, kind="hull"):
+        raise StepError("skipped", "a hull build is already running")
+    try:
+        mdir = location_model3d.model_dir(lid)
+        parent = mdir.parent
+        existed = parent.is_dir()
+        keep = tuple(sorted(p.name for p in mdir.iterdir() if p.is_file())) if mdir.is_dir() else ()
+
+        def created_dir() -> List[dict]:
+            if existed or parent.is_symlink() or not parent.is_dir():
+                return []
+            return [{"type": "dir", "path": _rel(parent)}]
+
+        def run() -> str:
+            res = hull_model.generate_hull(lid, desc, keep=keep)
+            if not (res or {}).get("ok"):
+                raise StepError("failed", str((res or {}).get("error") or "hull build failed"))
+            return ""
+
+        try:
+            note, arts = _captured(ctx, kind, lid, run)
+        except StepError as e:
+            e.artefacts += created_dir()
+            raise
+        return note, arts + created_dir()
+    finally:
+        location_model3d.release_job(lid, kind="hull")
+
+
 def _produce_portrait(ctx: ProduceCtx, kind: str, target_id: str,
                       step: StepSpec) -> Tuple[str, List[dict]]:
     """The portrait (``npc_assets.render_profile_image``: the request of the
@@ -1930,6 +2009,7 @@ def _produce_hairstyle(ctx: ProduceCtx, kind: str, target_id: str,
 PRODUCERS: Dict[str, Callable[[ProduceCtx, str, str, StepSpec], Tuple[str, List[dict]]]] = {
     "gallery": _produce_gallery,
     "location_mesh": _produce_location_mesh,
+    "location_hull": _produce_location_hull,
     "portrait": _produce_portrait,
     "build": _produce_build,
     "mesh": _produce_mesh,
@@ -2420,6 +2500,7 @@ def _run_row(row: Dict[str, Any], live: Optional[Dict[str, Any]] = None) -> str:
     produced: List[dict] = list(row.get("produced") or [])
     live.update(produced=produced, arts=[], steps=steps)
     ctx = ProduceCtx(run_id, row_id)
+    bm = wr.building_models_of(run_id)
     for step in steps:
         if step.get("status") in _FINISHED_STEP_STATUSES:
             continue
@@ -2428,7 +2509,7 @@ def _run_row(row: Dict[str, Any], live: Optional[Dict[str, Any]] = None) -> str:
             if status:
                 return status
         try:
-            current = element_steps(kind, ident)
+            current = element_steps(kind, ident, bm)
         except Exception as e:  # noqa: BLE001 — a reader error skips the step, never renders
             logger.warning("World Dev media: steps of %s %s not readable", kind, ident, exc_info=True)
             current, note = [], f"the media steps could not be read ({_err(e)})"

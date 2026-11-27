@@ -48,7 +48,7 @@ Access rules (who may enter) are not set here.
 ## Editor fields (`data` / `patch`)
 
 The value lists come from `list_catalog{name}` (`stats`, `event_categories`, `event_settings`,
-`room_types`, `furniture_kits`, `surface_kinds`, `door_props`, `terrain_kinds`,
+`room_types`, `furniture_kits`, `surface_kinds`, `hull_styles`, `door_props`, `terrain_kinds`,
 `item_categories`). A value the editor would clamp, drop or rewrite is refused
 (`'<field>' would be stored as … — send that value or leave it out`), never changed silently.
 
