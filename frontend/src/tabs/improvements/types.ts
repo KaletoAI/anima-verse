@@ -68,7 +68,7 @@ export interface Improvement {
   last_scan_at?: string | null
   done_count: number
   failed_count: number
-  /** "Run now" is active: the entry runs past idle window, engine switch and queue pause. */
+  /** "Run now" is active: the entry runs past idle window, engine switch and freeze. */
   forced: boolean
   pending: number
   running: number
@@ -130,10 +130,9 @@ export interface EngineStatus {
   idle_seconds: number
   next_allowed_in_s: number
   frozen: boolean
-  /** 'media_off' | 'disabled' | 'paused' | 'busy' | 'active' | 'ok' — a world
-   *  freeze is no gate (`frozen` above is shown beside it). */
+  /** 'media_off' | 'disabled' | 'frozen' | 'paused' | 'busy' | 'active' | 'ok' */
   reason: string
-  /** An entry runs by "Run now" — past idle window, engine switch and queue pause. */
+  /** An entry runs by "Run now" — past idle window, engine switch, freeze, pause. */
   forced: boolean
   running_step: Step | null
   pending_total: number

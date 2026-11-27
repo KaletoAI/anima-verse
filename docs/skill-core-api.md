@@ -1546,10 +1546,8 @@ admin list (confirmation shows the dry run).
 
 **Run now** forces an entry (`improvements.forced`): the click submits its next
 pending step at once, and every following tick submits the next one, past the
-idle window, the engine switch and a task-queue pause (the admin tick runs the
-engine through it). A world freeze is no gate for any entry: it stops the
-world's simulation, and an improvement is TaskQueue work, which keeps running
-while the world is frozen. The media switch, an improvement step
+idle window, the engine switch, a world freeze and a task-queue pause (the admin
+tick runs the engine through both). The media switch, an improvement step
 already in flight and a busy deferral still hold it back. The flag clears itself
 once the entry has nothing pending or running, and on **Pause** or **Stop run**.
 

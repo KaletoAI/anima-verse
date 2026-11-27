@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Smoke: wrong improvement steps are recognised and dropped by the server itself,
-with exactly the files that belong only to them — and a world freeze holds no step.
+with exactly the files that belong only to them.
 
 Usage:  ./.venv/bin/python scripts/smoke_improvement_invalid_steps.py
 
@@ -48,10 +48,6 @@ EXPECTATIONS, derived by hand from the rules
     {"skipped": "invalid: <reason>"} and the row is gone; apply never ran.
 [7] An entry whose type cannot judge (invalid_reason raises) is left as it
     is: reported with the error, its step still pending.
-[8] The world freeze holds nothing: engine enabled, user idle 3600 s, world
-    frozen → submit_allowed() == (True, "ok"); the task queue paused →
-    (False, "paused") — the pause switch stays a gate. A tick with the world
-    frozen submits Rex's R1 step (reason "ok").
 """
 import os
 import sys
@@ -74,12 +70,11 @@ from app.core import config, db  # noqa: E402
 config.load(STORAGE / "config.json")
 db.init_schema()
 
-from app.core import artefact_graph, base_body, outfit_cache_gc, user_activity  # noqa: E402
+from app.core import artefact_graph, base_body, outfit_cache_gc  # noqa: E402
 from app.core.improvements import engine, registry, store  # noqa: E402
 import app.core.improvements.types  # noqa: E402,F401  (registers the types)
 from app.core.improvements.types import mesh_from_tpose, subjects  # noqa: E402
 from app.core.task_queue import get_task_queue  # noqa: E402
-from app.models.world import set_world_frozen  # noqa: E402
 
 get_task_queue()._started = True     # no worker threads: rows are inspected only
 
@@ -220,22 +215,6 @@ check("reported with the error, nothing removed", (report["removed"], report["en
       (0, "roster unreadable"))
 check("…its step still pending", [s["status"] for s in store.list_steps(G)], ["pending"])
 store.delete(G)
-
-print("[8] the world freeze")
-store.update(E, status="open")
-store.mark_result(E, f"Ann:{A4}:t5", status="skipped", count_attempt=False)   # nothing in flight now
-store.set_settings(True, 15)
-user_activity._set_for_test(3600)
-set_world_frozen(True)
-check("frozen: a step may go", engine.submit_allowed(), (True, "ok"))
-get_task_queue().pause_queue("default")
-check("the queue pause stays a gate", engine.submit_allowed(), (False, "paused"))
-get_task_queue().resume_queue("default")
-result = engine.tick()
-check("a tick with the world frozen submits Rex's step",
-      (result["reason"], result["submitted"] != "", [k for k, s in steps() if s == "running"]),
-      ("ok", True, [f"Rex:{R1}:t4"]))
-set_world_frozen(False)
 
 for p in patches:
     p.stop()

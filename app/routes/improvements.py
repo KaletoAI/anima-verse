@@ -224,7 +224,8 @@ def resume(improvement_id: str) -> Dict[str, Any]:
 @router.post("/{improvement_id}/run-now")
 def run_now(improvement_id: str) -> Dict[str, Any]:
     """Forces the entry and submits its next step at once; the rest follow
-    tick by tick, past the idle window, the engine switch and a queue pause. ``reason`` says what happened (``engine.run_now``)."""
+    tick by tick, past the idle window, the engine switch, a freeze and a queue
+    pause. ``reason`` says what happened (``engine.run_now``)."""
     _improvement_or_404(improvement_id)
     return engine.run_now(improvement_id)
 

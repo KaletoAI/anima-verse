@@ -33,13 +33,11 @@ BUSY_DEFER_S = 300            # a step that came back busy sits out this long
 
 #: The gates a FORCED entry (the admin's "Run now", ``improvements.forced``)
 #: passes: it is the admin asking for this entry, so neither the idle window
-#: nor the engine switch nor a task-queue pause holds it back. The media switch
-#: and an in-flight step do. The flag is persisted, so it survives a restart,
-#: and the tick clears it once the entry has nothing left to run.
-#: A world freeze is no gate at all: it stops the world's simulation, and an
-#: improvement is asset work for the TaskQueue, which keeps running while the
-#: world is frozen (CLAUDE.md "World freeze").
-RUN_NOW_OVERRIDES = ("active", "disabled", "paused")
+#: nor the engine switch nor a world freeze or task-queue pause (which stop
+#: autonomous work, not on-demand work) holds it back. The media switch and an
+#: in-flight step do. The flag is persisted, so it survives a restart, and the
+#: tick clears it once the entry has nothing left to run.
+RUN_NOW_OVERRIDES = ("active", "disabled", "frozen", "paused")
 
 #: Step statuses a validity pass judges (``remove_invalid``): work still owed
 #: or given up. A running step belongs to its worker; a done or fulfilled one
@@ -273,8 +271,7 @@ def ordered_queue() -> List[Dict[str, Any]]:
 
 def submit_allowed(needs_media: bool = True) -> Tuple[bool, str]:
     """(may a step be submitted right now, why not) — the reason is what the
-    admin panel shows: media_off | disabled | paused | busy | active | ok.
-    A world freeze is not among them (``RUN_NOW_OVERRIDES``).
+    admin panel shows: media_off | disabled | frozen | busy | active | ok.
 
     ``needs_media`` False asks for the gates BEHIND the media switch — what a
     CPU-only type (``ImprovementType.needs_media`` False) is held by."""
@@ -286,6 +283,8 @@ def submit_allowed(needs_media: bool = True) -> Tuple[bool, str]:
     settings = store.get_settings()
     if not settings["enabled"]:
         return False, "disabled"
+    if is_world_frozen():
+        return False, "frozen"
     # The admin tick runs this engine even while the task queue is paused (a
     # forced entry must go on); everything else stops with the pause as before.
     if get_task_queue().is_paused("default"):
@@ -304,7 +303,7 @@ def request_run_now(improvement_id: str) -> None:
 
 
 def stop_run_now(improvement_id: str) -> None:
-    """Back to the normal rules (idle window, engine switch, queue pause)."""
+    """Back to the normal rules (idle window, engine switch, freeze)."""
     store.update(improvement_id, forced=False)
 
 
@@ -353,7 +352,7 @@ def cancel_held(character_name: str, improvement_id: str, key: str) -> bool:
 def run_now(improvement_id: str) -> Dict[str, Any]:
     """The admin's "Run now": force the entry and submit its next pending step
     NOW — the following ones go out tick by tick, all past the idle window,
-    the engine switch and a queue pause.
+    the engine switch, a freeze and a queue pause.
 
     Only the media switch stops it (and only a type that ``needs_media``), and
     an improvement step already in flight makes it wait: the entry stays

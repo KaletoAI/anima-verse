@@ -306,7 +306,7 @@ export function EntriesView() {
                 ) : (
                   <button type="button" className="ga-btn ga-btn-sm"
                     disabled={busyId === entry.id}
-                    title={t('Runs all steps of this entry now, without waiting for the idle time, even with the engine off or the task queue paused.')}
+                    title={t('Runs all steps of this entry now, without waiting for the idle time, even with the engine off or the world frozen.')}
                     onClick={() => act(entry.id, async () => {
                       const r = await runNow(entry.id)
                       toast(t(RUN_NOW_MESSAGES[r.reason] || 'Nothing to run'),
