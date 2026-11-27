@@ -732,10 +732,11 @@ async def lifespan(app: FastAPI):
     register_social_dialog_handler()
     from app.core import reading_watch
     reading_watch.register()
-    from app.core import quest_engine, quest_judgement, quest_types
+    from app.core import quest_authoring, quest_engine, quest_judgement, quest_types
     quest_types.register()
     quest_engine.register()
     quest_judgement.register()
+    quest_authoring.register()
     from app.core.relationship_decay import register_relationship_decay_handler
     register_relationship_decay_handler()
     from app.core.intent_engine import register_intent_handlers

@@ -5,15 +5,30 @@ import { useToast } from '../../lib/Toast'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
 import { ListPane } from '../../components/ListPane'
+import { guardedInterval } from '../../lib/guardedPoll'
 import { useDiscardGuard, useDraft } from '../../lib/useDraft'
+import { GenerateDialog } from './GenerateDialog'
 import { StartRunDialog } from './StartRunDialog'
 import { TemplateForm } from './TemplateForm'
 import {
-  createTemplate, deleteTemplate, fetchCatalog, fetchTemplate, fetchTemplates, questError, updateTemplate,
+  createTemplate, deleteTemplate, fetchCatalog, fetchGenerateJobs, fetchTemplate, fetchTemplates, questError,
+  updateTemplate,
 } from './api'
-import type { TemplateListRow, TemplateRow } from './api'
-import { canSave, clientIssues, draftToRow, emptyDraft, questErrorText, rowToDraft } from './questsModel'
+import type { GenerateJob, TemplateListRow, TemplateRow } from './api'
+import { canSave, clientIssues, draftToRow, emptyDraft, generateJobActive, questErrorText, rowToDraft } from './questsModel'
 import type { Catalog, Issue, TemplateDraft } from './questsModel'
+
+const GENERATE_PHASE_TEXTS: Record<string, string> = {
+  draft: 'Writing the draft…',
+  structure: 'Building the quest…',
+  validate: 'Checking the quest…',
+  repair: 'Repairing the quest…',
+}
+
+function generatePhaseLabel(job: GenerateJob, t: (s: string) => string): string {
+  if (job.status === 'pending' || !job.phase) return t('Waiting for the queue…')
+  return t(GENERATE_PHASE_TEXTS[job.phase] || 'Checking the quest…')
+}
 
 /** The guard of the open pane: run `fn` now, or after the admin agreed to drop unsaved edits. */
 export type PaneGuard = (fn: () => void) => void
@@ -43,6 +58,10 @@ export function TemplatesView({ onGuard, onStarted }: {
   const savingRef = useRef(false)
   const [pendingDelete, setPendingDelete] = useState(false)
   const [starting, setStarting] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [job, setJob] = useState<GenerateJob | null>(null)
+  const [proposed, setProposed] = useState<Record<string, Record<string, Record<string, string>>>>({})
+  const handledJobRef = useRef('')
   const invalidMessage = t('A ready template must have no issues. Fix them, or set the state to Draft and save.')
 
   useEffect(() => {
@@ -66,6 +85,26 @@ export function TemplatesView({ onGuard, onStarted }: {
       setCatalog({ conditions: [], prerequisites: [], effects: [], role_kinds: [] })
     })
   }, [t, toast])
+
+  useEffect(() => {
+    let cancelled = false
+    fetchGenerateJobs().then((jobs) => {
+      if (cancelled) return
+      const active = jobs.find((j) => generateJobActive(j))
+      if (active) setJob((prev) => prev ?? active)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  const activeTaskId = job && generateJobActive(job) ? job.task_id : ''
+  useEffect(() => {
+    if (!activeTaskId) return
+    return guardedInterval(async () => {
+      const jobs = await fetchGenerateJobs()
+      const match = jobs.find((j) => j.task_id === activeTaskId)
+      if (match) setJob(match)
+    }, 2000)
+  }, [activeTaskId])
 
   const show = useCallback((row: TemplateRow) => {
     loadDraft(rowToDraft(row))
@@ -93,6 +132,26 @@ export function TemplatesView({ onGuard, onStarted }: {
   const editTemplate = useCallback((row: TemplateListRow) => guard(() => {
     if (!savingRef.current) void open(row.id)
   }), [guard, open])
+
+  useEffect(() => {
+    if (!job || generateJobActive(job) || job.state !== 'done') return
+    if (handledJobRef.current === job.task_id) return
+    handledJobRef.current = job.task_id
+    const finished = job
+    void (async () => {
+      await reload()
+      if (finished.template_id) {
+        setProposed((prev) => ({ ...prev, [finished.template_id]: finished.bindings || {} }))
+        guard(() => { void open(finished.template_id) })
+      }
+      toast(
+        finished.issues.length > 0
+          ? t('Quest generated with {n} issue(s)').replace('{n}', String(finished.issues.length))
+          : t('Quest generated'),
+      )
+      setJob((cur) => (cur?.task_id === finished.task_id ? null : cur))
+    })()
+  }, [guard, job, open, reload, t, toast])
 
   const copyTemplate = useCallback(() => {
     if (savingRef.current) return
@@ -198,7 +257,35 @@ export function TemplatesView({ onGuard, onStarted }: {
     <div className="ga-twocol">
       <ListPane id="quest-templates" label={t('Quest templates')}>
         <ListHeader title={t('Quest templates')} onNew={newTemplate} onCopy={copyTemplate}
-          copyDisabled={!draft || !draft.id} />
+          copyDisabled={!draft || !draft.id}
+          extra={
+            <button type="button" className="ga-btn ga-btn-sm" disabled={generateJobActive(job)}
+              onClick={() => setGenerating(true)}>
+              ✨ {t('Generate with LLM')}
+            </button>
+          } />
+        {job ? (
+          generateJobActive(job) || job.state === 'done' ? (
+            <div className="ga-hint" role="status" style={{ marginBottom: 8 }}>
+              {generatePhaseLabel(job, t)}
+            </div>
+          ) : (
+            <div className="ga-hint ga-quest-error" role="alert" style={{ marginBottom: 8 }}>
+              <p>
+                <strong>{t('Generation failed')}</strong>
+                {job.error ? ` — ${job.error}` : ''}
+              </p>
+              {job.issues.length ? (
+                <ul>
+                  {job.issues.map((i, n) => <li key={n}><code>{i.path || '—'}</code> {t(i.message)}</li>)}
+                </ul>
+              ) : null}
+              <button type="button" className="ga-btn ga-btn-sm" onClick={() => setJob(null)}>
+                {t('Dismiss')}
+              </button>
+            </div>
+          )
+        ) : null}
         <ul className="ga-list">
           {rows.length === 0 ? (
             <li className="ga-list-empty">{t('No quest templates yet')}</li>
@@ -279,8 +366,16 @@ export function TemplatesView({ onGuard, onStarted }: {
         onConfirm={() => { void doDelete() }}
         onClose={() => setPendingDelete(false)}
       />
+      <GenerateDialog open={generating} onClose={() => setGenerating(false)}
+        onSubmitted={(taskId) => {
+          setJob({
+            task_id: taskId, status: 'pending', phase: '', state: '', ok: false,
+            template_id: '', title: '', bindings: {}, issues: [], error: null,
+          })
+        }} />
       {draft && draft.id ? (
         <StartRunDialog open={starting} templateId={draft.id} title={draft.title || draft.id} roles={draft.roles}
+          initialBindings={proposed[draft.id]}
           onClose={() => setStarting(false)}
           onStarted={() => {
             setStarting(false)

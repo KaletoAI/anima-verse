@@ -369,3 +369,154 @@ def generate(
         "issues": issues,
         "phase": stopped_phase,
     }
+
+
+JOB_TASK_TYPE = "quest_generate"
+MAX_BRIEF_CHARS = 2000
+
+
+class GenerateBusy(RuntimeError):
+    """A ``quest_generate`` job is already pending or running in the task queue."""
+
+
+def submit(brief: str, giver: str | None = None) -> str:
+    """Validate ``brief`` and ``giver`` and enqueue an admin quest-generation job."""
+    from app.core.task_queue import get_task_queue
+    from app.models.character import character_exists
+
+    if not isinstance(brief, str) or not brief.strip():
+        raise ValueError("brief must not be empty")
+    if len(brief) > MAX_BRIEF_CHARS:
+        raise ValueError(f"brief must be at most {MAX_BRIEF_CHARS} characters")
+    if giver is not None and not isinstance(giver, str):
+        raise ValueError("giver must be a string")
+    giver_str = giver or ""
+    if giver_str and not character_exists(giver_str):
+        raise ValueError(f"unknown character '{giver_str}'")
+
+    tq = get_task_queue()
+    if tq.has_pending_task(JOB_TASK_TYPE):
+        raise GenerateBusy("a quest is already being generated")
+    return tq.submit(
+        JOB_TASK_TYPE,
+        {"brief": brief, "giver": giver_str},
+        queue_name=JOB_TASK_TYPE,
+        max_retries=0,
+    )
+
+
+def _handle(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Task-queue handler for ``quest_generate``: author and store an admin draft."""
+    import sqlite3
+    from app.core.task_queue import get_task_queue
+    from app.models import quests
+
+    tq = get_task_queue()
+    tid = payload["_task_id"]
+    progress = tq.get_task_progress(tid)
+    if progress:
+        raise RuntimeError("interrupted by restart — start the generation again")
+
+    def update(phase: str, **fields: Any) -> None:
+        progress.update(phase=phase, **fields)
+        tq.update_task_progress(tid, progress)
+
+    update("", state="running")
+    brief = payload.get("brief", "")
+    giver = payload.get("giver") or None
+    try:
+        result = generate(brief, giver=giver, mode="admin", progress=lambda ph: update(ph))
+    except ValueError as e:
+        final: Dict[str, Any] = {
+            "phase": str(progress.get("phase") or ""),
+            "state": "failed",
+            "ok": False,
+            "template_id": "",
+            "title": "",
+            "bindings": {},
+            "issues": [_issue("", "bad_request", str(e))],
+        }
+        progress.clear()
+        progress.update(final)
+        tq.update_task_progress(tid, progress)
+        return dict(final)
+
+    template = result.get("template")
+    issues = list(result.get("issues") or [])
+    saved_tpl: Optional[Dict[str, Any]] = None
+    if (
+        isinstance(template, dict)
+        and quest_engine.check_template_fields(template) is None
+        and isinstance(template.get("title"), str)
+        and bool(template["title"].strip())
+        and len(json.dumps(template, ensure_ascii=False).encode("utf-8")) <= quest_engine.MAX_TEMPLATE_BYTES
+    ):
+        content = {k: template[k] for k in quests.TEMPLATE_CONTENT_KEYS if k in template}
+        try:
+            saved_tpl = quests.create_template(**content, origin="admin", state="draft")
+        except (TypeError, ValueError, OverflowError, sqlite3.Error) as e:
+            issues.append(_issue("", "store_failed", str(e)))
+
+    if saved_tpl is not None:
+        final = {
+            "phase": "done",
+            "state": "done",
+            "ok": bool(result.get("ok")),
+            "template_id": str(saved_tpl["id"]),
+            "title": str(saved_tpl.get("title") or ""),
+            "bindings": dict(result.get("bindings") or {}),
+            "issues": issues,
+        }
+    else:
+        final = {
+            "phase": str(result.get("phase") or ""),
+            "state": "failed",
+            "ok": False,
+            "template_id": "",
+            "title": "",
+            "bindings": {},
+            "issues": issues,
+        }
+    progress.clear()
+    progress.update(final)
+    tq.update_task_progress(tid, progress)
+    return dict(final)
+
+
+def recent_jobs(limit: int = 10) -> List[Dict[str, Any]]:
+    """Expose recent ``quest_generate`` jobs without internal payload fields."""
+    from app.core.task_queue import get_task_queue
+
+    out: List[Dict[str, Any]] = []
+    for task in get_task_queue().list_recent_tasks(JOB_TASK_TYPE, limit=limit):
+        payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+        progress = task.get("progress") if isinstance(task.get("progress"), dict) else {}
+        raw_bindings = progress.get("bindings")
+        raw_issues = progress.get("issues")
+        out.append({
+            "task_id": str(task.get("task_id") or ""),
+            "status": str(task.get("status") or ""),
+            "phase": str(progress.get("phase") or ""),
+            "state": str(progress.get("state") or ""),
+            "ok": bool(progress.get("ok", False)),
+            "template_id": str(progress.get("template_id") or ""),
+            "title": str(progress.get("title") or ""),
+            "bindings": dict(raw_bindings) if isinstance(raw_bindings, dict) else {},
+            "issues": list(raw_issues) if isinstance(raw_issues, list) else [],
+            "error": str(task.get("error") or ""),
+            "created_at": task.get("created_at"),
+            "completed_at": task.get("completed_at"),
+            "request": {
+                "brief": str(payload.get("brief") or ""),
+                "giver": str(payload.get("giver") or ""),
+            },
+        })
+    return out
+
+
+def register() -> None:
+    """Register the ``quest_generate`` task-queue handler."""
+    from app.core.task_queue import get_task_queue
+
+    get_task_queue().register_handler(JOB_TASK_TYPE, _handle)
+

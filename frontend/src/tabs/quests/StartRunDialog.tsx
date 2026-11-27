@@ -6,7 +6,7 @@ import { loadCharacters, loadItems, loadLocations } from '../../lib/refs'
 import type { CharacterRef, ItemRef, LocationRef } from '../../lib/refs'
 import { GROUND_ROOM_ID, isFloorRoom, roomLabel } from '../world/worldTypes'
 import { questError, startRun } from './api'
-import { bindingFor, bindingsComplete, filterOptions, questErrorText } from './questsModel'
+import { bindingFor, bindingsComplete, filterOptions, pickFromBinding, questErrorText } from './questsModel'
 import type { Issue, Role, RolePick } from './questsModel'
 
 /**
@@ -17,12 +17,13 @@ import type { Issue, Role, RolePick } from './questsModel'
  * picker has a filter field above it (the item library is long).
  */
 export function StartRunDialog({
-  open, templateId, title, roles, onClose, onStarted,
+  open, templateId, title, roles, initialBindings, onClose, onStarted,
 }: {
   open: boolean
   templateId: string
   title: string
   roles: Role[]
+  initialBindings?: Record<string, Record<string, string>>
   onClose: () => void
   onStarted: () => void
 }) {
@@ -36,17 +37,23 @@ export function StartRunDialog({
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  // Every opening starts empty and reloads the world lists (they may have changed since the last start).
+  // Every opening seeds default picks (when proposed bindings exist) and reloads the world lists.
   useEffect(() => {
     if (!open) return
-    setPicks({})
+    const seeded: Record<string, RolePick> = {}
+    if (initialBindings) {
+      for (const role of roles) {
+        seeded[role.key] = pickFromBinding(role.kind, initialBindings[role.key])
+      }
+    }
+    setPicks(seeded)
     setFilters({})
     setIssues([])
     setError('')
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
     loadLocations().then(setLocations).catch(() => setLocations([]))
     loadItems().then(setItems).catch(() => setItems([]))
-  }, [open])
+  }, [open, roles, initialBindings])
 
   useEffect(() => {
     if (!open) return

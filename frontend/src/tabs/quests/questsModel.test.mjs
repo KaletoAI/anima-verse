@@ -53,6 +53,11 @@
 //   same with box_spot difficulty 0 -> one warning (path 'steps.3.condition', code 'not_hidden');
 //   nested in {all: [...]} -> still that one warning;
 // - newEffectKey: bigRock -> 'e1'; with an extra role key 'e1' -> 'e2'.
+// Stage 3 (Task 4):
+// - pickFromBinding keeps only BINDING_KEYS[kind] with non-empty string values: character drops item_id, empty string
+//   becomes {}, room keeps both location_id and room_id (or partial {location_id}), non-objects and unknown kinds -> {};
+// - generateJobActive is true for status 'pending' and 'running', false for 'completed', 'failed', 'cancelled' and null;
+// - questErrorText maps code 'busy' to ERROR_CODE_TEXTS.busy.
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -78,7 +83,8 @@ function moduleUrl(file) {
 }
 const { rowToDraft, draftToRow, issuesAt, newStepId, rolesOfKinds, bindingFor, bindingsComplete, stepProgress,
   placeholderList, moveItem, filterOptions, canSave, questErrorText, ERROR_CODE_TEXTS,
-  entryObjectKind, scopeAt, targetOptions, clientIssues, draftWarnings, newEffectKey } = await import(moduleUrl(new URL('./questsModel.ts', import.meta.url)));
+  entryObjectKind, scopeAt, targetOptions, clientIssues, draftWarnings, newEffectKey,
+  pickFromBinding, generateJobActive } = await import(moduleUrl(new URL('./questsModel.ts', import.meta.url)));
 
 // The reference quest of the plan header, verbatim.
 const errand = {"title": "Errand", "summary": "Run an errand for someone.", "gm_notes": "GM ONLY",
@@ -345,5 +351,26 @@ const bigRock = {"title": "The big rock", "summary": "{giver} lost something nea
   assert.equal('role_notes' in r1.steps[1], false);
   d1.steps[0].role_notes[0].text = 'mutated';
   assert.equal(withNotes.steps[0].role_notes[0].text, 'Ask for {thing}.');
+}
+{
+  assert.deepEqual(pickFromBinding('character', { name: 'Ann', item_id: 'i1' }), { name: 'Ann' });
+  assert.deepEqual(pickFromBinding('character', { name: '' }), {});
+  assert.deepEqual(pickFromBinding('room', { location_id: 'l1', room_id: 'r1', name: 'Ann' }),
+    { location_id: 'l1', room_id: 'r1' });
+  assert.deepEqual(pickFromBinding('room', { location_id: 'l1' }), { location_id: 'l1' });
+  assert.deepEqual(pickFromBinding('item', null), {});
+  assert.deepEqual(pickFromBinding('item', 'i1'), {});
+  assert.deepEqual(pickFromBinding('item', ['i1']), {});
+  assert.deepEqual(pickFromBinding('secret', { name: 'x' }), {});
+
+  assert.equal(generateJobActive({ status: 'pending' }), true);
+  assert.equal(generateJobActive({ status: 'running' }), true);
+  assert.equal(generateJobActive({ status: 'completed' }), false);
+  assert.equal(generateJobActive({ status: 'failed' }), false);
+  assert.equal(generateJobActive({ status: 'cancelled' }), false);
+  assert.equal(generateJobActive(null), false);
+
+  assert.equal(questErrorText({ code: 'busy', message: 'a quest is already being generated' }, (s) => s),
+    ERROR_CODE_TEXTS.busy);
 }
 console.log('questsModel: all checks passed');

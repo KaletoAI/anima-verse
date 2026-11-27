@@ -7631,6 +7631,18 @@
     "Judgement (current step)": "Beurteilung (aktueller Schritt)",
     "Waiting for the judge": "Wartet auf Beurteilung",
     "Not yet": "Noch nicht",
-    "Judge error": "Beurteilungsfehler"
+    "Judge error": "Beurteilungsfehler",
+    "Generate with LLM": "Mit LLM generieren",
+    "Brief": "Kurzbeschreibung",
+    "A short idea, e.g. the innkeeper needs someone to fetch herbs from the forest": "Eine kurze Idee, z. B. der Wirt braucht jemanden, der Kräuter aus dem Wald holt",
+    "— no giver —": "— kein Auftraggeber —",
+    "A quest is already being generated.": "Eine Quest wird bereits generiert.",
+    "Waiting for the queue…": "Wartet auf die Warteschlange…",
+    "Writing the draft…": "Entwurf wird geschrieben…",
+    "Building the quest…": "Quest wird aufgebaut…",
+    "Checking the quest…": "Quest wird geprüft…",
+    "Repairing the quest…": "Quest wird repariert…",
+    "Quest generated": "Quest generiert",
+    "Quest generated with {n} issue(s)": "Quest mit {n} Problem(en) generiert"
   }
 }

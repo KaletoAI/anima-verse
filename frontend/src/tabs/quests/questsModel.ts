@@ -237,6 +237,23 @@ export function bindingsComplete(roles: Role[], picks: Record<string, unknown>):
   })
 }
 
+/** Seed a Start-run role picker from a proposed D6 binding: keeps only non-empty string values of `kind`'s keys. */
+export function pickFromBinding(kind: RoleKind, binding: unknown): RolePick {
+  const keys = BINDING_KEYS[kind]
+  if (!keys || !isObject(binding)) return {}
+  const out: RolePick = {}
+  for (const k of keys) {
+    const v = binding[k]
+    if (typeof v === 'string' && v) out[k] = v
+  }
+  return out
+}
+
+/** True while a `quest_generate` job is still pending or running in the task queue. */
+export function generateJobActive(job: { status?: string } | null | undefined): boolean {
+  return !!job && (job.status === 'pending' || job.status === 'running')
+}
+
 /** The run states of a quest run (stage 1): not yet ended first, then the ended ones. */
 export const RUN_STATES = ['preparing', 'hidden', 'open', 'done', 'failed', 'cancelled', 'broken'] as const
 export type RunState = typeof RUN_STATES[number]
@@ -295,6 +312,7 @@ export const ERROR_CODE_TEXTS: Record<string, string> = {
   invalid: 'The template has issues.',
   bad_json: 'The request was not valid JSON.',
   bad_request: 'The input was refused.',
+  busy: 'A quest is already being generated.',
   revision_required: 'Load the template again before saving.',
   too_large: 'The template is too large to save.',
 }

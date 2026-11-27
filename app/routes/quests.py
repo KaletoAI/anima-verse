@@ -1,7 +1,9 @@
 """Admin routes for the quest system (stage 1): templates, runs and the type catalog.
 
 A thin HTTP adapter over `app.models.quests` (storage), `app.core.quest_catalog` (types),
-`app.core.quest_engine` (validation, start, cancel) and `app.core.quest_effects` (retry); it does auth, parsing and the HTTP mapping only.
+`app.core.quest_engine` (validation, start, cancel), `app.core.quest_effects` (retry) and
+`app.core.quest_authoring` (background LLM draft generation via `POST /quests/generate` and
+`GET /quests/generate/jobs`); it does auth, parsing and the HTTP mapping only.
 Admin-only for reads AND writes (templates carry GM notes): `"/quests"` is on the gate's `_ADMIN_PREFIXES`
 and the router carries `Depends(require_admin)` as the second layer. The player's quest book is
 `GET /play/quests`, never this router.
@@ -10,7 +12,7 @@ Errors answer `{"detail": ...}`; a refusal with issues carries them unchanged as
 `{"detail": {"code", "issues": [{"path", "code", "message"}]}}`. Template edits follow the revision
 convention: `PUT` needs `base_revision` (428 `revision_required`, 409 `stale`).
 
-Every error detail is an object with a `code` (`bad_json`, `bad_request`, `not_found`, `revision_required`,
+Every error detail is an object with a `code` (`bad_json`, `bad_request`, `busy`, `not_found`, `revision_required`,
 `stale`, `invalid`, `has_open_runs`, `refused`, `too_large`) and, except for the issue lists, a `message`.
 
 The ready rule of `PUT`: the RESULTING template is checked — stored fields merged with the body — and when its
@@ -26,7 +28,7 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.core import quest_catalog, quest_effects, quest_engine
+from app.core import quest_authoring, quest_catalog, quest_effects, quest_engine
 from app.core.auth_dependency import require_admin
 from app.models import quests
 
@@ -301,3 +303,41 @@ async def cancel_run_route(run_id: str):
 async def retry_run_route(run_id: str):
     """Re-arms every failed payout of a not-ended (or done) run and clears a preparing run's issues."""
     return {"ok": await asyncio.to_thread(quest_effects.retry, run_id)}
+
+
+# --- Authoring ------------------------------------------------------------------------------------
+
+@router.post("/generate", status_code=202)
+async def generate_quest_route(request: Request) -> Dict[str, str]:
+    """Enqueue a background LLM quest-authoring job (`quest_generate`)."""
+    body = _body_dict(await _json(request))
+    brief = body.get("brief")
+    if not isinstance(brief, str):
+        raise _bad("brief must be text")
+    giver = body.get("giver")
+    if giver is not None and not isinstance(giver, str):
+        raise _bad("giver must be text")
+    try:
+        task_id = await asyncio.to_thread(quest_authoring.submit, brief, giver)
+    except ValueError as e:
+        raise _bad(str(e))
+    except quest_authoring.GenerateBusy:
+        raise HTTPException(409, {"code": "busy", "message": "a quest is already being generated"})
+    return {"task_id": task_id}
+
+
+@router.get("/generate/jobs")
+async def list_generate_jobs_route(request: Request) -> Dict[str, List[Dict[str, Any]]]:
+    """Recent `quest_generate` jobs (`limit` 1..50, default 10)."""
+    raw = request.query_params.get("limit")
+    if raw is None or raw == "":
+        n = 10
+    else:
+        try:
+            n = int(raw)
+        except ValueError:
+            raise _bad("limit must be an integer between 1 and 50")
+        if not 1 <= n <= 50:
+            raise _bad("limit must be an integer between 1 and 50")
+    return {"jobs": await asyncio.to_thread(quest_authoring.recent_jobs, n)}
+

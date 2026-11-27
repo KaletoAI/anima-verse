@@ -98,6 +98,37 @@ export function startRun(templateId: string, bindings: Record<string, Record<str
   return apiPost<Record<string, unknown>>(`/quests/templates/${encodeURIComponent(templateId)}/start`, { bindings })
 }
 
+/** A row of `GET /quests/generate/jobs` (`quest_authoring.recent_jobs`). */
+export interface GenerateJob {
+  task_id: string
+  status: string
+  phase: string
+  state: string
+  ok: boolean
+  template_id: string
+  title: string
+  bindings: Record<string, Record<string, string>>
+  issues: Issue[]
+  error: string | null
+  created_at?: string | null
+  completed_at?: string | null
+  request?: { brief: string; giver: string }
+}
+
+/** Enqueue an admin LLM quest generation job (`202` with `{task_id}`); sends `giver` only when non-empty. */
+export function generateQuest(brief: string, giver: string): Promise<{ task_id: string }> {
+  const body: Record<string, unknown> = { brief }
+  const g = giver.trim()
+  if (g) body.giver = g
+  return apiPost<{ task_id: string }>('/quests/generate', body)
+}
+
+/** Recent `quest_generate` jobs, newest first. */
+export async function fetchGenerateJobs(): Promise<GenerateJob[]> {
+  const data = await apiGet<{ jobs?: GenerateJob[] }>('/quests/generate/jobs')
+  return data.jobs || []
+}
+
 /** The parts of a /quests error the form acts on. `code` is '' for anything that is not such an error
  *  (a network failure, say); `message` is always set. */
 export interface QuestError { status: number; code: string; message: string; issues: Issue[] }

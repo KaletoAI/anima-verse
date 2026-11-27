@@ -81,6 +81,21 @@ WHAT FOLLOWS BY HAND (plan D12, D13, Task 6 brief)
       player POST /quests/runs/<id>/retry -> 403.
     - Second ready template with setup [f: t.fail] -> start via route -> pass_once() -> row has non-empty issues;
       POST /quests/runs/<id2>/retry -> 200 {"ok": true} and row issues [].
+ 12. Stage 3, Task 4 (POST /quests/generate, GET /quests/generate/jobs):
+    - Gate & validation: player POST /quests/generate -> 403; admin {"brief": ""} -> 400 "bad_request";
+      {"brief": 5} -> 400; {"brief": "x", "giver": "Nobody"} -> 400; brief of 2001 chars -> 400;
+      GET /quests/generate/jobs?limit=0 -> 400 "bad_request"; player GET /quests/generate/jobs -> 403.
+    - Happy path: llm_call stub returns prose on "quest_draft" and a valid ```json:quest block on "quest_structure"
+      (title "Check the front room", giver_role "giver", roles giver=character & place=room, step s1 at_place place,
+      bindings giver->{name: "N"}, place->{location_id: "L1", room_id: "r1"}).
+      POST {"brief": "Fetch the lamp", "giver": "N"} -> 202 {"task_id": ...}; job finishes with status "completed",
+      state "done", ok True, template_id whose GET /quests/templates/<id> has state "draft", origin "admin",
+      title "Check the front room"; job.bindings["giver"] == {"name": "N"};
+      job.request == {"brief": "Fetch the lamp", "giver": "N"}; job keys == the 13 public keys.
+    - Busy: draft call blocks on a threading.Event -> first POST 202, second POST 409 "busy"; releasing the event lets
+      the first job complete.
+    - Clean failure: structure and repair both answer prose without a fence -> job state "failed", ok False,
+      template_id "", issues contain code "no_block", and template count before == after.
 """
 import os
 import sys
@@ -457,6 +472,139 @@ def main() -> int:
             check("issues cleared after retry", frow2.get("issues"), [])
         finally:
             hooks.unregister_owned_providers("test")
+
+        print("[12] stage 3 task 4: generate with LLM")
+        import json as _json_mod
+        import threading
+        import time
+        from types import SimpleNamespace
+        from app.core import llm_router, quest_authoring
+
+        quest_authoring.register()
+
+        gen_quest_block = "```json:quest\n" + _json_mod.dumps({
+            "template": {
+                "title": "Check the front room",
+                "summary": "Help {giver} inspect {place}.",
+                "gm_notes": "Generated note",
+                "giver_role": "giver",
+                "roles": [
+                    {"key": "giver", "kind": "character", "description": "quest giver"},
+                    {"key": "place", "kind": "room", "description": "target room"},
+                ],
+                "steps": [{
+                    "id": "s1",
+                    "text": "Visit {place}.",
+                    "hint": "",
+                    "condition": {"type": "at_place", "params": {"place": "place"}},
+                }],
+                "start_condition": {},
+                "prerequisites": {},
+                "setup_effects": [],
+                "rewards": [],
+                "time_limit_s": 0,
+            },
+            "bindings": {
+                "giver": {"name": "N"},
+                "place": {"location_id": "L1", "room_id": "r1"},
+            },
+        }) + "\n```"
+
+        public_job_keys = {
+            "task_id", "status", "phase", "state", "ok", "template_id", "title",
+            "bindings", "issues", "error", "created_at", "completed_at", "request",
+        }
+
+        def wait_job(task_id: str) -> dict:
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline:
+                jobs_resp = call("GET", "/quests/generate/jobs")
+                if jobs_resp.status_code == 200:
+                    for j in jobs_resp.json().get("jobs", []):
+                        if j.get("task_id") == task_id and j.get("status") not in ("pending", "running"):
+                            return j
+                time.sleep(0.1)
+            return {}
+
+        check("player POST /quests/generate -> 403",
+              call("POST", "/quests/generate", {"brief": "x"}, role="player").status_code, 403)
+        check("player GET /quests/generate/jobs -> 403",
+              call("GET", "/quests/generate/jobs", role="player").status_code, 403)
+        resp = call("GET", "/quests/generate/jobs?limit=0")
+        check("jobs limit=0 -> 400", (resp.status_code, code(resp)), (400, "bad_request"))
+        resp = call("POST", "/quests/generate", {"brief": ""})
+        check("empty brief -> 400", (resp.status_code, code(resp)), (400, "bad_request"))
+        resp = call("POST", "/quests/generate", {"brief": 5})
+        check("non-str brief -> 400", (resp.status_code, code(resp)), (400, "bad_request"))
+        resp = call("POST", "/quests/generate", {"brief": "x", "giver": "Nobody"})
+        check("unknown giver -> 400", (resp.status_code, code(resp)), (400, "bad_request"))
+        resp = call("POST", "/quests/generate", {"brief": "x" * 2001})
+        check("2001-char brief -> 400", (resp.status_code, code(resp)), (400, "bad_request"))
+
+        def _ok_llm(task, *_args, **_kwargs):
+            if task == "quest_draft":
+                return SimpleNamespace(content="N needs someone to check the front room.")
+            return SimpleNamespace(content=gen_quest_block)
+
+        with patch.object(llm_router, "llm_call", side_effect=_ok_llm):
+            resp = call("POST", "/quests/generate", {"brief": "Fetch the lamp", "giver": "N"})
+            gen_tid = resp.json().get("task_id", "") if resp.status_code == 202 else ""
+            check("POST /quests/generate -> 202 with task_id", (resp.status_code, bool(gen_tid)), (202, True))
+            job = wait_job(gen_tid)
+            check("job completed & done & ok",
+                  (job.get("status"), job.get("state"), job.get("ok")),
+                  ("completed", "done", True))
+            check("job public keys exact",
+                  (set(job.keys()) == public_job_keys, set((job.get("request") or {}).keys()) == {"brief", "giver"}),
+                  (True, True))
+            check("job request & giver binding",
+                  (job.get("request"), (job.get("bindings") or {}).get("giver")),
+                  ({"brief": "Fetch the lamp", "giver": "N"}, {"name": "N"}))
+            tpl_resp = call("GET", f"/quests/templates/{job.get('template_id') or 'missing'}")
+            tpl_data = tpl_resp.json() if tpl_resp.status_code == 200 else {}
+            check("saved draft template",
+                  (tpl_resp.status_code, tpl_data.get("state"), tpl_data.get("origin"), tpl_data.get("title")),
+                  (200, "draft", "admin", "Check the front room"))
+
+        gate_ev = threading.Event()
+        entered_ev = threading.Event()
+
+        def _blocking_llm(task, *_args, **_kwargs):
+            if task == "quest_draft":
+                entered_ev.set()
+                gate_ev.wait(timeout=15.0)
+                return SimpleNamespace(content="Draft text.")
+            return SimpleNamespace(content=gen_quest_block)
+
+        with patch.object(llm_router, "llm_call", side_effect=_blocking_llm):
+            busy_tid = ""
+            try:
+                r_first = call("POST", "/quests/generate", {"brief": "First quest"})
+                busy_tid = r_first.json().get("task_id", "") if r_first.status_code == 202 else ""
+                check("busy first POST -> 202", (r_first.status_code, bool(busy_tid)), (202, True))
+                entered_ev.wait(timeout=5.0)
+                r_second = call("POST", "/quests/generate", {"brief": "Second quest"})
+                check("busy second POST -> 409 busy", (r_second.status_code, code(r_second)), (409, "busy"))
+            finally:
+                gate_ev.set()
+                if busy_tid:
+                    bjob = wait_job(busy_tid)
+                    check("first job finished after release", bjob.get("status"), "completed")
+
+        def _prose_llm(task, *_args, **_kwargs):
+            return SimpleNamespace(content="Just plain prose with no fenced block at all.")
+
+        with patch.object(llm_router, "llm_call", side_effect=_prose_llm):
+            count_before = len(call("GET", "/quests/templates").json().get("templates", []))
+            r_fail = call("POST", "/quests/generate", {"brief": "Broken quest"})
+            fail_tid = r_fail.json().get("task_id", "") if r_fail.status_code == 202 else ""
+            fjob = wait_job(fail_tid)
+            count_after = len(call("GET", "/quests/templates").json().get("templates", []))
+            issue_codes = {i.get("code") for i in (fjob.get("issues") or [])}
+            check("prose failure job state",
+                  (fjob.get("state"), fjob.get("ok"), fjob.get("template_id"), "no_block" in issue_codes),
+                  ("failed", False, "", True))
+            check("no template created on failure", count_after, count_before)
 
     quest_engine.drain()
     if FAILURES:
