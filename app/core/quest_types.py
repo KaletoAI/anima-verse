@@ -490,7 +490,8 @@ def _builtin_types() -> list:
         QuestType(
             id="llm_judgement", kind="condition", label="The scene shows ...",
             description="The tool model judges what the avatar said and heard since this step began against a criterion.",
-            params=({"key": "criterion", "type": "text", "label": "What must have happened", "required": True},),
+            params=({"key": "criterion", "type": "text", "label": "What must have happened",
+                     "required": True, "placeholders": True},),
             signals=("utterance.spoken", "quest.judged"),
             validate=_validate_llm_judgement, evaluate=_llm_judgement, step_only=True),
         QuestType(

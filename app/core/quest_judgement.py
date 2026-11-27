@@ -32,9 +32,9 @@ TASK_TYPE = "quest_judgement"
 MIN_INTERVAL_S = 30
 MAX_PER_MINUTE = 6
 TRANSCRIPT_LINES = 40
-PENDING_STALE_S = 600
 TASK_PRIORITY = 30
 
+_ALIVE_TASK_STATUSES = ("pending", "running")
 _rate_lock = threading.Lock()
 _recent_submits: Deque[float] = deque()
 
@@ -72,6 +72,16 @@ def _record_submit() -> None:
         _recent_submits.append(now)
 
 
+def _task_alive(task_id: str) -> bool:
+    """True while ``task_id`` is still pending or running in the task queue."""
+    if not task_id:
+        return False
+    try:
+        return get_task_queue().task_status(task_id) in _ALIVE_TASK_STATUSES
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def request(ctx, criterion: str) -> None:
     """Claim a judgement slot and submit a background task-queue job; never raises."""
     try:
@@ -92,7 +102,7 @@ def request(ctx, criterion: str) -> None:
             now=now_iso,
             min_interval_s=min_interval_s(),
             newest_id=newest_id,
-            pending_stale_s=PENDING_STALE_S,
+            pending_alive=_task_alive,
         )
         if not claimed:
             return
@@ -176,6 +186,8 @@ def handle(payload: Dict[str, Any], *,
         except Exception as e:  # noqa: BLE001
             state = "error"
             reason = str(e)[:200]
+            prev = quests.get_judgement(run_id, step, key, mind) or {}
+            through = int(prev.get("judged_through") or 0)
 
     stored = quests.set_judgement(
         run_id, step, key, mind,

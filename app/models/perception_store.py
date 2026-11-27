@@ -414,39 +414,50 @@ def get_character_stream_between(perceiver: str, start_game_ts: str,
     return [dict(row) for row in rows]
 
 
+def _transcript_predicate(perceiver: str) -> Tuple[List[str], List[Any]]:
+    """Shared WHERE clauses and params for perceptions that count as transcript lines."""
+    from app.core.perception import CONTENTLESS_KINDS
+
+    excluded = tuple(sorted(CONTENTLESS_KINDS))
+    where = [
+        "p.perceiver = ?",
+        "COALESCE(json_extract(p.meta, '$.display_only'), 0) = 0",
+        "TRIM(p.content) <> ''",
+    ]
+    params: List[Any] = [perceiver]
+    if excluded:
+        where.append(f"p.kind NOT IN ({','.join('?' * len(excluded))})")
+        params.extend(excluded)
+    return where, params
+
+
 def get_character_stream_since(perceiver: str, *, since_ts: str, after_id: int = 0,
                                limit: int = 40) -> List[Dict[str, Any]]:
-    """Subjective perception lines for ``perceiver`` across all rooms since ``since_ts``.
+    """Subjective perception lines for ``perceiver`` across all rooms strictly after ``since_ts``.
 
     Reads content exclusively from ``perceptions.content`` (never ``utterances.content``),
     drops contentless kinds (``CONTENTLESS_KINDS``) and ``display_only`` lines in SQL,
     and excludes empty content. ``since_ts`` is truncated to whole seconds in the
-    ``utc_now_iso()`` seconds format to match ``utterances.ts`` (empty = no time filter).
+    ``utc_now_iso()`` seconds format and compared strictly (``u.ts > ?``; empty = no time
+    filter). A line spoken in the same wall-clock second as the step start is excluded on
+    purpose: that boundary line is typically the trigger that completed the previous step,
+    and excluding it ensures a judge never sees evidence from before the step began.
     Returns the newest ``limit`` matching rows, oldest first.
     """
     if limit <= 0 or not perceiver:
         return []
     from datetime import timezone
-    from app.core.perception import CONTENTLESS_KINDS
     from app.core.timeutils import parse_iso
 
-    excluded = tuple(sorted(CONTENTLESS_KINDS))
-    where = [
-        "p.perceiver = ?",
-        "p.id > ?",
-        "COALESCE(json_extract(p.meta, '$.display_only'), 0) = 0",
-        "TRIM(p.content) <> ''",
-    ]
-    params: List[Any] = [perceiver, int(after_id)]
-    if excluded:
-        where.append(f"p.kind NOT IN ({','.join('?' * len(excluded))})")
-        params.extend(excluded)
+    where, params = _transcript_predicate(perceiver)
+    where.append("p.id > ?")
+    params.append(int(after_id))
     if isinstance(since_ts, str) and since_ts.strip():
         try:
             since_sec = parse_iso(since_ts.strip()).astimezone(timezone.utc).isoformat(timespec="seconds")
         except (ValueError, TypeError):
             since_sec = since_ts.strip()
-        where.append("u.ts >= ?")
+        where.append("u.ts > ?")
         params.append(since_sec)
     params.append(int(limit))
     sql = (
@@ -480,12 +491,13 @@ def get_character_stream_since(perceiver: str, *, since_ts: str, after_id: int =
 
 
 def newest_perception_id(perceiver: str) -> int:
-    """Highest ``perceptions.id`` for ``perceiver``, or 0 when none exists."""
+    """Highest ``perceptions.id`` for ``perceiver`` that matches the transcript predicate, or 0."""
     if not perceiver:
         return 0
+    where, params = _transcript_predicate(perceiver)
     row = get_connection().execute(
-        "SELECT MAX(id) FROM perceptions WHERE perceiver=?",
-        (perceiver,)).fetchone()
+        "SELECT MAX(p.id) FROM perceptions p WHERE " + " AND ".join(where),
+        params).fetchone()
     return int(row[0]) if row and row[0] is not None else 0
 
 

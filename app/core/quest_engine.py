@@ -138,8 +138,10 @@ def _scan_text(text: str) -> List[Tuple[str, str]]:
 
 
 def _player_texts(template: dict) -> List[Tuple[str, Any]]:
-    """(D7 path, value) of every text a player may read and that may carry role placeholders (``gm_notes`` never),
-    including effect ``text`` parameters whose spec does not declare ``"placeholders": False``."""
+    """(D7 path, value) of every text that may carry role placeholders (``gm_notes`` never):
+    player-visible template/step/role-note/lock texts, effect ``text`` parameters whose spec does
+    not declare ``"placeholders": False``, and condition ``text`` parameters whose spec opts in
+    with ``"placeholders": True``."""
     out: List[Tuple[str, Any]] = [("title", template.get("title")), ("summary", template.get("summary"))]
     for i, step in enumerate(_steps(template)):
         if isinstance(step, dict):
@@ -150,24 +152,36 @@ def _player_texts(template: dict) -> List[Tuple[str, Any]]:
                     if isinstance(note, dict):
                         out.append((f"steps.{i}.role_notes.{j}.text", note.get("text")))
     out.append(("prerequisites.locked_text", _prerequisites(template).get("locked_text")))
+    known = quest_catalog.types()
     positions = effect_positions(template)
-    if positions:
-        known = quest_catalog.types()
-        for prefix, entries, _position in positions:
-            for j, entry in enumerate(entries):
-                if not isinstance(entry, dict) or not isinstance(entry.get("type"), str):
-                    continue
-                t = known.get(entry["type"])
-                if t is None:
-                    continue
-                params = entry.get("params")
-                if not isinstance(params, dict):
-                    continue
-                for spec in t.params:
-                    if spec.get("type") == "text" and spec.get("placeholders") is not False:
-                        key = spec.get("key")
-                        if key in params:
-                            out.append((f"{prefix}.{j}.params.{key}", params[key]))
+    for prefix, entries, _position in positions:
+        for j, entry in enumerate(entries):
+            if not isinstance(entry, dict) or not isinstance(entry.get("type"), str):
+                continue
+            t = known.get(entry["type"])
+            if t is None:
+                continue
+            params = entry.get("params")
+            if not isinstance(params, dict):
+                continue
+            for spec in t.params:
+                if spec.get("type") == "text" and spec.get("placeholders") is not False:
+                    key = spec.get("key")
+                    if key in params:
+                        out.append((f"{prefix}.{j}.params.{key}", params[key]))
+    for path, expr, _kinds, _where in _expressions(template):
+        for leaf_path, leaf in quest_catalog.walk(expr):
+            t = known.get(leaf["type"])
+            if t is None:
+                continue
+            params = leaf.get("params")
+            if not isinstance(params, dict):
+                continue
+            for spec in t.params:
+                if spec.get("type") == "text" and spec.get("placeholders") is True:
+                    key = spec.get("key")
+                    if key in params:
+                        out.append((f"{path}{leaf_path}.params.{key}", params[key]))
     return out
 
 

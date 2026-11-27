@@ -35,7 +35,7 @@ from __future__ import annotations
 from datetime import timedelta
 import json
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.core.db import get_connection, transaction
 from app.core.keyed_lock import keyed_lock
@@ -735,7 +735,7 @@ def get_judgement(run_id: str, step: int, criterion_key: str, mind: str) -> dict
 
 def claim_judgement(run_id: str, step: int, criterion_key: str, mind: str, avatar: str, *,
                     now: str, min_interval_s: float, newest_id: int,
-                    pending_stale_s: float = 600) -> bool:
+                    pending_alive: Optional[Callable[[str], bool]] = None) -> bool:
     """Atomically claim a judgement slot for ``(run_id, step, criterion_key, mind)``.
 
     Returns True and writes ``state='pending'``, ``requested_at=now``, ``avatar``, ``attempts+1``,
@@ -743,8 +743,9 @@ def claim_judgement(run_id: str, step: int, criterion_key: str, mind: str, avata
       (a) no row exists yet;
       (b) the row is ``'no'`` or ``'error'``, ``requested_at`` is at least ``min_interval_s``
           before ``now`` (or blank/unparseable), AND ``judged_through < newest_id``; or
-      (c) the row is ``'pending'`` and ``requested_at`` is older than ``pending_stale_s``
-          (a restart lost the queued job).
+      (c) the row is ``'pending'``, ``requested_at`` is at least ``min_interval_s`` before
+          ``now`` (or blank/unparseable), AND its queued task is no longer alive (empty
+          ``task_id``, ``pending_alive`` is None, or ``pending_alive(task_id)`` returns False).
     Never claims a ``'yes'`` row. Returns False without writing otherwise.
     """
     idx = int(step)
@@ -752,7 +753,7 @@ def claim_judgement(run_id: str, step: int, criterion_key: str, mind: str, avata
     now_dt = parse_iso(now)
     with keyed_lock("quest_run", run_id), transaction() as conn:
         row = conn.execute(
-            "SELECT state, judged_through, requested_at FROM quest_judgements "
+            "SELECT state, judged_through, requested_at, task_id FROM quest_judgements "
             "WHERE run_id=? AND step=? AND criterion_key=? AND mind=?",
             (run_id, idx, criterion_key, mind)).fetchone()
         if row is None:
@@ -771,7 +772,10 @@ def claim_judgement(run_id: str, step: int, criterion_key: str, mind: str, avata
             if not _is_older_than(req_at, now_dt, min_interval_s):
                 return False
         elif state == "pending":
-            if not _is_older_than(req_at, now_dt, pending_stale_s):
+            if not _is_older_than(req_at, now_dt, min_interval_s):
+                return False
+            task_id = row["task_id"] or ""
+            if task_id and pending_alive is not None and pending_alive(task_id):
                 return False
         else:
             return False
