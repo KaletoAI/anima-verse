@@ -1592,6 +1592,7 @@ declaration.
 |---|---|
 | `model_replace` | Re-generates every model a given mesh backend made, on another one |
 | `fill_missing` | Generates missing models, expressions, clothing images, and prop variant front images; optional explicit mesh/image backends |
+| `item_images` | Generates the image of every item without one through the item producer (`item` occasion; optional explicit image backend): world items and the shared-library items the world reaches (an inventory, a worn piece/item, a room placement, or a part one of those links — `subjects.world_item_ids`). Not a subject (`subjects.item_image_exclusion`): hairstyles and other mesh-only `garment` items (no image on purpose) and world outfit pieces, parts included (the clothing images cover them); a shared outfit piece the world reaches is one. A step is wrong (`invalid_reason`) once its item is deleted or excluded; an unreadable item table raises |
 | `face_retexture` | Corrects stored character meshes for all or one character, scoped to all stored meshes or the current outfit |
 | `image_rerender` | Re-renders portraits/gallery images of one image backend on another |
 | `surface_bake` | Bakes the walkable-surface lattice of room and prop models |

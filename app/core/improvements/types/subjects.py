@@ -815,6 +815,99 @@ def generate_clothing_image(item_id: str, backend: str = "") -> None:
 
 
 # ---------------------------------------------------------------------------
+# Item images (every other item kind)
+# ---------------------------------------------------------------------------
+
+def item_image_exclusion(item: Optional[Dict[str, Any]]) -> str:
+    """Why ``item`` is not a subject of the general item images ("" = it is one).
+
+    * a hairstyle (``garment_hair.is_hair_item``) and every other ``garment`` item: mesh-only, never shown in 2D,
+      so it has no image on purpose;
+    * a WORLD outfit piece, part items included: the clothing images (``clothing_items``) cover it. A part's image
+      is its own product shot (``accessory_parts.part_image_prompt``), not derived from its host, so a shared part
+      is a subject like any shared piece.
+    """
+    from app.core.garment_hair import is_hair_item
+    if not item:
+        return "item deleted"
+    if is_hair_item(item):
+        return "hairstyle (no image on purpose)"
+    if item.get("category") == "garment":
+        return "mesh-only garment (no image on purpose)"
+    if item.get("category") == "outfit_piece" and not item.get("_shared"):
+        return "world clothing (covered by the clothing images)"
+    return ""
+
+
+def world_item_ids() -> set:
+    """The item ids this world reaches: every character inventory entry and worn piece/item, every room placement,
+    and the parts those items link (``accessory_parts.part_ids_of``). A shared-library item is in the world's scope
+    only through this set — the library is cross-world, and an item no character holds and no room shows is another
+    world's.
+    Reads are strict: an unreadable inventory or world must not read as "reaches nothing"."""
+    from app.core.accessory_parts import part_ids_of
+    from app.core.db import get_connection
+    from app.models.inventory import get_item
+    from app.models.world import list_locations
+    conn = get_connection()
+    ids = {str(row[0]) for row in conn.execute("SELECT DISTINCT item_id FROM inventory_items").fetchall() if row[0]}
+    # What a character wears lives in its state meta (``character._STATE_META_KEYS``).
+    for (raw,) in conn.execute("SELECT meta FROM character_state").fetchall():
+        meta = json.loads(raw or "{}")
+        worn = list(dict(meta.get("equipped_pieces") or {}).values()) + list(meta.get("equipped_items") or [])
+        ids.update(str(item_id) for item_id in worn if item_id)
+    for location in list_locations(strict=True):
+        for room in location.get("rooms") or []:
+            if not isinstance(room, dict):
+                continue
+            for entry in room.get("items") or []:
+                if isinstance(entry, dict) and entry.get("item_id"):
+                    ids.add(str(entry["item_id"]))
+    for item_id in list(ids):
+        ids.update(part_ids_of(get_item(item_id, strict=True)))
+    return ids
+
+
+def item_image_items() -> List[Dict[str, Any]]:
+    """The subjects of the general item images: every world item and every shared-library item in the world's scope
+    (``world_item_ids``) that ``item_image_exclusion`` does not rule out. The shared copies carry ``_shared``."""
+    from app.models.inventory import list_items, list_shared_items
+    world = [item for item in list_items(strict=True) if item.get("id")]
+    own = {item["id"] for item in world}
+    reached = world_item_ids()
+    shared = [{**item, "_shared": True} for item in list_shared_items(strict=True)
+              if item.get("id") and item["id"] in reached and item["id"] not in own]
+    return [item for item in world + shared if not item_image_exclusion(item)]
+
+
+def item_image_done(item_id: str) -> bool:
+    """The item's selected image exists on disk (``get_item_image_path``). A gone or excluded item needs no work."""
+    from app.models.inventory import get_item, get_item_image_path
+    item = get_item(item_id)
+    if item_image_exclusion(item):
+        return True
+    return bool(item.get("image") and get_item_image_path(item_id))
+
+
+def generate_item_image(item_id: str, backend: str = "") -> None:
+    """The blocking item producer for a general item, with the typed load/failure errors of
+    ``generate_clothing_image``. An item that got its image, was deleted or became excluded while the step waited
+    is left alone."""
+    from app.imagegen.routing import NoRouteError
+    from app.core.item_images import generate_item_image_sync
+    if item_image_done(item_id):
+        return
+    try:
+        ok = generate_item_image_sync(item_id, overrides={"backend": backend}, raise_errors=True)
+    except NoRouteError as exc:
+        if exc.__cause__ is not None:
+            raise
+        raise CandidateBusy(str(exc)) from exc
+    if not ok:
+        raise RuntimeError(f"{item_id}: item image generation failed")
+
+
+# ---------------------------------------------------------------------------
 # Walkable surfaces
 # ---------------------------------------------------------------------------
 #

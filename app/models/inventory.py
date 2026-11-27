@@ -170,8 +170,9 @@ def _save_shared_items(items: List[Dict[str, Any]], *, meta: Optional[Dict[str, 
     invalidate()
 
 
-def list_shared_items() -> List[Dict[str, Any]]:
-    return _load_shared_items()
+def list_shared_items(*, strict: bool = False) -> List[Dict[str, Any]]:
+    """The cross-world shared library; ``strict`` raises on an unreadable file instead of answering ``[]``."""
+    return _load_shared_items(strict=strict)
 
 
 def get_shared_item(item_id: str, *, strict: bool = False) -> Optional[Dict[str, Any]]:
@@ -306,9 +307,9 @@ def _save_items(items: List[Dict[str, Any]]) -> bool:
     return ok
 
 
-def list_items() -> List[Dict[str, Any]]:
-    """List all item definitions."""
-    return _load_items()
+def list_items(*, strict: bool = False) -> List[Dict[str, Any]]:
+    """List all item definitions; ``strict`` raises on a DB error instead of answering the JSON fallback."""
+    return _load_items(strict=strict)
 
 
 def get_item(item_id: str, *, strict: bool = False) -> Optional[Dict[str, Any]]:

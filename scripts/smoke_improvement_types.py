@@ -630,10 +630,10 @@ def candidates(improvement_type, params):
 
 # ── [1] the parameter contract ──────────────────────────────────────────────
 print("[1] model_replace parameters")
-check("all eighteen types are registered",
+check("all nineteen types are registered",
       sorted(t.id for t in registry.list_types()),
       ["artefact_cleanup", "base_refresh", "collision_capsules", "extension_rig_rebuild", "face_cleanup_rerun", "face_retexture", "fallback_rerender", "fill_missing",
-       "fit_refit", "garment_fill", "hair_fill", "hand_restore", "image_rerender", "mesh_from_tpose", "model_replace", "outfit_rebuild",
+       "fit_refit", "garment_fill", "hair_fill", "hand_restore", "image_rerender", "item_images", "mesh_from_tpose", "model_replace", "outfit_rebuild",
        "rig_weight_repair", "surface_bake"])
 check("a complete set validates to itself",
       MODEL_REPLACE.validate({"subject": "character", "source_backend": "hy",

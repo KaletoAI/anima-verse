@@ -7546,6 +7546,8 @@
     "These hairstyles are worn by nobody, in no outfit set and referenced nowhere:": "Diese Frisuren trägt niemand, sie stehen in keinem Outfit-Set und werden nirgends verwendet:",
     "owner {name} no longer exists": "Besitzer {name} gibt es nicht mehr",
     "no owner": "kein Besitzer",
-    "{owner}: copy of “{name}”": "{owner}: Kopie von „{name}“"
+    "{owner}: copy of “{name}”": "{owner}: Kopie von „{name}“",
+    "Generate missing item images": "Fehlende Item-Bilder erzeugen",
+    "Every item without an image — tools, keys, food, documents, spells and the shared items this world uses. Clothing has its own subject under “Generate missing assets”; hairstyles get none.": "Jedes Item ohne Bild — Werkzeuge, Schlüssel, Essen, Dokumente, Zauber und die geteilten Items, die diese Welt nutzt. Kleidung steht als eigener Punkt unter „Generate missing assets“; Frisuren bekommen keins."
   }
 }

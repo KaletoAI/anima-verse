@@ -14,6 +14,7 @@ from .garment_fill import GarmentFill
 from .hair_fill import HairFill
 from .hand_restore import HandRestore
 from .image_rerender import ImageRerender
+from .item_images import ItemImages
 from .mesh_from_tpose import MeshFromTpose
 from .model_replace import ModelReplace
 from .outfit_rebuild import OutfitRebuild
@@ -38,6 +39,7 @@ registry.register(SurfaceBake())
 registry.register(MeshFromTpose())
 registry.register(FallbackRerender())
 registry.register(ArtefactCleanup())
+registry.register(ItemImages())
 
-__all__ = ["ArtefactCleanup", "BaseRefresh", "CollisionCapsules", "FaceCleanupRerun", "FaceRetexture", "ExtensionRigRebuild", "FallbackRerender", "FillMissing", "FitRefit", "GarmentFill", "HairFill", "HandRestore", "ImageRerender", "MeshFromTpose", "ModelReplace", "OutfitRebuild",
+__all__ = ["ArtefactCleanup", "BaseRefresh", "CollisionCapsules", "FaceCleanupRerun", "FaceRetexture", "ExtensionRigRebuild", "FallbackRerender", "FillMissing", "FitRefit", "GarmentFill", "HairFill", "HandRestore", "ImageRerender", "ItemImages", "MeshFromTpose", "ModelReplace", "OutfitRebuild",
            "RigWeightRepair", "SurfaceBake"]
