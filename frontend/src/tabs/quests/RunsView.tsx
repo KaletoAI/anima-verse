@@ -39,6 +39,13 @@ const PAYOUT_STATE_LABELS: Record<string, string> = {
   failed: 'Failed',
 }
 
+const JUDGEMENT_STATE_LABELS: Record<string, string> = {
+  pending: 'Waiting for the judge',
+  yes: 'Passed',
+  no: 'Not yet',
+  error: 'Judge error',
+}
+
 function objectStatusClass(status: string): string {
   if (status === 'live') return 'ga-tag ga-status-ok'
   if (status === 'gone') return 'ga-tag ga-tag-missing'
@@ -48,6 +55,12 @@ function objectStatusClass(status: string): string {
 function payoutStateClass(state: string): string {
   if (state === 'applied') return 'ga-tag ga-status-ok'
   if (state === 'failed') return 'ga-tag ga-tag-missing'
+  return 'ga-tag ga-status-paused'
+}
+
+function judgementStateClass(state: string): string {
+  if (state === 'yes') return 'ga-tag ga-status-ok'
+  if (state === 'error') return 'ga-tag ga-tag-missing'
   return 'ga-tag ga-status-paused'
 }
 
@@ -176,6 +189,7 @@ export function RunsView() {
               const canCancel = RUN_OPEN_STATES.includes(run.state)
               const objects = run.objects || []
               const payouts = run.payouts || []
+              const judgements = run.judgements || []
               const canRetry = payouts.some((p) => p.state === 'failed') || (run.state === 'preparing' && run.issues.length > 0)
               return (
                 <Fragment key={run.id}>
@@ -229,6 +243,21 @@ export function RunsView() {
                             ))}
                           </ul>
                         ) : <p className="ga-form-hint">{t('No step done yet.')}</p>}
+                        {judgements.length ? (
+                          <>
+                            <strong>{t('Judgement (current step)')}</strong>
+                            <ul>
+                              {judgements.map((j, n) => (
+                                <li key={n}>
+                                  {j.avatar || j.mind}
+                                  {j.mind && j.avatar && j.mind !== j.avatar ? ` (${j.mind})` : ''}{' '}
+                                  <span className={judgementStateClass(j.state)}>{t(JUDGEMENT_STATE_LABELS[j.state] || j.state)}</span>
+                                  {j.reason ? ` — ${j.reason}` : ''}
+                                </li>
+                              ))}
+                            </ul>
+                          </>
+                        ) : null}
                         <strong>{t('Objects')}</strong>
                         {objects.length ? (
                           <ul>

@@ -102,6 +102,19 @@ def _run_row(run: Dict[str, Any], lang: str) -> Dict[str, Any]:
         {"position": p.get("position"), "state": p.get("state"), "issues": p.get("issues") or []}
         for p in quests.list_payouts(states=(), run_id=run_id)
     ]
+    if run.get("state") == "open":
+        judgements = [
+            {
+                "mind": j.get("mind") or "",
+                "avatar": j.get("avatar") or "",
+                "state": j.get("state") or "",
+                "reason": j.get("reason") or "",
+                "judged_at": j.get("judged_at") or None,
+            }
+            for j in quests.list_judgements(run_id, step=int(run.get("current_step") or 0))
+        ]
+    else:
+        judgements = []
     return {
         "id": run.get("id"),
         "title": quest_engine.render_text(str(snapshot.get("title") or ""), run),
@@ -116,6 +129,7 @@ def _run_row(run: Dict[str, Any], lang: str) -> Dict[str, Any]:
         "expires_label": _label(run.get("expires_at") or "", lang),
         "objects": objects,
         "payouts": payouts,
+        "judgements": judgements,
     }
 
 

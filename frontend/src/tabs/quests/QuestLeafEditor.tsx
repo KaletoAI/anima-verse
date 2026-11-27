@@ -8,10 +8,11 @@ import type { CatalogType, Issue, ParamSpec, Role } from './questsModel'
  * issues (for parameters the registered type does not declare), and the generic `QuestParamForm`.
  */
 export function QuestLeafEditor({
-  leaf, types, roles, issues, path, onChange, targets, placeholders, setup, typeLabel, hideTypeSelect,
+  leaf, types, pickable, roles, issues, path, onChange, targets, placeholders, setup, typeLabel, hideTypeSelect,
 }: {
   leaf: { type: string; params: Record<string, unknown> }
   types: CatalogType[]
+  pickable?: CatalogType[]
   roles: Role[]
   issues: Issue[]
   path: string
@@ -23,7 +24,9 @@ export function QuestLeafEditor({
   hideTypeSelect?: boolean
 }) {
   const { t } = useI18n()
+  const offered = pickable ?? types
   const type = types.find((x) => x.id === leaf.type)
+  const inOffered = offered.some((x) => x.id === leaf.type)
   // Issues of a parameter the type does not declare have no field to stand under: shown at the leaf.
   const declared = new Set((type?.params || []).map((p) => path + '.params.' + p.key))
   const stray = issuesAt(issues, path + '.params').filter(
@@ -39,8 +42,12 @@ export function QuestLeafEditor({
               const picked = types.find((x) => x.id === e.target.value)
               onChange({ type: e.target.value, params: defaultParams(picked) })
             }}>
-            {!type ? <option value={leaf.type}>{leaf.type} ({t('not registered')})</option> : null}
-            {types.map((x) => <option key={x.id} value={x.id}>{t(x.label)}</option>)}
+            {!type ? (
+              <option value={leaf.type}>{leaf.type} ({t('not registered')})</option>
+            ) : !inOffered ? (
+              <option value={leaf.type}>{t(type.label)} ({t('not allowed here')})</option>
+            ) : null}
+            {offered.map((x) => <option key={x.id} value={x.id}>{t(x.label)}</option>)}
           </select>
         </div>
       ) : null}

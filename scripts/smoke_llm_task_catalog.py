@@ -23,10 +23,10 @@ Checks (expected values derived by hand):
   4. Every id named in llm_task_state.PRESETS exists in TASK_TYPES.
   5. fallback_parent table:
        furnish -> intent, prop_mount_classify -> intent,
-       room_description_sync -> intent, npc_talk -> chat_stream,
-       npc_generate -> chat_stream, extraction_chat_state -> extraction,
-       intent_anything -> intent, chat_stream -> None, intent -> None,
-       consolidation -> None.
+       room_description_sync -> intent, quest_judgement -> intent,
+       npc_talk -> chat_stream, npc_generate -> chat_stream,
+       extraction_chat_state -> extraction, intent_anything -> intent,
+       chat_stream -> None, intent -> None, consolidation -> None.
   6. Dead-task guard: for every TASK_TYPES id, the literal string "<id>"
      (double-quoted) occurs in at least one .py file under app/ or plugins/
      OTHER THAN app/core/llm_tasks.py, app/core/llm_task_state.py and
@@ -72,10 +72,10 @@ for name, ids in PRESETS.items():
         check(tid in TASK_TYPES, f"4. preset {name} names catalog id: {tid}")
 
 EXPECT = {"furnish": "intent", "prop_mount_classify": "intent",
-          "room_description_sync": "intent", "npc_talk": "chat_stream",
-          "npc_generate": "chat_stream", "extraction_chat_state": "extraction",
-          "intent_anything": "intent", "chat_stream": None, "intent": None,
-          "consolidation": None}
+          "room_description_sync": "intent", "quest_judgement": "intent",
+          "npc_talk": "chat_stream", "npc_generate": "chat_stream",
+          "extraction_chat_state": "extraction", "intent_anything": "intent",
+          "chat_stream": None, "intent": None, "consolidation": None}
 for tid, want in EXPECT.items():
     check(fallback_parent(tid) == want, f"5. fallback_parent({tid}) == {want!r}")
 

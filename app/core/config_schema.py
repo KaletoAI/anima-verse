@@ -1457,6 +1457,30 @@ SECTIONS = {
             "resolved_image_linger_minutes": {"type": "int", "label": "Resolved-Image Linger (min)", "default": 30, "min": 0, "max": 240, "description": "How long the 'after' illustration of a resolved disruption/danger event keeps overriding the normal location background before reverting. SYSTEM time (real minutes)."},
         },
     },
+    "quests": {
+        "label": "Quests",
+        "icon": "📜",
+        "scope": "world",
+        "world_group": "story",
+        "fields": {
+            "judgement_min_interval_s": {
+                "type": "int",
+                "label": "Judgement: minimum seconds between checks",
+                "default": 30,
+                "min": 5,
+                "max": 3600,
+                "description": "Minimum SYSTEM-time seconds before an open llm_judgement step may ask the judge again after new lines arrive.",
+            },
+            "judgement_max_per_minute": {
+                "type": "int",
+                "label": "Judgement: max checks per minute",
+                "default": 6,
+                "min": 1,
+                "max": 120,
+                "description": "In-process cap over all open runs on how many llm_judgement checks may be submitted per minute.",
+            },
+        },
+    },
     # Temporary NPCs — the automatic half (plan-npc-auto-spawn.md). The manual
     # "+ New NPC" dialog needs none of this; these are the limits the world
     # fills itself within.

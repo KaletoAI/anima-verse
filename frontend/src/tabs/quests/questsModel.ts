@@ -52,6 +52,7 @@ export interface CatalogType {
   object_kind?: string
   object_kind_when?: [string, string][]
   needs_open_run?: boolean
+  step_only?: boolean
 }
 export interface Catalog {
   conditions: CatalogType[]

@@ -53,6 +53,9 @@ export interface RunObject { kind: string; label: string; permanent: boolean; st
 /** One payout batch of a quest run (`setup`, `step:<i>` or `reward`). */
 export interface RunPayout { position: string; state: string; issues: Issue[] }
 
+/** One cached LLM judgement verdict for the current step of an open quest run. */
+export interface RunJudgement { mind: string; avatar: string; state: string; reason: string; judged_at: string | null }
+
 /** A row of `GET /quests/runs` (`_run_row` in app/routes/quests.py); the labels are finished server strings. */
 export interface RunRow {
   id: string
@@ -69,6 +72,7 @@ export interface RunRow {
   expires_label: string
   objects: RunObject[]
   payouts: RunPayout[]
+  judgements?: RunJudgement[]
 }
 
 /** Runs, every not yet ended one first; `state` ('' = all) narrows to one state. */

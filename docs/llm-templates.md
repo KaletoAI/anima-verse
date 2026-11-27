@@ -126,6 +126,12 @@ into "what does the room need" and "what does the library already have";
 | `npc_action.md` | `npc_action` | `npc_actions` (`TASK`) | One NPC action turn |
 | `npc_scene.md` | `npc_scene` | `npc_scenes` (`TASK`) | The director picks who talks to whom in a room |
 
+### Quests
+
+| Template | Task | Caller | Purpose |
+|---|---|---|---|
+| `quest_judgement.md` | `quest_judgement` | `quest_judgement.handle` | Judge from the avatar's subjective transcript whether a quest step's criterion is met (one `json:verdict` block) |
+
 ### Model test (`/admin/models`)
 
 | Template | Task | Caller | Purpose |

@@ -7626,6 +7626,11 @@
     "Take": "Nehmen",
     "No free spot next to the item": "Kein freier Platz neben dem Gegenstand",
     "Nothing to do here.": "Hier gibt es nichts zu tun.",
-    "Quantity: {n}": "Anzahl: {n}"
+    "Quantity: {n}": "Anzahl: {n}",
+    "not allowed here": "hier nicht erlaubt",
+    "Judgement (current step)": "Beurteilung (aktueller Schritt)",
+    "Waiting for the judge": "Wartet auf Beurteilung",
+    "Not yet": "Noch nicht",
+    "Judge error": "Beurteilungsfehler"
   }
 }

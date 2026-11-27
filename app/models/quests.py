@@ -733,6 +733,19 @@ def get_judgement(run_id: str, step: int, criterion_key: str, mind: str) -> dict
     return dict(row) if row is not None else None
 
 
+def list_judgements(run_id: str, step: int | None = None) -> list[dict]:
+    """Read cached judgement rows for ``run_id`` (optionally one ``step``), ordered by mind."""
+    if step is not None:
+        rows = get_connection().execute(
+            "SELECT * FROM quest_judgements WHERE run_id=? AND step=? ORDER BY mind",
+            (run_id, int(step))).fetchall()
+    else:
+        rows = get_connection().execute(
+            "SELECT * FROM quest_judgements WHERE run_id=? ORDER BY mind",
+            (run_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
 def claim_judgement(run_id: str, step: int, criterion_key: str, mind: str, avatar: str, *,
                     now: str, min_interval_s: float, newest_id: int,
                     pending_alive: Optional[Callable[[str], bool]] = None) -> bool:

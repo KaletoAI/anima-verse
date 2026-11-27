@@ -7,17 +7,19 @@ Evaluation of ``llm_judgement`` never calls an LLM inline. Instead:
      per-minute rate cap and atomically claims a slot in ``quest_judgements``
      (``quests.claim_judgement``) before submitting a low-priority task-queue job.
   3. The task-queue handler :func:`handle` re-reads the run, gathers the avatar's
-     subjective perception transcript since ``step_started_at``, calls the configured
-     judge function, writes the verdict via ``quests.set_judgement``, and notifies
-     the quest engine (``quest.judged``) so evaluation runs again on the worker.
+     subjective perception transcript since ``step_started_at``, calls the LLM
+     judge (:func:`llm_judge`, task ``quest_judgement``), writes the verdict via
+     ``quests.set_judgement``, and notifies the quest engine (``quest.judged``)
+     so evaluation runs again on the worker.
 
-The default judge raises ``RuntimeError("no quest judge configured")``; a later task
-wires the tool-model judge and registers the task-queue handler.
+:func:`register` wires :func:`handle` into the task queue at server boot.
 """
 from __future__ import annotations
 
 from collections import deque
 import hashlib
+import json
+import math
 import threading
 import time
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
@@ -41,12 +43,28 @@ _recent_submits: Deque[float] = deque()
 
 def min_interval_s() -> float:
     """Minimum seconds between judgement attempts for the same (run, step, criterion, mind)."""
-    return MIN_INTERVAL_S
+    from app.core import config
+    val = config.get("quests.judgement_min_interval_s", None)
+    if val is None or isinstance(val, bool):
+        return MIN_INTERVAL_S
+    try:
+        num = float(val)
+        return num if math.isfinite(num) and num > 0 else MIN_INTERVAL_S
+    except (TypeError, ValueError):
+        return MIN_INTERVAL_S
 
 
 def max_per_minute() -> int:
     """In-process cap on judgement task submissions per rolling 60 seconds."""
-    return MAX_PER_MINUTE
+    from app.core import config
+    val = config.get("quests.judgement_max_per_minute", None)
+    if val is None or isinstance(val, bool):
+        return MAX_PER_MINUTE
+    try:
+        num = int(val)
+        return num if num > 0 else MAX_PER_MINUTE
+    except (TypeError, ValueError):
+        return MAX_PER_MINUTE
 
 
 def criterion_key(criterion: str) -> str:
@@ -145,8 +163,82 @@ def request(ctx, criterion: str) -> None:
         logger.warning("quest judgement request failed: %s", e)
 
 
-def _judge(criterion: str, transcript: List[Dict[str, Any]], avatar: str) -> Tuple[bool, str]:
-    raise RuntimeError("no quest judge configured")
+def format_transcript(lines: List[Dict[str, Any]]) -> str:
+    """Format perception transcript lines as one line per utterance, oldest first."""
+    formatted: List[str] = []
+    for line in lines:
+        speaker = str(line.get("speaker") or "")
+        raw_addr = line.get("addressees") or []
+        if isinstance(raw_addr, str):
+            addrs = [raw_addr] if raw_addr.strip() else []
+        else:
+            addrs = [str(a) for a in raw_addr if str(a).strip()]
+        content = str(line.get("content") or "")
+        if addrs:
+            formatted.append(f"{speaker} -> {', '.join(addrs)}: {content}")
+        else:
+            formatted.append(f"{speaker}: {content}")
+    return "\n".join(formatted)
+
+
+def parse_verdict(text: str) -> Tuple[bool, str]:
+    """Parse ``{"passed": bool, "reason": str}`` from a ``json:verdict`` fence or bare JSON object."""
+    from app.core.layout_prompt import extract_json_block
+
+    raw = str(text or "")
+    data: Any = None
+    try:
+        data = extract_json_block(raw, "verdict")
+    except TypeError:
+        data = None
+    if not isinstance(data, dict):
+        stripped = raw.strip()
+        data = None
+        if stripped:
+            try:
+                candidate = json.loads(stripped)
+                if isinstance(candidate, dict):
+                    data = candidate
+            except json.JSONDecodeError:
+                brace = stripped.find("{")
+                if brace >= 0:
+                    try:
+                        candidate, _ = json.JSONDecoder().raw_decode(stripped[brace:])
+                        if isinstance(candidate, dict):
+                            data = candidate
+                    except json.JSONDecodeError:
+                        data = None
+    if not isinstance(data, dict) or not isinstance(data.get("passed"), bool):
+        raise ValueError("no verdict in the answer")
+    reason = str(data.get("reason") or "")[:500]
+    return data["passed"], reason
+
+
+def llm_judge(criterion: str, transcript: List[Dict[str, Any]], avatar: str) -> Tuple[bool, str]:
+    """Evaluate ``criterion`` against ``transcript`` via the ``quest_judgement`` LLM task."""
+    from app.core import llm_router
+    from app.core.prompt_templates import render_task
+
+    system, user = render_task(
+        TASK_TYPE,
+        criterion=criterion,
+        avatar=avatar,
+        transcript=format_transcript(transcript),
+    )
+    resp = llm_router.llm_call(
+        TASK_TYPE,
+        system,
+        user,
+        agent_name=avatar,
+        label="quest judgement",
+        max_tokens=300,
+    )
+    return parse_verdict(getattr(resp, "content", "") or "")
+
+
+def register() -> None:
+    """Register the ``quest_judgement`` handler on the global task queue."""
+    get_task_queue().register_handler(TASK_TYPE, handle)
 
 
 def handle(payload: Dict[str, Any], *,
@@ -178,7 +270,7 @@ def handle(payload: Dict[str, Any], *,
         state = "no"
         reason = "Nothing has been said since this step began"
     else:
-        fn = judge_fn or _judge
+        fn = judge_fn or llm_judge
         try:
             passed, raw_reason = fn(criterion, transcript, avatar)
             state = "yes" if passed else "no"

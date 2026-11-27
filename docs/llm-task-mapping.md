@@ -139,7 +139,7 @@ Overview page all show the same answer:
 | Task shape | Parent |
 |---|---|
 | `intent_*`, `thought_*`, `extraction_*` | `intent` / `thought` / `extraction` |
-| `building_layout`, `furnish`, `prop_mount_classify`, `room_description_sync`, `pose_animation_prompt` | `intent` |
+| `building_layout`, `furnish`, `prop_mount_classify`, `room_description_sync`, `pose_animation_prompt`, `quest_judgement` | `intent` |
 | `npc_*` | `chat_stream` |
 | `image_pose_check`, `image_prompt_shorten`, `piece_back_text` | `image_prompt` |
 | `haar_hair_prompt`, `garment_template_params` | `image_recognition` |
@@ -224,7 +224,7 @@ mutations of the UI model.
 
 ## Task catalog
 
-34 tasks, in the order they stand in
+35 tasks, in the order they stand in
 [`app/core/llm_tasks.py`](../app/core/llm_tasks.py).
 
 ### Streaming / RP
@@ -250,6 +250,7 @@ has no UI today — it is kept for a later reuse.
 | `thought` | Thought (agent loop) | chat | — | `core/thoughts.py`, `core/agent_loop.py` | The autonomous turn of an idle character. |
 | `intent` | Intent / tool calls | tool | — | `core/chat_engine.py`, `core/thoughts.py`, `core/act_engine.py` | The Tool-LLM: it turns prose into skill calls for chat AND thought turns. Also the fallback parent for the tool-class tasks below. |
 | `spell_detect` | Spell Cast Detection | tool | — | `core/spell_engine.py` | Whether the avatar's message casts one of the spells in their inventory. |
+| `quest_judgement` | Quest: Judge Conversation | tool | — | `core/quest_judgement.py` | Judges from the avatar's own transcript whether a quest step's criterion is met — one `json:verdict` block (`tasks/quest_judgement.md`). |
 | `pose_embedding` | Pose Embedding | embedding | — | `core/embedding.py` | The similarity vector for the pose catalog match. Runs over `/v1/embeddings`, not the chat queue. Only reached when `embedding.backend` is `external`, or `auto` and this task is routed; `internal` uses the built-in fastembed model on CPU. Load never switches the model: the route ignores the provider's request quota (requests look at it but book no slot), and a full window or HTTP 429 waits up to `embedding.max_wait_seconds`, then the call returns no vector (alias equality / no memory block) instead of the built-in model's. An outage does not switch it either: with `auto` and this task routed, an unavailable provider or a model cooldown means no vector (model id empty) until the route is back; only `auto` without a route at all uses the built-in model. |
 
 RP Influence does not add a routing task, per-rule model, or per-target call.

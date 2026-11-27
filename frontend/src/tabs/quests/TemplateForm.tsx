@@ -212,7 +212,8 @@ export function TemplateForm({
                 path={`steps.${index}.condition`} onChange={(condition: Expr) => setStep(index, { condition })}
                 onStructureChange={onStructureChange}
                 targets={(p) => targetOptions(draft, `step:${index}`, p, effectTypes)}
-                placeholders={placeholders} />
+                placeholders={placeholders}
+                allowStepOnly />
               {warnings.filter((w) => w.path === `steps.${index}.condition`).map((w, n) => (
                 <p key={n} className="ga-field-warn">{t(w.message)}</p>
               ))}

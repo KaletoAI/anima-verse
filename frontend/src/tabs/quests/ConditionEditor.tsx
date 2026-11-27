@@ -36,7 +36,7 @@ function exactly(issues: Issue[], ...paths: string[]): Issue[] {
  * issues it holds instead of showing them under the wrong entry).
  */
 export function ConditionEditor({
-  expr, types, roles, issues, path, onChange, onStructureChange, targets, placeholders,
+  expr, types, roles, issues, path, onChange, onStructureChange, targets, placeholders, allowStepOnly = false,
 }: {
   expr: Expr
   types: CatalogType[]
@@ -47,11 +47,13 @@ export function ConditionEditor({
   onStructureChange?: () => void
   targets?: (p: ParamSpec) => string[]
   placeholders?: string
+  allowStepOnly?: boolean
 }) {
   const { t } = useI18n()
   const mode = modeOf(expr)
+  const pickable = allowStepOnly ? types : types.filter((x) => !x.step_only)
 
-  const freshLeaf = (): Expr => (types.length ? { type: types[0].id, params: defaultParams(types[0]) } : {})
+  const freshLeaf = (): Expr => (pickable.length ? { type: pickable[0].id, params: defaultParams(pickable[0]) } : {})
 
   const switchMode = (next: Mode) => {
     if (next === mode) return
@@ -74,6 +76,7 @@ export function ConditionEditor({
       <QuestLeafEditor
         leaf={{ type: leaf.type, params: leaf.params || {} }}
         types={types}
+        pickable={pickable}
         roles={roles}
         issues={issues}
         path={path}
@@ -93,7 +96,8 @@ export function ConditionEditor({
           <div key={i} className="ga-quest-cond-child">
             <ConditionEditor expr={child} types={types} roles={roles} issues={issues}
               path={`${path}.${mode}.${i}`} onChange={(next) => put(children.map((c, j) => (j === i ? next : c)))}
-              onStructureChange={onStructureChange} targets={targets} placeholders={placeholders} />
+              onStructureChange={onStructureChange} targets={targets} placeholders={placeholders}
+              allowStepOnly={allowStepOnly} />
             <button type="button" className="ga-btn ga-btn-sm" disabled={children.length <= 1}
               title={children.length <= 1 ? t('A group needs at least one entry') : undefined}
               onClick={() => { onStructureChange?.(); put(children.filter((_, j) => j !== i)) }}>{t('Remove')}</button>
@@ -110,7 +114,7 @@ export function ConditionEditor({
       <div className="ga-quest-cond-children">
         <ConditionEditor expr={inner} types={types} roles={roles} issues={issues} path={path + '.not'}
           onChange={(next) => onChange({ not: next })} onStructureChange={onStructureChange}
-          targets={targets} placeholders={placeholders} />
+          targets={targets} placeholders={placeholders} allowStepOnly={false} />
       </div>
     )
   }
