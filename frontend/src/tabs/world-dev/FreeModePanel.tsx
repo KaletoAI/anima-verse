@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { syncHub } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -257,6 +257,14 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
   // a persisted counter that may come from an earlier server process, whose
   // numbers restart at 1 — a follow-up then streams from 0.
   const streamedRunRef = useRef('')
+  const stepsRef = useRef<HTMLDivElement | null>(null)
+  const followRef = useRef(true)
+
+  const handleStepsScroll = useCallback(() => {
+    const el = stepsRef.current
+    if (!el) return
+    followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 24
+  }, [])
 
   const rememberEv = useCallback((run: string, ev: number) => {
     lastEvRef.current = { run, ev }
@@ -483,6 +491,20 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
       .sort((a, b) => (a.seq || 0) - (b.seq || 0))
     return [...numbered, ...extra.filter((r) => r.seq === null)]
   }, [detail, liveSteps, runId])
+
+  // Reset follow state when starting or switching to another run.
+  useLayoutEffect(() => {
+    followRef.current = true
+    const el = stepsRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [runId])
+
+  // Auto-scroll the step list to the bottom while following live output.
+  useLayoutEffect(() => {
+    if (!followRef.current) return
+    const el = stepsRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [rows.length, liveText, running])
 
   const skipped: SkipEntry[] = discardSkipped && discardSkipped.length
     ? discardSkipped : (run?.status !== 'accepted' ? detail?.skipped || [] : [])
@@ -805,7 +827,7 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
             </div>
           ) : null}
 
-          <div className="ga-wd-free-steps">
+          <div className="ga-wd-free-steps" ref={stepsRef} onScroll={handleStepsScroll}>
             {rows.length === 0 && !liveText ? (
               <div className="ga-form-hint">{running ? t('Waiting for the model…') : t('No steps.')}</div>
             ) : null}
