@@ -595,6 +595,17 @@ def _sub_npc_wanderers():
         logger.debug("npc_wanderers sub error: %s", e)
 
 
+def _sub_auto_quests():
+    """Queue at most one automatic quest job when an awake NPC stands near an avatar."""
+    try:
+        from app.core import quest_auto
+        result = quest_auto.tick()
+        if result.get("queued"):
+            logger.info("auto_quests: %s", result)
+    except Exception as e:
+        logger.debug("auto_quests sub error: %s", e)
+
+
 def _sub_prop_action_runs():
     """The scheduler step of the furniture runs (when that engine is loaded)
     and of every running pose scene (``pose_scene.advance``: free-pair beats,
@@ -687,6 +698,7 @@ _SUB_TASKS: List[tuple] = [
     # cannot ride along with the hourly TTL sweep (see _sub_npc_windows).
     (_sub_npc_windows,               120,                   "npc_windows"),
     (_sub_npc_wanderers,             300,                   "npc_wanderers"),
+    (_sub_auto_quests,               300,                   "auto_quests"),
     (_sub_birthdays,                 300,                   "birthdays"),
     (_sub_npc_actions,               60,                    "npc_actions"),
     (_sub_npc_scenes,                60,                    "npc_scenes"),

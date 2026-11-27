@@ -1479,6 +1479,28 @@ SECTIONS = {
                 "max": 120,
                 "description": "In-process cap over all open runs on how many llm_judgement checks may be submitted per minute.",
             },
+            "auto_enabled": {
+                "type": "bool",
+                "label": "Automatic quests",
+                "default": False,
+                "description": "An awake NPC standing next to a player avatar may offer an LLM-written quest (checked every 5 minutes).",
+            },
+            "max_open_auto_quests": {
+                "type": "int",
+                "label": "Max open automatic quests",
+                "default": 2,
+                "min": 0,
+                "max": 20,
+                "description": "Open automatic quest runs at most (0 = none).",
+            },
+            "auto_expiry_game_hours": {
+                "type": "int",
+                "label": "Automatic quest expiry (game hours)",
+                "default": 48,
+                "min": 1,
+                "max": 720,
+                "description": "GAME hours after which an automatic quest expires and fails.",
+            },
         },
     },
     # Temporary NPCs — the automatic half (plan-npc-auto-spawn.md). The manual
