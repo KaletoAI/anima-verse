@@ -134,6 +134,8 @@ export interface EngineStatus {
   reason: string
   /** An entry runs by "Run now" — past idle window, engine switch, freeze, pause. */
   forced: boolean
+  /** Why the automatic validity pass and rescan wait: 'frozen' | 'paused' | '' (they run). */
+  validity_held: string
   running_step: Step | null
   pending_total: number
   /** The hub jobs the open entries still owe; null when any is unknown. */

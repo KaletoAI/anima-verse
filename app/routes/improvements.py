@@ -116,9 +116,9 @@ def list_types() -> List[Dict[str, Any]]:
 
 @router.get("")
 def list_improvements() -> List[Dict[str, Any]]:
-    """The entries — judged for wrong steps first when they are due (``engine.validate_due_entries``), so
-    the list never counts a step that may not run."""
-    engine.validate_due_entries()
+    """The entries as stored — a read changes nothing. Wrong steps are dropped by the tick's
+    validity pass (``engine.validate_due_entries``) or the explicit "Remove invalid";
+    ``GET /improvements/invalid`` shows what that would drop."""
     return store.list_all()
 
 

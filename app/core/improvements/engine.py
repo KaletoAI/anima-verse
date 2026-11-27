@@ -211,10 +211,27 @@ def remove_invalid(improvement_id: Optional[str] = None, *, keys: Optional[Itera
     return report
 
 
+def automatic_pass_held() -> str:
+    """Why the AUTOMATIC passes that delete (the validity pass and the standing rescan, which judges
+    its entry first) are held right now: "frozen" | "paused" | "" (they run). The same rule as every
+    other hygiene job (``periodic_jobs._sub_artefact_gc``): a world freeze or a task-queue pause stops
+    them. A person's explicit "Remove invalid", the check right before a forced step runs and the
+    scan of a new or rescanned entry are on-demand work and are not held."""
+    if is_world_frozen():
+        return "frozen"
+    if get_task_queue().is_paused("default"):
+        return "paused"
+    return ""
+
+
 def validate_due_entries() -> Dict[str, Any]:
     """The automatic validity pass over every open or paused entry that was not judged within
-    ``SCAN_INTERVAL_S`` (the tick and the entry list call it; after a start every entry is due once)."""
-    total: Dict[str, Any] = {"removed": 0, "files": 0, "bytes": 0}
+    ``SCAN_INTERVAL_S`` (the tick calls it; after a start every entry is due once). Held by
+    ``automatic_pass_held`` — it judges nothing then and stamps nothing, so every entry is due as
+    soon as the world runs again; ``held`` names the gate."""
+    total: Dict[str, Any] = {"removed": 0, "files": 0, "bytes": 0, "held": automatic_pass_held()}
+    if total["held"]:
+        return total
     for improvement in store.list_all():
         if improvement["status"] not in ("open", "paused") or not _validate_due(improvement["id"]):
             continue
@@ -223,7 +240,7 @@ def validate_due_entries() -> Dict[str, Any]:
         except Exception as e:  # noqa: BLE001 — one broken type must not stop the others
             logger.warning("improvements: validity pass of %s failed: %s", improvement["id"], e, exc_info=True)
             continue
-        for field in total:
+        for field in ("removed", "files", "bytes"):
             total[field] += result[field]
     return total
 
@@ -424,7 +441,11 @@ def tick() -> Dict[str, Any]:
             logger.info("improvements: %d orphaned step(s) made runnable again",
                         rescued)
 
-    # 2. Sweep finished one-shots and rescan standing entries, independent of idleness.
+    # 2. Sweep finished one-shots and rescan standing entries, independent of idleness — but not
+    #    while the automatic passes are held: a scan drops its entry's wrong steps and their files
+    #    first (``scan``), and a freeze or pause stops that like any hygiene job. The entry's
+    #    ``last_scan_at`` stays old, so it rescans on the first tick after.
+    held = automatic_pass_held()
     scanned = 0
     forced: Set[str] = set()
     for improvement in store.list_all():
@@ -441,7 +462,7 @@ def tick() -> Dict[str, Any]:
                 stop_run_now(improvement["id"])
             else:
                 forced.add(improvement["id"])
-        if not _scan_due(improvement):
+        if held or not _scan_due(improvement):
             continue
         try:
             scan(improvement["id"])
@@ -452,7 +473,7 @@ def tick() -> Dict[str, Any]:
 
     # 3. Every entry that did not rescan is judged for wrong steps on the scan
     #    interval (and once after a start) — a one_shot or paused entry never
-    #    rescans, and a scan judges its own entry first.
+    #    rescans, and a scan judges its own entry first. Held like step 2.
     validate_due_entries()
 
     # 4. One step.
@@ -686,6 +707,8 @@ def status() -> Dict[str, Any]:
             0, int(settings["idle_minutes"] * 60 - idle_seconds)),
         "frozen": is_world_frozen(),
         "reason": reason,
+        # The automatic validity pass and rescan ("frozen" | "paused" | "" = they run).
+        "validity_held": automatic_pass_held(),
         # A forced entry runs past the gates in RUN_NOW_OVERRIDES — the panel
         # says so instead of a gate that does not hold it back.
         "forced": any(i["forced"] and i["status"] == "open"
