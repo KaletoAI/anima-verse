@@ -9,7 +9,7 @@ scan callers by AST/text, and Part D checks the service with transport doubles.
 
 PART A — THE CATALOG, DERIVED BY HAND FROM THE SPEC
 ---------------------------------------------------
-A1. Exactly these 41 occasions (40 + `jewellery_mesh`, Ruling A118 J3, last, − `outfit_reference`, A224, + `garment_cut_texture`
+A1. Exactly these 42 occasions (41 + `mesh_item` right after `mesh_object` for world-placeable items; 40 + `jewellery_mesh`, Ruling A118 J3, last, − `outfit_reference`, A224, + `garment_cut_texture`
     right after garment_view — plan 2026-11-20-template-cut-uv-texture Task 6: the template dialog's "texture from
     cut", image/render, world-only, two reference slots, a configured chain required) (§ 1 table, minus `mesh_low` which the review
     DROPS, plus `frame` which the review ADDS, plus `tpose_view` from
@@ -41,7 +41,7 @@ A1. Exactly these 41 occasions (40 + `jewellery_mesh`, Ruling A118 J3, last, −
       outfit_side_draft scene_view
       location timevariant event prop surface_texture item regenerate frame video
       mesh_humanoid mesh_creature rig_humanoid rig_creature upscale face_retexture
-      mesh_object mesh_building mesh_garment mesh_footwear
+      mesh_object mesh_item mesh_building mesh_garment mesh_footwear
       footwear_empty hair_mesh hair_strands pose_animation
       pose_transition
 A2. `mesh_low` is unknown: get_occasion("mesh_low") raises
@@ -215,12 +215,12 @@ def part_a():
                     "outfit_side_draft", "scene_view", "location",
                     "timevariant", "event", "prop",
                     "surface_texture", "item", "regenerate", "frame", "video",
-                    "mesh_humanoid", "mesh_creature", "rig_humanoid", "rig_creature", "upscale", "face_retexture", "mesh_object",
+                    "mesh_humanoid", "mesh_creature", "rig_humanoid", "rig_creature", "upscale", "face_retexture", "mesh_object", "mesh_item",
                     "mesh_building", "mesh_garment", "mesh_footwear",
                     "footwear_empty", "hair_mesh", "hair_strands",
                     "pose_animation",
                     "pose_transition", "jewellery_mesh"]
-    check("A1 the 41 occasions in catalog order", occ.occasion_ids(), expected_ids)
+    check("A1 the 42 occasions in catalog order", occ.occasion_ids(), expected_ids)
 
     try:
         occ.get_occasion("mesh_low")
@@ -232,7 +232,7 @@ def part_a():
     check("A3 video media", media["video"], "video")
     check("A3 mesh media", sorted(i for i, m in media.items() if m == "mesh"),
           ["face_retexture", "hair_mesh", "hair_strands", "jewellery_mesh", "mesh_building", "mesh_creature", "mesh_footwear",
-           "mesh_garment", "mesh_humanoid", "mesh_object", "rig_creature", "rig_humanoid"])
+           "mesh_garment", "mesh_humanoid", "mesh_item", "mesh_object", "rig_creature", "rig_humanoid"])
     check("A3 image media count", sum(1 for m in media.values() if m == "image"), 26)  # A224: − outfit_reference; + garment_cut_texture
 
     check("A4 rigs", {i: occ.get_occasion(i).get("rig") for i in

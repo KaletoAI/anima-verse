@@ -433,6 +433,96 @@ def get_item_image_route(
         headers={"Cache-Control": "no-cache"})
 
 
+# ── Item 3D Mesh (world-placeable items) ──
+
+@router.post("/items/{item_id}/mesh/generate")
+async def generate_item_mesh_route(item_id: str) -> Dict[str, Any]:
+    """Queue 3D mesh generation for an item via the ``mesh_item`` occasion."""
+    import asyncio
+    from app.core import item_mesh
+    try:
+        return await asyncio.to_thread(item_mesh.start_generate, item_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/items/{item_id}/mesh/copy")
+async def copy_item_mesh_route(item_id: str, request: Request) -> Dict[str, Any]:
+    """Copy an existing 3D mesh from another item onto ``item_id``."""
+    import asyncio
+    from app.core import item_mesh
+    body = await request.json()
+    from_item_id = str((body or {}).get("from_item_id") or "").strip() if isinstance(body, dict) else ""
+    if not from_item_id:
+        raise HTTPException(status_code=400, detail="from_item_id required")
+    try:
+        return await asyncio.to_thread(item_mesh.copy_from, item_id, from_item_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/items/{item_id}/mesh")
+async def delete_item_mesh_route(item_id: str) -> Dict[str, Any]:
+    """Delete an item's 3D mesh and sidecar metadata."""
+    import asyncio
+    from app.core import item_mesh
+    try:
+        deleted = await asyncio.to_thread(item_mesh.delete, item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"deleted": deleted}
+
+
+@router.get("/items/{item_id}/model/meta")
+async def get_item_model_meta_route(item_id: str) -> Dict[str, Any]:
+    """Return an item's 3D model metadata (404 when no model or job exists)."""
+    import asyncio
+    from app.core import item_mesh
+    try:
+        meta = await asyncio.to_thread(item_mesh.mesh_meta, item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Item mesh not found")
+    return meta
+
+
+@router.get("/items/{item_id}/mesh/status")
+async def get_item_mesh_status_route(item_id: str) -> Dict[str, Any]:
+    """Return an item's mesh metadata or ``{"status": "none"}``."""
+    import asyncio
+    from app.core import item_mesh
+    try:
+        meta = await asyncio.to_thread(item_mesh.mesh_meta, item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return meta if meta is not None else {"status": "none"}
+
+
+@router.get("/items/{item_id}/model")
+def get_item_model_route(item_id: str, request: Request):
+    """Serve an item's ``model.glb`` via ``snapshot_response`` (immutable when ``?v=`` matches)."""
+    from app.core import http_files, item_mesh
+    from app.core.keyed_lock import keyed_lock
+    try:
+        glb_path, _meta_path = item_mesh.mesh_paths(item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not glb_path.is_file():
+        raise HTTPException(status_code=404, detail="Item mesh not found")
+    return http_files.snapshot_response(
+        glb_path,
+        request,
+        media_type="model/gltf-binary",
+        version=request.query_params.get("v"),
+        lock=keyed_lock("item_mesh", item_id),
+    )
+
+
 @router.get("/items/{item_id}/owners")
 def get_item_owners_route(
     item_id: str) -> Dict[str, Any]:
