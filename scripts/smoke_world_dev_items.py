@@ -61,7 +61,7 @@ Run 1 (turn 1 unless named):
       refused; an unknown character -> refused.
   (d) SECRET -> refused "reveals a secret" in give_items.
   (e) create_location "Demo Forge" with room "Forge"; add_room_item is always
-      refused in World Dev with "items in rooms are invisible in the world"
+      refused in World Dev with "room decoration is props, not items"
       (nothing written to the room; journal row "refused").
   (e2) the PRE-EXISTING barn: set_room_layout{room_barn at x -4, y -4, w 8,
       d 8} -> ok; add_room_item on the barn is refused likewise.
@@ -93,8 +93,8 @@ Run 2 (foreign changes; run 1 is set to "accepted" first — one open run):
       held by character "Demo Smith" — stays' (the give's undo is changed
       since) and 'item <PLIERS> "Demo Pliers" is still held by room room_barn
       "Barn" of location loc_demo_barn — stays'.
-  (h) add_room_item{barn, BUCKET, 1} -> refused ("items in rooms are invisible
-      in the world"); the admin adds ANVIL to the barn room directly
+  (h) add_room_item{barn, BUCKET, 1} -> refused ("room decoration is props, not
+      items"); the admin adds ANVIL to the barn room directly
       (add_item_to_room).
   undo(run) -> complete False; a skip "changed since" with keys [TONGS] (the
       inventory step), a skip "item still in use" with item TONGS, a skip
@@ -372,10 +372,10 @@ FORGE_ROOM = next((r["id"] for r in (get_location_by_id(FORGE) or {}).get("rooms
 check("(e) forge room", bool(FORGE and FORGE_ROOM))
 refused("(e) add_room_item refused (secret)", "add_room_item",
         {"location_id": FORGE, "room_id": FORGE_ROOM, "item_id": SECRET},
-        "items in rooms are invisible in the world")
+        "room decoration is props, not items")
 refused("(e) add_room_item refused (hammer)", "add_room_item",
         {"location_id": FORGE, "room_id": FORGE_ROOM, "item_id": HAMMER, "quantity": 2},
-        "items in rooms are invisible in the world")
+        "room decoration is props, not items")
 check("(e) forge room has no items", "items" not in (room_of(FORGE, FORGE_ROOM) or {}),
       room_of(FORGE, FORGE_ROOM))
 
@@ -385,7 +385,7 @@ res = call(1, "set_room_layout", {"location_id": BARN, "layout": {
 check("(e2) layout ok", res.ok and res.wrote, res)
 refused("(e2) add_room_item on barn refused", "add_room_item",
         {"location_id": BARN, "room_id": BARN_ROOM, "item_id": BUCKET},
-        "items in rooms are invisible in the world")
+        "room decoration is props, not items")
 
 print("(i) delete_created item")
 RAG = created_id(call(1, "create_item", {"name": "Demo Rag", "category": "tool"}))
@@ -450,7 +450,7 @@ check("(g) preview: pliers stay in the barn",
 res = call(1, "add_room_item", {"location_id": BARN, "room_id": BARN_ROOM, "item_id": BUCKET},
            run2)
 check("(h) add_room_item refused",
-      not res.ok and not res.wrote and "items in rooms are invisible in the world" in res.line,
+      not res.ok and not res.wrote and "room decoration is props, not items" in res.line,
       res)
 check("(h) admin adds the anvil", add_item_to_room(BARN, BARN_ROOM, ANVIL))
 rep = wu.undo(run2)

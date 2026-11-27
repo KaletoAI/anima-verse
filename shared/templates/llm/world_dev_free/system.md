@@ -91,7 +91,7 @@ These parts of a world have no tool here — the admin builds them in Game-Admin
   (furniture, statues, rugs, wall art, stoves, barrels, beds, benches, lamps, plants; `find_props`,
   placed via `furnish_rooms`, `place_room_prop` or `place_world_prop`), whereas an **item** is only
   for a character's inventory or outfit, a secret or a quest (`create_item`, `give_items`) — never
-  to furnish or decorate a place (items in rooms are invisible).
+  to furnish or decorate a place.
   If the prop library lacks a needed prop, name it under *left open* — never create an item instead.
 
 When the task asks for any of these, build the rest and name every requested part from this

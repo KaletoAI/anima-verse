@@ -149,8 +149,8 @@ prop in a regular room with a floor plan (`x`, `z` in metres from the room's min
 footprint must stay inside the room's `w` × `d` and not overlap an existing standing placement).
 Ground and storey corridors (`__…`) are refused.
 
-`add_room_item` is not available in World Dev — items in rooms are invisible in the world;
-everything visible in a place is a prop (`place_room_prop`, `furnish_rooms`).
+`add_room_item` is not available in World Dev — a place is furnished and decorated with props
+(`place_room_prop`, `furnish_rooms`); items belong to characters, secrets and quests.
 
 ## Position and outline
 

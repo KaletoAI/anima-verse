@@ -360,7 +360,7 @@ def run_tool(ctx: ToolCtx, name: str, args: Any) -> ToolResult:
 
 
 #: Refusal text for ``add_room_item`` (always unavailable in World Dev).
-ROOM_ITEM_REFUSAL = ("items in rooms are invisible in the world — furnish with "
+ROOM_ITEM_REFUSAL = ("room decoration is props, not items — furnish with "
                      "props (find_props, place_room_prop)")
 #: Tools that stay registered to return a clear refusal but are marked
 #: unavailable in the system prompt's tool list.
@@ -5400,7 +5400,7 @@ def _give_items(step: _Step, args: Dict[str, Any]) -> str:
 @_tool("add_room_item", True,
        "add_room_item{location_id, room_id, item_id, quantity?, hidden?, "
        "discovery_difficulty?, note?}",
-       "not available in World Dev — items in rooms are invisible; use place_room_prop")
+       "not available in World Dev — room decoration is props; use place_room_prop")
 def _add_room_item(step: _Step, args: Dict[str, Any]) -> str:
     """Always refused in World Dev: items lying in rooms have no visible
     representation in the world; visible place content uses props."""

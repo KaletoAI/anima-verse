@@ -149,6 +149,7 @@ user acceptance; the proxy smoke checks forwarding configuration only.
   - [A16. Ein Boden — Höhe, Material und Wasser der offenen Welt](#a16-ein-boden-höhe-material-und-wasser-der-offenen-welt)
   - [A17. Die Fernkulisse — `backdrop` im Worldmap-Payload](#a17-die-fernkulisse-backdrop-im-worldmap-payload)
   - [A18–A20. Entfällt seit 2026-08-21 — zusammengezogen in § A16](#a18a20-entfällt-seit-2026-08-21-zusammengezogen-in-a16)
+  - [A21. Items in der Welt — `GET /play/locations/{location_id}/items`](#a21-items-in-der-welt-get-playlocationslocation_iditems)
 - [Teil B — Ziel-Vertrag v4: das Szenen-Rezept](#teil-b-ziel-vertrag-v4-das-szenen-rezept)
   - [B1. `GET /play/locations/{location_id}/scene`](#b1-get-playlocationslocation_idscene)
   - [B1a. Der Poll: `ETag`/`304` und der Eingabe-Cache](#b1a-der-poll-etag304-und-der-eingabe-cache)
@@ -6540,6 +6541,64 @@ auf die Zielparagraphen umgehängt; diese Tabelle bleibt als Auflösung stehen
 **§ G1–§ G5 gehören nicht in dieses Dokument.** Code-Kommentare, die sie
 nennen, verweisen auf `development_instructions/done/plan-ein-boden.md`; die
 davon noch geltenden Regeln stehen hier in § A16.
+
+## A21. Items in der Welt — `GET /play/locations/{location_id}/items`
+
+Neu 2026-11-27 (Plan `docs/superpowers/plans/2026-11-27-items-in-world.md`).
+Ein **Item** mit dem Flag `world_placeable` liegt sichtbar im Raum; alle
+anderen Items bleiben reine Inventar-/Raumdaten. Props bleiben fest im Raum
+und gehören weiter in die Szene (§ B1); Items sind beweglich und reisen in
+einem EIGENEN Payload, damit das Szenen-ETag nicht bei jedem Aufheben kippt.
+
+**Anker (Server).** Jeder Raum-Eintrag eines platzierbaren Items trägt
+`anchor: {at: [x, z], y, yaw, on}` im **Location-lokalen Meter-Rahmen** der
+Szenen-Platzierungen; `y` ist die Höhe über dem Raumboden (auf einem Tisch
+schon inklusive Tischplatte), `on` die Platzierungs-ID der Ablagefläche oder
+`""`. Er wird nur auf Schreibpfaden gesetzt: Hinlegen per Admin
+(`add_item_to_room`), Fallenlassen (Füße des Avatars, `drop_item`),
+Einschalten des Flags (`update_item`) und einmal je Serverstart
+(`backfill_anchors`). `upsert_location` repariert Anker, deren Ablage
+verschwand, sich bewegte oder deren Boden-Item jetzt unter einem Möbel liegt
+(`item_placement.repair_anchors`). Die Platzwahl ist deterministisch pro
+`item_id` (`item_placement.compute_anchor`): erst ein freier 5-cm-Rasterpunkt
+auf einer Ablagefläche — ein Prop mit `surface: {height_m}` (Prop-Editor
+„Storage surface“, geklemmt auf die Variantenhöhe) —, sonst ein 10-cm-Punkt auf
+dem Boden höchstens 1 m vor einer Wand, frei von Props und anderen Items.
+
+**Payload.** Pro Betrachter (aktiver Avatar), reiner Lesepfad — versteckte
+Items erscheinen nur mit Fund-Zeile, der Abruf schreibt keine:
+
+```json
+{"location_id": "loc", "items": [{
+  "item_id": "key", "room_id": "study", "name": "Messingschlüssel", "quantity": 1,
+  "at": [2.0, 1.5], "y": 0.75, "yaw": 208.0, "size_m": 0.1,
+  "model_url": "/inventory/items/key/model?v=…", "model_version": "…",
+  "image_url": "/inventory/items/key/image",
+  "actions": [{"id": "look", "label": "Anschauen", "source": "core"},
+              {"id": "take", "label": "Nehmen", "source": "core"}]}]}
+```
+
+`ETag`/`304` wie § B1a (Eingabe-Fingerabdruck: Einträge, Funde, Mesh-Version,
+Name/Größe/Flag, Aktionen, Sprache). Ohne Anker kein Eintrag; `model_url` ist
+`null`, solange kein GLB existiert — dann zeigt der Client eine
+kamerazugewandte Bildkarte der Höhe `size_m`. Ein GLB wird so skaliert, dass
+die längste AABB-Kante `size_m` ist, Unterkante auf `y`, gedreht um `yaw`.
+Neu laden auf das Sync-Topic `self` (geht bei einer Änderung eines
+platzierbaren Items an alle Avatare der Location).
+
+**Aktionen.** `look` (HUD-Modal über `GET /play/room-item/{id}`), `take`
+(`POST /play/pickup`), `read` (HUD-`ReadingModal`), Paket-Aktionen über die
+Capability `item.actions` (`POST /play/room-item/action`). Vor allem außer
+`look` läuft der Avatar hin: `POST /play/room-item/approach {item_id}` →
+`{point: [x, z], room_id}` (Location-lokal) — 16 Richtungen im Radius
+`0.45 + size_m/2` um das Item, bei einem Tisch-Item um die nächste
+Tischkanten-Mitte, frei von Props (Figurradius 0,25 m); nichts frei → `409`.
+Ein abgebrochener Weg sendet nichts. Mesh eines Items: Occasion `mesh_item`
+(Admin → Items → Mesh, auch „von anderem Item kopieren“).
+
+**Verifikation:** `scripts/smoke_item_placement.py`, `smoke_item_anchors.py`,
+`smoke_item_world_payload.py`, `smoke_item_actions.py`; Client
+`native/tests/ItemPayloadTests.cs` und `native/Check/ItemsCheck.cs`.
 
 ---
 

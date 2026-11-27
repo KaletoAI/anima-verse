@@ -16,7 +16,7 @@ WHAT IS CHECKED, and where every expected value comes from
 1. Item rule (create_item available without any switch; add_room_item always refused):
    - create_item succeeds without any run switch and stores the item.
    - add_room_item is always refused with ROOM_ITEM_REFUSAL
-     ("items in rooms are invisible in the world — furnish with props (find_props, place_room_prop)")
+     ("room decoration is props, not items — furnish with props (find_props, place_room_prop)")
      and the room's items stay unchanged.
    - tool_list() marks add_room_item with "NOT AVAILABLE"; the create_item line
      does NOT contain "NOT AVAILABLE" and contains "never to furnish or decorate".
