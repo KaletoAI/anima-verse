@@ -187,6 +187,8 @@ export interface PropFull {
   /** True = `mount` is the classifier's guess and is waiting to be confirmed
    *  (the detail says so; picking any value clears it). */
   mount_suggested?: boolean
+  /** Optional storage surface for automatic item placement (`null` = none). */
+  surface?: { height_m: number } | null
 }
 
 /** Direct workspace navigation; semantic editors use the same draft and viewer. */

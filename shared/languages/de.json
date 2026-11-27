@@ -7594,6 +7594,10 @@
     "Nothing to report.": "Nichts zu berichten.",
     "Entry/exit at the location edge — click near a boundary edge; a road crossing the cell gets one on each side. Edit edge, width and linked room in the Plot panel.": "Ein-/Ausgang am Rand des Orts — nahe an eine Grundstückskante klicken; eine Straße durch die Zelle bekommt auf jeder Seite einen. Kante, Breite und verknüpften Raum im Grundstück-Panel bearbeiten.",
     "Front door ON THE BUILDING CONTOUR — for a storey whose hallway is its front: the corridor has no walls of its own, so the door is cut into the shell. Click near a contour edge; size, hinge and door prop are edited in the Storey panel.": "Eingangstür AN DER GEBÄUDEKONTUR — für ein Geschoss, dessen Flur die Front bildet: der Flur hat keine eigenen Wände, also wird die Tür in die Hülle geschnitten. Nahe an eine Konturkante klicken; Größe, Anschlag und Tür-Prop werden im Geschoss-Panel bearbeitet.",
-    "Select this prop — its settings open in this panel.": "Dieses Prop auswählen — seine Einstellungen öffnen sich in diesem Panel."
+    "Select this prop — its settings open in this panel.": "Dieses Prop auswählen — seine Einstellungen öffnen sich in diesem Panel.",
+    "Storage surface": "Ablagefläche",
+    "Surface height (m)": "Ablagehöhe (m)",
+    "Prop height {h} m": "Prop-Höhe {h} m",
+    "A table top is about 0.75 m; a person is 1.70 m": "Eine Tischplatte liegt bei etwa 0,75 m; eine Person ist 1,70 m groß"
   }
 }

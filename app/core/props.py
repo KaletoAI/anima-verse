@@ -383,6 +383,9 @@ MOUNT_KEY = "mount"
 #: manual write of ``mount`` clears the flag — picking a value IS the
 #: confirmation, even when it is the value that was already there.
 MOUNT_SUGGESTED_KEY = "mount_suggested"
+#: Sidecar key for an optional storage surface where items can be placed
+#: automatically: ``{"height_m": <float>}``, or absent when the prop offers none.
+SURFACE_KEY = "surface"
 
 # ── Texture slots (plan-door-props-texture-slots) ───────────────────────
 #: The surfaces of a prop's mesh that can later be FILLED: a picture frame that
@@ -1617,6 +1620,54 @@ def sanitize_mount(raw: Any) -> str:
         raise ValueError(f"unknown mount kind {kind!r} (known: "
                          + ", ".join(MOUNT_KINDS) + ")")
     return kind
+
+
+def sanitize_surface(raw: Any) -> Optional[Dict[str, float]]:
+    """Validate and normalize a prop's storage-surface descriptor.
+
+    ``None`` or ``{}`` clears the flag (returns ``None``). Otherwise expects
+    ``{"height_m": x}`` where ``x`` is a finite number in ``(0, 10]`` and
+    returns ``{"height_m": round(float(x), 3)}``. Anything else raises
+    ``ValueError``.
+    """
+    if raw is None or raw == {}:
+        return None
+    err = 'surface must be null or {"height_m": <metres > 0>}'
+    if not isinstance(raw, dict) or set(raw.keys()) != {"height_m"}:
+        raise ValueError(err)
+    val = raw.get("height_m")
+    if isinstance(val, bool) or not isinstance(val, (int, float)):
+        raise ValueError(err)
+    h = float(val)
+    if not math.isfinite(h) or h <= 0 or h > 10:
+        raise ValueError(err)
+    rounded = round(h, 3)
+    if rounded <= 0:
+        raise ValueError(err)
+    return {"height_m": rounded}
+
+
+def _surface_of(meta: Dict[str, Any]) -> Optional[Dict[str, float]]:
+    """Forgiving reader for the sidecar ``surface`` key."""
+    try:
+        return sanitize_surface(meta.get(SURFACE_KEY))
+    except ValueError:
+        return None
+
+
+def prop_surface(prop: Dict[str, Any], variant: Any = None) -> Optional[float]:
+    """Return the prop's storage-surface height in metres above its ground
+    point, clamped to the drawn variant's ``height_m``, or ``None`` when the
+    prop has no storage surface flagged.
+    """
+    if not isinstance(prop, dict):
+        return None
+    surface = _surface_of(prop)
+    if surface is None:
+        return None
+    from app.core.room_recipe import _placement_dims
+    var_height = float(_placement_dims(prop, variant)["height_m"])
+    return round(min(surface["height_m"], var_height), 3)
 
 
 def _coerce_vec(raw: Any, n: int, label: str) -> List[float]:
@@ -3193,7 +3244,7 @@ def set_quest_run(prop_id: str, run_id: str) -> bool:
 #: the variants (2026-08-25), and :data:`MOVED_TO_VARIANT` names those so a
 #: stale client is REFUSED instead of silently writing a key nobody reads.
 PROP_PATCH_KEYS = ("name", "category", "tags", "sway_factor", "slots",
-                   "key_areas", MOUNT_KEY, "exclude_actions")
+                   "key_areas", MOUNT_KEY, SURFACE_KEY, "exclude_actions")
 #: The fields that are variant-only now. A prop-level patch naming one of
 #: them is a 400 with the route that owns it — never a no-op: an editor that
 #: still sends ``height_m`` here would report "Saved" over a value that never
@@ -3245,6 +3296,8 @@ def _check_prop_patch(patch: Dict[str, Any],
         sanitize_key_areas(patch.get(KEY_AREAS_KEY))
     if MOUNT_KEY in patch:
         sanitize_mount(patch.get(MOUNT_KEY))
+    if SURFACE_KEY in patch:
+        sanitize_surface(patch.get(SURFACE_KEY))
     # Package actions this prop does not offer (plan-pack-prop-actions.md);
     # which ids are allowed is ``prop_actions.validate_document``'s call.
     if "exclude_actions" in patch and (not isinstance(patch["exclude_actions"], list)
@@ -3311,6 +3364,12 @@ def _apply_prop_fields(meta: Dict[str, Any], patch: Dict[str, Any]) -> None:
         else:
             meta.pop(MOUNT_KEY, None)
         meta.pop(MOUNT_SUGGESTED_KEY, None)
+    if SURFACE_KEY in patch:
+        surface = sanitize_surface(patch.get(SURFACE_KEY))
+        if surface is None:
+            meta.pop(SURFACE_KEY, None)
+        else:
+            meta[SURFACE_KEY] = surface
 
 
 @_author_transaction
@@ -6234,6 +6293,7 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool,
         MOUNT_KEY: (meta.get(MOUNT_KEY)
                     if meta.get(MOUNT_KEY) in MOUNT_KINDS else ""),
         MOUNT_SUGGESTED_KEY: bool(meta.get(MOUNT_SUGGESTED_KEY)),
+        SURFACE_KEY: _surface_of(meta),
         # WHAT THIS PIECE IS MADE OF, and whether its size is still a guess —
         # the PRIMARY variant's generation subject and its estimate flag. Both
         # are on the LEAN record because the furnishing match reads them off

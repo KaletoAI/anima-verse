@@ -90,7 +90,7 @@ function authorSnapshot(prop: PropFull, variants: PropVariant[]): AuthorFields {
       tags: prop.tags.join(', '), sway_factor: prop.sway_factor ?? 1,
       mount: { value: prop.mount || '', suggested: !!prop.mount_suggested },
       actions: prop.actions, slots: prop.slots, key_areas: prop.key_areas,
-      exclude_actions: prop.exclude_actions || [] }],
+      exclude_actions: prop.exclude_actions || [], surface: prop.surface ?? null }],
     ...variants.map((v): [string, Record<string, unknown>] => [
       variantTarget(v.uid), { dims: v.dims, description: v.description,
         ground_offset_m: v.ground_offset_m, markers: v.markers,
