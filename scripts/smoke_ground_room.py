@@ -231,16 +231,16 @@ def main():
           plate_kind(0, {"0": "road"}, "grass") == "road",
           plate_kind(0, {"0": "road"}, "grass"))
     check("storey 0 with nothing resolved -> the default",
-          plate_kind(0, {}, "") == "floor",
+          plate_kind(0, {}, "") == scene_recipe.DEFAULT_FLOOR_KIND,
           plate_kind(0, {}, ""))
     check("storey 1 is no terrain -> the default",
-          plate_kind(1, {}, "grass") == "floor",
+          plate_kind(1, {}, "grass") == scene_recipe.DEFAULT_FLOOR_KIND,
           plate_kind(1, {}, "grass"))
     check("storey 1 keeps its own level_floors entry",
           plate_kind(1, {"1": "tiles"}, "grass") == "tiles",
           plate_kind(1, {"1": "tiles"}, "grass"))
     check("a cellar is no terrain either",
-          plate_kind(-1, {}, "grass") == "floor",
+          plate_kind(-1, {}, "grass") == scene_recipe.DEFAULT_FLOOR_KIND,
           plate_kind(-1, {}, "grass"))
 
     print("Part 4c — the same rule in the scene payload")
@@ -274,16 +274,16 @@ def main():
     hit, sig_hit = level_kinds("grass")
     check("the ground storey draws no plate at all",
           0 not in hit, str(hit))
-    check("the storey above it stays 'floor'",
-          hit.get(1) == "floor", str(hit))
+    check("the storey above it stays DEFAULT_FLOOR_KIND",
+          hit.get(1) == scene_recipe.DEFAULT_FLOOR_KIND, str(hit))
     miss, sig_miss = level_kinds("gras")
     check("a terrain that misses the library changes no plate",
-          0 not in miss and miss.get(1) == "floor", str(miss))
+          0 not in miss and miss.get(1) == scene_recipe.DEFAULT_FLOOR_KIND, str(miss))
     check("the signature follows the resolved kind",
           sig_hit != sig_miss, f"{sig_hit[:8]} vs {sig_miss[:8]}")
     without, _ = level_kinds("grass", known=())
     check("no library, no terrain kind — and still no ground plate",
-          0 not in without and without.get(1) == "floor", str(without))
+          0 not in without and without.get(1) == scene_recipe.DEFAULT_FLOOR_KIND, str(without))
 
     print("Part 5 — the ground room carries no GEOMETRY (§ A13a)")
     # ONE valid layout, handed to both rooms: everything but the id is equal,

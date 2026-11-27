@@ -73,8 +73,8 @@ kits; which one is irrelevant, the solver is patched).
 
 Second fixture: turn 5 creates "Demo House" (pin x -100, z -100, boundary
 [[-10,-10],[10,-10],[10,10],[-10,10]]) with rooms "North room" and "South
-room", both room_type "bedroom", laid out at x 1,y 1,w 4,d 4 and x 6,y 1,w 4,
-d 4. HOUSE_ROW = its deep copy after turn 5; every case below ends with an
+room", both room_type "bedroom", laid out touching at x 1,y 1,w 4,d 4 and
+x 5,y 1,w 4,d 4 (one connected building contour). HOUSE_ROW = its deep copy after turn 5; every case below ends with an
 undo of its own turn, which must give back exactly HOUSE_ROW.
   (e3) turn 10, the seat inventory after an undo: furnish ok;
       ``places.room_places`` fills ``places._cache[HOUSE]``; a sentinel marker
@@ -300,7 +300,7 @@ NORTH = room(HOUSE, "North room").get("id")
 SOUTH = room(HOUSE, "South room").get("id")
 res = call("set_room_layout", {"location_id": HOUSE, "layout": {"rooms": [
     {"id": NORTH, "x": 1, "y": 1, "w": 4, "d": 4},
-    {"id": SOUTH, "x": 6, "y": 1, "w": 4, "d": 4}]}}, turn=5)
+    {"id": SOUTH, "x": 5, "y": 1, "w": 4, "d": 4}]}}, turn=5)
 check("fixture2: rooms laid out", res.ok and res.wrote, res)
 HOUSE_ROW = copy.deepcopy(get_location_by_id(HOUSE))
 furniture_kits.solve_kit = fake_solve_kit

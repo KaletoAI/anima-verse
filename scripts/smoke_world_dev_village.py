@@ -7,7 +7,9 @@ A temp world (paths.init BEFORE any world-DB import) whose config.json enables
 the tracked ``rp`` package (packages.enabled = "rp") and switches discovery
 off (game.discovery_range_m = 0, so no place becomes known by proximity), an
 EMPTY ANIMATION_CLIPS_DIR; no server, no LLM. Every tool call goes through
-``world_dev_tools.run_tool`` exactly as the agent loop calls it.
+``world_dev_tools.run_tool`` exactly as the agent loop calls it. Runs use
+building_models "mesh" (the image-based building path = building_models 'mesh';
+the hull path is covered by smoke_world_dev_build.py).
 
 Usage:
     ./.venv/bin/python scripts/smoke_world_dev_village.py
@@ -274,7 +276,7 @@ def piece(name, *slots):
 
 
 BEFORE = db_dump()
-run = wr.create_run("village", "m", "p", "u", 40, 600000)
+run = wr.create_run("village", "m", "p", "u", 40, 600000, building_models="mesh")
 
 
 def call(turn, tool, args):
@@ -444,7 +446,7 @@ check("(h) world.db equals the pre-run dump", diff == [],
 
 # ── Second part: a lived-in world ──────────────────────────────────────
 wr.set_status(run, "rolled_back")  # one open run at a time
-setup = wr.create_run("village-setup", "m", "p", "u", 40, 600000)
+setup = wr.create_run("village-setup", "m", "p", "u", 40, 600000, building_models="mesh")
 
 
 def scall(tool, args):
@@ -499,7 +501,7 @@ check("setup the window is full (200)", len(notes()) == 200, len(notes()))
 wr.set_status(setup, "accepted")  # the setup stays; one open run at a time
 
 BEFORE2 = db_dump()
-run2 = wr.create_run("village-2", "m", "p", "u", 40, 600000)
+run2 = wr.create_run("village-2", "m", "p", "u", 40, 600000, building_models="mesh")
 res = wt.run_tool(wt.ToolCtx(run_id=run2, turn=1), "create_character", {
     "data": dressed("Demo Lodger"), "home": "Demo Inn", "home_room": "Hall"})
 check("6 Demo Lodger created in the occupied Hall", res.ok, res.line)

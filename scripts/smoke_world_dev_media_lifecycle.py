@@ -23,9 +23,9 @@ WHAT IS CHECKED, and where every expected value comes from
 
 The plugin registry holds one species with a hair body slot (as
 smoke_world_dev_media_lane (j)), so a humanoid with hair text gets the steps
-hairstyle, portrait, build; one without hair text portrait, build. A place
-with one room "Hall" has 6 steps: building-front, day:, night:, day:<hall>,
-night:<hall>, mesh — the gallery fake writes 1 image per gallery step (5),
+hairstyle, portrait, build; one without hair text portrait, build. A place with one room "Hall" has 6 steps: building-front, day:, night:, day:<hall>,
+night:<hall>, mesh (the image-based building path = building_models 'mesh';
+the hull path is covered by smoke_world_dev_build.py) — the gallery fake writes 1 image per gallery step (5),
 the mesh fake 1 model file (model.glb).
 
   (a) turn 1 [create_location "Demo Keep" (room Hall), "Built."], lane inline
@@ -333,7 +333,7 @@ async def main():
     LANE["inline"] = True
     rm, fake = manager()
     fake.replies = [create_loc("Demo Keep"), "Built."]
-    run = await rm.start("build", "fake-model", "fake", "u1")
+    run = await rm.start("build", "fake-model", "fake", "u1", building_models="mesh")
     st = await settle(rm, run)
     keep = loc_id("Demo Keep")
     rows = wr.media_rows(run)
@@ -392,7 +392,7 @@ async def main():
     LANE["inline"] = False
     rm, fake = manager()
     fake.replies = [create_loc("Demo Dale"), "Built."]
-    run = await rm.start("build", "fake-model", "fake", "u1")
+    run = await rm.start("build", "fake-model", "fake", "u1", building_models="mesh")
     await settle(rm, run)
     check("(b) one queued row after turn 1", [s for s, _ in statuses(run)] == ["queued"], statuses(run))
     fake.replies = ["Nothing to change."]
@@ -420,7 +420,7 @@ async def main():
     print("(c3) a rolled-back later turn re-plans")
     rm, fake = manager()
     fake.replies = [create_loc("Demo Moor"), "Built."]
-    run = await rm.start("build", "fake-model", "fake", "u1")
+    run = await rm.start("build", "fake-model", "fake", "u1", building_models="mesh")
     await settle(rm, run)
     fake.replies = [BAD, BAD, BAD]
     await rm.message(run, "go on")
@@ -438,7 +438,7 @@ async def main():
     rm, fake = manager()
     fake.replies = [call("create_character", {"data": {"name": "Demo Gone", "gender": "female"}}),
                     "Made."]
-    run = await rm.start("build", "fake-model", "fake", "u1")
+    run = await rm.start("build", "fake-model", "fake", "u1", building_models="mesh")
     await settle(rm, run)
     check("(g) released at the turn end", not wdm.is_deferred("Demo Gone"))
     rows = wr.media_rows(run)
@@ -464,7 +464,7 @@ async def main():
     LANE["inline"] = True
     rm, fake = manager()
     fake.replies = [create_loc("Demo Fell"), "Built."]
-    run = await rm.start("build", "fake-model", "fake", "u1")
+    run = await rm.start("build", "fake-model", "fake", "u1", building_models="mesh")
     await settle(rm, run)
     fell = loc_id("Demo Fell")
     rows = wr.media_rows(run)
@@ -539,7 +539,7 @@ async def main():
                                                        "body_slots": {"hair": {"color": "black",
                                                                                "length": "short"}}}}),
                     "Done."]
-    run = await rm.start("build", "fake-model", "fake", "u1")
+    run = await rm.start("build", "fake-model", "fake", "u1", building_models="mesh")
     st = await settle(rm, run)
     rows = wr.media_rows(run)
     check("(h) awaiting_review", st["status"] == "awaiting_review", st)

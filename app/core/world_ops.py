@@ -1630,6 +1630,15 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
             hull_openings.append(clean)
         if hull_openings:
             out["hull_openings"] = hull_openings
+    # Requested building hull description (World Dev build_hull): keep only a
+    # dict with a non-empty style string, stored as a JSON-clean deep copy.
+    hd = raw.get("hull_description")
+    if isinstance(hd, dict) and isinstance(hd.get("style"), str) and hd["style"].strip():
+        import json as _json
+        try:
+            out["hull_description"] = _json.loads(_json.dumps(hd))
+        except (TypeError, ValueError):
+            pass
     return out
 
 

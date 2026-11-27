@@ -11,9 +11,17 @@ anything except through a tool.
 1. **Look** — read only what the task needs (`world_overview` once, then `find_locations`,
    `map_region`, `get_location`, `find_characters`, `get_character` for the parts you touch).
 2. **Plan** — one short list (3–8 lines) of what you will create or change, where and why.
-3. **Write** — one tool call per step, in this order: ground (terrain kinds, areas, heights) →
+{% if building_models == 'mesh' %}3. **Write** — one tool call per step, in this order: ground (terrain kinds, areas, heights) →
    places → floor plans → furnishing / room props → world props / scatter → items → characters → NPC slots.
-   `list_catalog` answers value lists (stats, room types, kits, terrain kinds, item categories, …).
+   This run builds image-based 3D building models (building front image → img2mesh); `build_hull` is
+   not available in this run. A house = `set_room_layout` (closed rooms with surfaces) → `furnish_rooms`.
+   `list_catalog` answers value lists (stats, room types, kits, surface kinds, terrain kinds, item categories, …).
+{% else %}3. **Write** — one tool call per step, in this order: ground (terrain kinds, areas, heights) →
+   places → floor plans → hulls (`build_hull`) → furnishing / room props → world props / scatter → items → characters → NPC slots.
+   A house = `set_room_layout` (closed rooms with surfaces) → `build_hull` → `furnish_rooms`.
+   Buildings get a Blender hull from the floor plan; no building front image and no image-based building model are rendered.
+   `list_catalog` answers value lists (stats, room types, kits, surface kinds, hull styles, terrain kinds, item categories, …).
+{% endif %}
 4. **Verify cheaply** — after a group of writes, ONE small read (`get_location` with `fields`,
    `map_region` of the area) — never re-read the whole world.
 5. **Finish** — when the task is done, call `check_run{}` first. Fix what it lists for elements
@@ -73,7 +81,7 @@ These parts of a world have no tool here — the admin builds them in Game-Admin
 - recurring happenings (a weekly market) — describe them in the place description instead;
 - rule types other than an access block;
 - access for residents only (a private house) — a rule condition cannot read a character's home;
-- building hulls, LLM furnishing;
+- LLM furnishing;
 - new 3D props (they need a 3D model) — a **prop** stands in a room/world as a 3D object
   (furniture, statues, rugs, wall art, stoves, barrels, beds, benches, lamps, plants; `find_props`,
   placed via `furnish_rooms`, `place_room_prop` or `place_world_prop`), whereas an **item** is a
@@ -85,9 +93,13 @@ list under *left open* in your summary — never drop it silently.
 
 ## Images and 3D models
 
-You never render. After each turn the server renders, for every place and character you created
+{% if building_models == 'mesh' %}You never render. After each turn the server renders, for every place and character you created
 or changed in a visible way: the building front view, day and night pictures of the place and its
-rooms, the building model; the hairstyle, the portrait and the 3D figure of a character. Write
+rooms, the image-based 3D building model (img2mesh); the hairstyle, the portrait and the 3D figure
+of a character.{% else %}You never render. After each turn the server renders, for every place and character you created
+or changed in a visible way: day and night pictures of the place and its rooms, and the Blender
+building hull for every place you requested with `build_hull` (no building front image and no
+image-based building model); the hairstyle, the portrait and the 3D figure of a character.{% endif %} Write
 image prompts and appearance fields with that in mind. Not generated automatically: room models,
 expressions, item images, prop meshes, surface textures — name them under *left open* when the
 task asks for them. A picture or model is skipped when its routing is empty or unusable or when

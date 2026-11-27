@@ -21,7 +21,8 @@ WHAT IS CHECKED, and where every expected value comes from
 
 A created location with rooms Hall, Yard has 8 steps (Task 4 (a)):
 building-front, day:, night:, day:<hall>, night:<hall>, day:<yard>,
-night:<yard>, mesh. The gallery fake writes ONE image per gallery step (7)
+night:<yard>, mesh (the image-based building path = building_models 'mesh';
+the hull path is covered by smoke_world_dev_build.py). The gallery fake writes ONE image per gallery step (7)
 into world_gallery/<loc>/ and records it as a gallery_image; the mesh fake
 writes model3d/model.glb and model3d/lod/a.glb through the real capture
 (``_captured``), so it records 2 files (+ the created dirs, which the
@@ -255,7 +256,7 @@ wdm._portrait_present = lambda name, profile: True
 wdm._base_body_present = lambda name, profile: True
 _FAKES = {fake_gallery, fake_location_mesh, fake_portrait, fake_build}
 check("every render producer the lane reaches is a fake",
-      {k for k, v in wdm.PRODUCERS.items() if v not in _FAKES} == {"mesh", "hairstyle"},
+      {k for k, v in wdm.PRODUCERS.items() if v not in _FAKES} == {"mesh", "hairstyle", "location_hull"},
       {k: v.__name__ for k, v in wdm.PRODUCERS.items()})
 _real_route_check = wdm.route_check
 _real_step_gate = wdm.step_gate
@@ -285,7 +286,7 @@ def new_run():
     prev = wr.open_run()
     if prev:
         wr.set_status(prev["id"], "accepted")
-    run = wr.create_run("build", "m", "p", "u", 80, 300000)
+    run = wr.create_run("build", "m", "p", "u", 80, 300000, building_models="mesh")
     wr.next_turn(run)
     return run, wt.ToolCtx(run_id=run, turn=1)
 

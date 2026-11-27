@@ -16,7 +16,7 @@ SCHEMA_VERSION = 14  # 14: quest_templates.giver_role, quest_run_objects, quest_
 #                     13: quest system tables (quest_templates, quest_runs, quest_facts)
 #                     12: world_dev_runs.max_tokens (per-reply cap kept across restarts)
 #                     (ALTER only, no bump): world_dev_runs.bounds (a free-mode run's build box)
-#                     (ALTER only, no bump): world_dev_runs.media_enabled / media_state
+#                     (ALTER only, no bump): world_dev_runs.media_enabled / media_state / building_models
 #                     (+ CREATE IF NOT EXISTS world_dev_media, world_dev_media_baseline)
 #                     (ALTER only, no bump): world_dev_media_baseline.prior_json
 
@@ -1263,6 +1263,10 @@ ALTER_MIGRATIONS = [
     # closed = discarded, nothing new is rendered).
     ("world_dev_runs", "media_enabled", "INTEGER NOT NULL DEFAULT 1"),
     ("world_dev_runs", "media_state", "TEXT NOT NULL DEFAULT 'open'"),
+    # world_dev_runs: how the run builds 3D buildings — 'hull' (default,
+    # Blender hull from the floor plan via build_hull) or 'mesh' (image-based
+    # 3D model from the building-front image).
+    ("world_dev_runs", "building_models", "TEXT NOT NULL DEFAULT 'hull'"),
     # world_dev_media_baseline: the first dict baseline a mark_created
     # overrode (JSON {step_id: fp}); NULL = none. A rolled-back create gives
     # it back (world_dev_runs.restore_prior_baseline).

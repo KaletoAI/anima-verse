@@ -6,6 +6,8 @@ Plan docs/superpowers/plans/2026-11-25-world-dev-free-p2-buildings-terrain.md, T
 A temp world (STORAGE_DIR / INSTANCE_DIR temp dirs, paths.init BEFORE any
 world-DB import), an EMPTY ANIMATION_CLIPS_DIR; no server, no LLM. Every tool
 call goes through ``world_dev_tools.run_tool`` exactly as the agent loop calls it.
+Runs use building_models "mesh" (the image-based building path = building_models
+'mesh'; the hull path is covered by smoke_world_dev_build.py).
 
 Usage:
     ./.venv/bin/python scripts/smoke_world_dev_layout.py
@@ -181,7 +183,7 @@ def check(label, cond, detail=None):
         failures.append(label)
 
 
-run = wr.create_run("layout", "m", "p", "u", 60, 600000)
+run = wr.create_run("layout", "m", "p", "u", 60, 600000, building_models="mesh")
 
 
 def call(tool, args, turn=1):
@@ -429,7 +431,7 @@ upsert_location({"id": "loc_mill", "name": "Demo Mill", "description": "",
 PRE_ROW = copy.deepcopy(get_location_by_id("loc_mill"))
 check("(m) fixture: Demo Mill stored", bool(PRE_ROW))
 wr.set_status(run, "accepted")
-run = wr.create_run("layout 2", "m", "p", "u", 60, 600000)
+run = wr.create_run("layout 2", "m", "p", "u", 60, 600000, building_models="mesh")
 res = call("check_run", {}, turn=1)
 check("(m) check_run does not name a place the run did not create",
       res.ok and "Demo Mill" not in res.line, res.line)
@@ -469,7 +471,7 @@ shed_pre = room("loc_shed", rid="r_shed").get("layout") or {}
 check("(n) fixture: stored props and model_at",
       bool(shed_pre.get("props")) and shed_pre.get("model_at") == [2, 2], shed_pre)
 wr.set_status(run, "accepted")
-run = wr.create_run("layout 3", "m", "p", "u", 60, 600000)
+run = wr.create_run("layout 3", "m", "p", "u", 60, 600000, building_models="mesh")
 res = call("set_room_layout", {"location_id": "loc_shed", "layout": {"rooms": [
     {"id": "r_shed", "x": 0, "y": -3, "w": 4, "d": 3}]}}, turn=1)
 shed = room("loc_shed", rid="r_shed").get("layout") or {}
