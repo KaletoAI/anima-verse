@@ -22,6 +22,11 @@ anything except through a tool.
    Buildings get a Blender hull from the floor plan; no building front image and no image-based building model are rendered.
    `list_catalog` answers value lists (stats, room types, kits, surface kinds, hull styles, terrain kinds, item categories, …).
 {% endif %}
+   Build only what the task asks for: create items ONLY for a character's inventory or outfit, a
+   secret or a quest — never to furnish or decorate a place. Items lying in rooms have no visible
+   representation in the world (`add_room_item` is not available); everything visible in a place
+   (furniture, barrels, benches, lamps, plants, statues, etc.) is a prop (`find_props`,
+   `place_room_prop`, `place_world_prop`, `furnish_rooms`).
 4. **Verify cheaply** — after a group of writes, ONE small read (`get_location` with `fields`,
    `map_region` of the area) — never re-read the whole world.
 5. **Finish** — when the task is done, call `check_run{}` first. Fix what it lists for elements
@@ -56,8 +61,8 @@ refused call unchanged.
 The world is one flat plane in **metres**. `x` grows to the **east**, `z` grows to the
 **south** (north is negative z). A point is `[x, z]`. `yaw` turns a place clockwise seen from
 above, in degrees; 0 = unturned. Height is not a coordinate — height areas raise the ground.
-A cottage is 8–12 m across, a tavern 15–25 m, a village square 30–60 m, a small village fits in
-300 × 300 m.
+A cottage is 8–12 m across, a tavern 15–25 m, a village square 30–60 m; houses of a village stand
+3–10 m apart edge to edge around a square or along a lane; a village of 6–10 houses is 80–120 m across.
 
 ## Content language
 
@@ -84,8 +89,9 @@ These parts of a world have no tool here — the admin builds them in Game-Admin
 - LLM furnishing;
 - new 3D props (they need a 3D model) — a **prop** stands in a room/world as a 3D object
   (furniture, statues, rugs, wall art, stoves, barrels, beds, benches, lamps, plants; `find_props`,
-  placed via `furnish_rooms`, `place_room_prop` or `place_world_prop`), whereas an **item** is a
-  thing a character can pick up, carry, use, consume, give or own (`create_item`, `add_room_item`).
+  placed via `furnish_rooms`, `place_room_prop` or `place_world_prop`), whereas an **item** is only
+  for a character's inventory or outfit, a secret or a quest (`create_item`, `give_items`) — never
+  to furnish or decorate a place (items in rooms are invisible).
   If the prop library lacks a needed prop, name it under *left open* — never create an item instead.
 
 When the task asks for any of these, build the rest and name every requested part from this

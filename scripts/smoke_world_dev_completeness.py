@@ -86,13 +86,23 @@ Run 1 (turn 1):
         no daily schedule; soul sections without content: SOUL;
         body slots unset: hair.color, hair.length; knows only its home;
         no secret (add_secret); SKILLS"
-  (d) create_location{data: {name: "Demo Mill"}} (no x/z) -> the line ends
-      "; missing: unplaced (no x/z) — not a travel target"; place_location
-      of it -> "; complete".
+  (d) create_location{data: {name: "Demo Mill"}} (no x/z, seeded 10 m square
+      outline, only ground room, no props) -> the line ends
+      "; missing: unplaced (no x/z) — not a travel target; no props on the open
+      ground (place_world_prop, or place_room_prop in an open room)" (unplaced:
+      neither the path gap nor the spacing gap applies); place_location of it
+      at (100, 20) (no path area within 10 m)
+      -> "; missing: no props on the open ground (place_world_prop, or
+      place_room_prop in an open room); entrance without a path within 10 m
+      (add_terrain_area kind path)".
   (e) check_run{} -> exactly: the Demo Bare line, the Demo Shedder line
       ('character "<n>": missing: …' with the suffix lists of (a) and (c)),
-      then "2 of 4 elements complete" (created: Demo Bare, Demo Full,
-      Demo Shedder, Demo Mill; H, P, U pre-exist and were not touched).
+      the Demo Mill line ('location <id> "Demo Mill": missing: no props on the
+      open ground (place_world_prop, or place_room_prop in an open room);
+      entrance without a path within 10 m (add_terrain_area kind path)'),
+      then "1 of 4 elements complete" (created: Demo Bare, Demo Full,
+      Demo Shedder, Demo Mill; only Demo Full is complete; H, P, U pre-exist
+      and were not touched).
       The secret add_secret journaled (target kind "secret") does not exist
       as a check_run element kind, so n stays 4.
       Its journal row is kind "read". check_run{x: 1} -> refused.
@@ -181,7 +191,7 @@ body": is_base_pipeline True and base_refresh_plan(missing=True).reason
                "media pending (rendered after the turn): no portrait; no base body"].
       Demo Full was created by run 1: its baseline is NULL (created) before
       and after (note_touch is a no-op when a baseline exists).
-  (m) check_run{} of run 1 again -> still "2 of 4 elements complete" (media
+  (m) check_run{} of run 1 again -> still "1 of 4 elements complete" (media
       gaps never lower complete), the Demo Bare line now ends with
       " · media pending: no portrait; no base body", and complete Demo Full
       (created by run 1, NULL baseline -> every step due) now has a line
@@ -455,20 +465,27 @@ check("(c) Demo Shedder: exact suffix", res.ok and res.line.endswith("; missing:
       res.line)
 
 # (d)
+MILL_OPEN = "no props on the open ground (place_world_prop, or place_room_prop in an open room)"
+MILL_PATH = "entrance without a path within 10 m (add_terrain_area kind path)"
 res = call(ctx1, "create_location", {"data": {"name": "Demo Mill"}})
 check("(d) unplaced new location",
-      res.ok and res.line.endswith("; missing: unplaced (no x/z) — not a travel target"),
+      res.ok
+      and res.line.endswith(f"; missing: unplaced (no x/z) — not a travel target; {MILL_OPEN}")
+      and "without a path" not in res.line
+      and "from the nearest place" not in res.line,
       res.line)
 mill = wr.entries(run1)[0]["target_id"]
 res = call(ctx1, "place_location", {"id": mill, "x": 100, "z": 20})
-check("(d) placed -> complete", res.ok and res.line.endswith("; complete"), res.line)
+check("(d) placed -> open-ground and path gaps only",
+      res.ok and res.line.endswith(f"; missing: {MILL_OPEN}; {MILL_PATH}"), res.line)
 
 # (e)
 res = call(ctx1, "check_run", {})
 check("(e) check_run lines", res.ok and res.line.splitlines() == [
     f'character "Demo Bare": missing: {BARE}',
     f'character "Demo Shedder": missing: {SHEDDER}',
-    "2 of 4 elements complete"], res.line)
+    f'location {mill} "Demo Mill": missing: {MILL_OPEN}; {MILL_PATH}',
+    "1 of 4 elements complete"], res.line)
 check("(e) check_run is a read row", wr.steps(run1)[-1]["kind"] == "read",
       wr.steps(run1)[-1]["kind"])
 res = call(ctx1, "check_run", {"x": 1})
@@ -496,7 +513,7 @@ check("(k') unknown character refused", not res.ok, res.line)
 # (m)
 res = call(ctx1, "check_run", {})
 lines = res.line.splitlines()
-check("(m) media gaps never lower complete", res.ok and lines[-1] == "2 of 4 elements complete",
+check("(m) media gaps never lower complete", res.ok and lines[-1] == "1 of 4 elements complete",
       res.line)
 check("(m) the Demo Bare line names its pending media",
       bool(lines) and lines[0] == f'character "Demo Bare": missing: {BARE} · media pending: {MEDIA}',

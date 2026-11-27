@@ -18,7 +18,10 @@ WHAT IS CHECKED, and where every expected value comes from
 Fixture: the temp world has no surface library, so
 ``surface_textures.library_kinds()`` is empty and ``sanitize_layout`` skips the
 surface check (its docstring: "surface_kinds empty/None disables the surface
-check entirely"). Turn 1 creates "Demo Tavern" through the tool at x 0, z 0
+check entirely"). A pre-existing terrain area ``ta_fix_tavern_path`` of kind
+"path" (x -15..15, z 11..13, 3 m south of the tavern's south rim z = 8, within
+10 m) is saved before run 1 so check_run (g) does not report the path gap and
+undo never touches it. Turn 1 creates "Demo Tavern" through the tool at x 0, z 0
 with boundary [[-10,-8],[10,-8],[10,8],[-10,8]] and rooms Taproom, Kitchen;
 TAP / KIT = the ids the writer gave them (read back by name). POST_CREATE =
 its rooms, map3d and entry_room right after the create.
@@ -183,6 +186,12 @@ def check(label, cond, detail=None):
         failures.append(label)
 
 
+from app.models import terrain  # noqa: E402
+
+terrain.save_area({
+    "id": "ta_fix_tavern_path", "kind": "path",
+    "polygon": [[-15, 11], [15, 11], [15, 13], [-15, 13]],
+})
 run = wr.create_run("layout", "m", "p", "u", 60, 600000, building_models="mesh")
 
 
