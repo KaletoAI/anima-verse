@@ -49,6 +49,8 @@ import {
 import { SceneTile } from './SceneTile';
 import { TILE_COLLAPSE_BELOW_PX } from './sceneTile';
 import { PlaceMenu } from './PlaceMenu';
+import { ItemMenu } from './ItemMenu';
+import { ItemLookModal } from './ItemLookModal';
 import { TravelBar } from './TravelBar';
 import type { TravelPick } from '../game/travelPick';
 import { Minimap } from './Minimap';
@@ -695,6 +697,7 @@ export function Hud({ avatar, username, role }: {
     'play-scene', () => apiGet<SceneData>('/play/scene'), SYNC_ENDPOINTS.scene);
 
   const [travelPick, setTravelPick] = useState<TravelPick | null>(null);
+  const [lookItem, setLookItem] = useState<string | null>(null);
   useEffect(() => {
     if (data?.travel || (travelPick && data?.location_id === travelPick.id)) setTravelPick(null);
   }, [data?.travel, data?.location_id, travelPick]);
@@ -1309,6 +1312,8 @@ export function Hud({ avatar, username, role }: {
         <button className="ovb-close" title={t('Close view')} onClick={() => gameActions.closeOpenView?.()}>✕</button>
       </div>}
       {game.placeMenu && <PlaceMenu menu={game.placeMenu} />}
+      {game.itemMenu && <ItemMenu menu={game.itemMenu} onLook={setLookItem} />}
+      {lookItem && <ItemLookModal itemId={lookItem} onClose={() => setLookItem(null)} />}
       {/* Performance readout (stage 5): shown while the menu switch is on,
           top-left and read-only — see PerfOverlay.tsx. */}
       {perfOn && <PerfOverlay />}

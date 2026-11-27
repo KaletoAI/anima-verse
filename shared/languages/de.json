@@ -7619,6 +7619,8 @@
     "No other items with a mesh found.": "Keine anderen Items mit Mesh gefunden.",
     "Longest edge in the world: {size} m (mesh bbox: {x} × {y} × {z})": "Längste Kante in der Welt: {size} m (Mesh-BBox: {x} × {y} × {z})",
     "Take": "Nehmen",
-    "No free spot next to the item": "Kein freier Platz neben dem Gegenstand"
+    "No free spot next to the item": "Kein freier Platz neben dem Gegenstand",
+    "Nothing to do here.": "Hier gibt es nichts zu tun.",
+    "Quantity: {n}": "Anzahl: {n}"
   }
 }
