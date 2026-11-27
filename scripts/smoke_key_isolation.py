@@ -131,6 +131,14 @@ WHAT IS CHECKED, and where every expected value comes from
     ``BUILD_HELD_LABEL`` ("Texture from cut · Glutstulpen: rejected (0 image jobs — Redo …)"), jobs 0, failed = the
     reason; due with jobs 2 / max 4 -> "Texture from cut · Glutstulpen (+2 image jobs, up to 4 when an attempt is
     rejected)"; due with jobs 1 / max 1 -> "(+1 image jobs)".
+[L] The back-job default moves only the plain trousers (2026-11-27): every case in ``CASES`` is validated with
+    ``validate_params``, so its stored ``back_job`` is "auto". ``BACK_JOB_DEFAULTS`` maps only "trousers" to "render"
+    (every other kind defaults to "front"). Therefore ``back_key_forced(p, True)`` is True ONLY for "trousers";
+    ``back_key_forced(p, False)`` and ``back_key_forced(p, None)`` are False for EVERY case; and
+    ``csig("i", "m", "k", prompt_sha, back_forced=back_key_forced(p, plain))`` equals the unflagged
+    ``csig("i", "m", "k", prompt_sha)`` for every case and both ``plain`` values (True / False) EXCEPT
+    ("trousers", True). With ``back_job`` explicitly set to "render" on every case, ``back_key_forced(p, False)`` is
+    True for every case (explicit render keeps its old flag).
 """
 from __future__ import annotations
 
@@ -529,6 +537,26 @@ with patch.object(figure_build, "_item_name", lambda _i: NAME):
         check(f"[K] {st['state']} held={st['held']} max={st['max']}: label, jobs, failed",
               (step.label, step.jobs, step.failed) == (want_label, want_jobs, want_failed),
               (step.label, step.jobs, step.failed))
+
+# [L]
+plain_forced = {c for c, p in CASES.items() if gct.back_key_forced(p, True)}
+check("[L] back_key_forced(p, True) is True only for trousers", plain_forced == {"trousers"}, sorted(plain_forced))
+non_plain_forced = {c for c, p in CASES.items() if gct.back_key_forced(p, False)}
+check("[L] back_key_forced(p, False) is False for every case", non_plain_forced == set(), sorted(non_plain_forced))
+unmeasured_forced = {c for c, p in CASES.items() if gct.back_key_forced(p, None)}
+check("[L] back_key_forced(p, None) is False for every case", unmeasured_forced == set(), sorted(unmeasured_forced))
+moved_csig = set()
+for c, p in CASES.items():
+    psha_c = gct.prompt_sha_of(gct.prompt_kind(p))
+    unflagged = gct.csig("i", "m", "k", psha_c)
+    for plain in (True, False):
+        got = gct.csig("i", "m", "k", psha_c, back_forced=gct.back_key_forced(p, plain))
+        if got != unflagged:
+            moved_csig.add((c, plain))
+check("[L] csig moves only for (trousers, plain=True)", moved_csig == {("trousers", True)}, sorted(moved_csig))
+explicit_render = {c for c, p in CASES.items() if gct.back_key_forced({**p, "back_job": "render"}, False)}
+check("[L] explicit back_job='render' keeps back_key_forced(p, False) True for every case",
+      explicit_render == set(CASES), sorted(set(CASES) - explicit_render))
 
 print(f"\n{_n - len(_fails)}/{_n} checks passed")
 if _fails:

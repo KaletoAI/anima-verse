@@ -360,8 +360,9 @@ export interface TemplateParams {
   /** User test 2026-11-21: the sleeves of the texture from cut — "plain" (the front panel's fabric, default) or
    *  "picture" (the model's answer). Set in the Texture tab (`…/cut/sleeves`), never a field of the Cut tab. */
   sleeve_print?: string
-  /** The back job of the texture from cut — "auto" (a plain back view gets the front panel's fabric) or "render"
-   *  (always a back job; part of the atlas key). Set in the Texture tab (`…/cut/back-job`), never a field of the Cut tab. */
+  /** The back job of the texture from cut — "auto" (the kind's default: "render" for trousers, "front" for every other
+   *  kind), "render" (always a back job; part of the atlas key) or "front" (a plain back view gets the front panel's
+   *  fabric). Set in the Texture tab (`…/cut/back-job`), never a field of the Cut tab. */
   back_job?: string
   /** Plan group B (B10): what closes a top's / dress's / jacket's front — painted by code along the cut's marks
    *  ("none" / "buttons" / "zip" / "lacing"); `buttons` 0 = automatic. Both TEXTURE_ONLY: a switch re-assembles. */
@@ -610,6 +611,11 @@ export const TEMPLATE_FIELD_CHOICE_LABELS: Partial<Record<keyof TemplateParams, 
   seat: { fitted: 'Fitted (second skin)', regular: 'Regular', relaxed: 'Relaxed (roomy seat)' },
   placket: { lacing: 'Lacing' },
   cups: { bra: 'Bra cups' },
+  back_job: {
+    auto: 'Default of the kind',
+    render: 'Always render the back job',
+    front: 'Front fabric when the back is plain',
+  },
 }
 
 /** Bug round 2026-11-20: the dialog's presets (`presets` of the GET) — their button words and hints. */

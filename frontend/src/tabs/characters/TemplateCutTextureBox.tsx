@@ -127,9 +127,13 @@ export interface TemplateCutState {
   plain_back_limit?: number
   /** Whether the detail alone calls the back plain (null without a back view) — `back_plain` is false while forced. */
   back_measured_plain?: boolean | null
-  /** The piece renders its back job although the back view measures plain ("Render back job…", `back_job` "render";
-   *  part of the atlas key, so the plain atlas and the rendered one both stay). */
+  /** The piece renders its back job although the back view measures plain (either by kind default or because the user
+   *  set `back_job` "render"; part of the atlas key, so the plain atlas and the rendered one both stay). */
   back_forced?: boolean
+  /** Stored `back_job` param ("auto" | "render" | "front"; default "auto"). */
+  back_job?: string
+  /** Effective default of this piece's kind ("render" for trousers, "front" for every other kind). */
+  back_job_default?: string
 }
 
 const THUMB = 104
@@ -360,9 +364,10 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
       setBusy(false)
     }
   }
-  /** The back-job option: "render" (with `render`, the back job starts at once) or back to "auto" (0 image jobs: the
-   *  plain atlas of the other key comes back when it was made). */
-  const setBackJob = async (value: 'auto' | 'render', render: boolean) => {
+  /** The back-job option: "render" (with `render`, the back job starts at once), "front" (use the front fabric over a
+   *  plain back even when the kind defaults to "render"), or back to "auto" (0 image jobs: the plain atlas of the
+   *  other key comes back when it was made). */
+  const setBackJob = async (value: 'auto' | 'render' | 'front', render: boolean) => {
     setBusy(true)
     setError('')
     setConfirmBack(false)
@@ -496,12 +501,14 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
           {state.has_back && state.back_forced && state.back_measured_plain ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }} data-cut-back-forced="">
               <StepLine testid="back_forced" label={t('Back panel')} light="green"
-                text={t('Back job forced — the back view measures plain (detail {d} ≤ {l})')
+                text={t(state.back_job !== 'render'
+                  ? 'Back job by default for this kind — the back view measures plain (detail {d} ≤ {l})'
+                  : 'Back job forced — the back view measures plain (detail {d} ≤ {l})')
                   .replace('{d}', (state.back_detail ?? 0).toFixed(2)).replace('{l}', (state.plain_back_limit ?? 0).toFixed(2))} />
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', paddingLeft: 16 }}>
                 <button type="button" className="ga-btn ga-btn-sm" disabled={busy || running} data-cut-unforce-back=""
                   title={t('The back gets the front panel’s fabric again; an atlas made that way before comes back')}
-                  onClick={() => { void setBackJob('auto', false) }}>
+                  onClick={() => { void setBackJob(state.back_job_default === 'render' ? 'front' : 'auto', false) }}>
                   {t('Use the front fabric for the back')}
                 </button>
               </div>

@@ -47,6 +47,21 @@ flat (40, 40, 150) block on transparent — no L* gradient anywhere, so its deta
     against its own key -> "same"; a record without a back sha never fits "cross". With only the FORCED record on disk,
     ``reused_jobs`` for the unforced key takes its front (``reused_from`` = the forced key) but NOT its back answer
     (a forced back belongs to the other atlas), although that back is "ready" with its raw file.
+[G] ``gt.back_job_of`` (effective policy from ``BACK_JOB_DEFAULTS``, trousers -> "render", every other kind -> "front"):
+    {"kind": "trousers"} -> "render"; {"kind": "trousers", "back_job": "front"} -> "front"; {"kind": "top"} -> "front";
+    {"kind": "top", "back_job": "render"} -> "render"; None -> "front".
+[H] ``gct.back_key_forced`` truth table (the flag that goes into ``csig``: explicit "render" on any kind, or "auto" on
+    a kind defaulting to "render" over a measured plain back):
+      trousers auto + True -> True; trousers auto + False -> False; trousers auto + None -> False;
+      trousers front + True -> False; trousers render + False -> True;
+      top auto + True -> False; top front + True -> False; top render + False -> True.
+[I] Trousers default ("kind": "trousers", "back_job": "auto", same plain back view):
+    ``csig`` = md5("isl000|<item>|<back>|<trousers prompt>|<POST_VERSION>|back_job:render")[:12] (the FORCED key,
+    because trousers default to "render" and the back measures plain); ``_template_cut_body`` returns that csig,
+    back_forced True, back_plain False, back_job "auto", back_job_default "render"; ``generate`` renders
+    ["front", "back"]. Calling ``/cut/back-job`` with {"back_job": "front"} stores "front" and moves the payload's csig
+    to the UNFORCED trousers key (no "|back_job:render"), back_plain True, back_forced False, back_job "front",
+    back_job_default "render", plan["back"] 0. Calling ``/cut/back-job`` with {"back_job": "bogus"} raises HTTP 400.
 """
 import hashlib
 import io
@@ -282,6 +297,60 @@ def main() -> int:
           ("ready", True))
     check("[E] reused for the unforced key: the front only", (sorted(reuse), reuse.get("front", {}).get("reused_from")),
           (["front"], want_forced))
+
+    # [G] gt.back_job_of
+    print("[G] gt.back_job_of")
+    from app.core import garment_template as gt
+    check("[G] trousers default -> render", gt.back_job_of({"kind": "trousers"}), "render")
+    check("[G] trousers front -> front", gt.back_job_of({"kind": "trousers", "back_job": "front"}), "front")
+    check("[G] top default -> front", gt.back_job_of({"kind": "top"}), "front")
+    check("[G] top render -> render", gt.back_job_of({"kind": "top", "back_job": "render"}), "render")
+    check("[G] None -> front", gt.back_job_of(None), "front")
+
+    # [H] gct.back_key_forced truth table
+    print("[H] gct.back_key_forced truth table")
+    for label, params, measured, want in (
+        ("trousers auto + plain True", {"kind": "trousers", "back_job": "auto"}, True, True),
+        ("trousers auto + plain False", {"kind": "trousers", "back_job": "auto"}, False, False),
+        ("trousers auto + plain None", {"kind": "trousers", "back_job": "auto"}, None, False),
+        ("trousers front + plain True", {"kind": "trousers", "back_job": "front"}, True, False),
+        ("trousers render + plain False", {"kind": "trousers", "back_job": "render"}, False, True),
+        ("top auto + plain True", {"kind": "top", "back_job": "auto"}, True, False),
+        ("top front + plain True", {"kind": "top", "back_job": "front"}, True, False),
+        ("top render + plain False", {"kind": "top", "back_job": "render"}, False, True),
+    ):
+        check(f"[H] {label}", gct.back_key_forced(params, measured), want)
+
+    # [I] trousers default
+    print("[I] trousers default")
+    PARAMS.clear()
+    PARAMS.update({"kind": "trousers", "texture": "cut", "sleeve_print": "plain", "back_job": "auto"})
+    psha_tr = gct.prompt_sha_of("trousers")
+    base_tr = f"isl000|{isha}|{bsha}|{psha_tr}|{post.POST_VERSION}"
+    want_tr_unforced = hashlib.md5(base_tr.encode()).hexdigest()[:12]
+    want_tr_forced = hashlib.md5((base_tr + "|back_job:render").encode()).hexdigest()[:12]
+    p = fr._template_cut_body(CHAR, ITEM)
+    check("[I] trousers auto payload csig = forced key", p["csig"], want_tr_forced)
+    check("[I] trousers auto back flags",
+          (p["back_forced"], p["back_plain"], p["back_job"], p["back_job_default"]),
+          (True, False, "auto", "render"))
+    renders.clear()
+    rec = gct.generate(CHAR, ITEM, apply_after=False)
+    check("[I] trousers auto generate renders front and back",
+          (renders, rec.get("state"), rec.get("csig"), rec.get("back_forced")),
+          (["front", "back"], "ready", want_tr_forced, True))
+    p = fr.set_template_cut_back_job(CHAR, ITEM, fr.TemplateCutBackJobRequest(back_job="front"), {})
+    check("[I] trousers set front: stored and unforced key",
+          (PARAMS["back_job"], p["csig"], p["back_plain"], p["back_forced"], p["back_job"], p["back_job_default"],
+           p["plan"]["back"]),
+          ("front", want_tr_unforced, True, False, "front", "render", 0))
+    from fastapi import HTTPException
+    bogus_status = None
+    try:
+        fr.set_template_cut_back_job(CHAR, ITEM, fr.TemplateCutBackJobRequest(back_job="bogus"), {})
+    except HTTPException as exc:
+        bogus_status = exc.status_code
+    check("[I] bogus back_job -> HTTP 400", bogus_status, 400)
 
     check("network connects", len(CONNECTS), 0)
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")

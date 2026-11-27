@@ -336,12 +336,43 @@ def is_plain_back(detail_back) -> bool:
 
 
 def back_forced_of(item_id: str) -> bool:
-    """Whether the piece's ``back_job`` param (``garment_template.BACK_JOBS``) is "render": the back job runs although
-    the back view measures plain (``is_plain_back``) — the user's call in the Texture tab ("Render back job…"). Part of
-    the atlas key (``csig``), so the plain record and the rendered one both stay on disk."""
+    """Whether the piece's effective ``back_job`` (``garment_template.back_job_of``) is "render": the back job runs
+    although the back view measures plain (``is_plain_back``) — either because the piece's kind defaults to "render"
+    (``garment_template.BACK_JOB_DEFAULTS``) or because the user set "render" ("Render back job…")."""
     from app.core import garment_template as gt
     from app.models.inventory import get_item
-    return str((gt.params_of(get_item(item_id)) or {}).get("back_job") or "auto") == "render"
+    return gt.back_job_of(gt.params_of(get_item(item_id))) == "render"
+
+
+def back_key_forced(params: dict | None, measured_plain: bool | None) -> bool:
+    """Whether ``csig`` carries the forced-back flag (``|back_job:render``).
+
+    True when the stored ``back_job`` is explicitly "render" (as before, regardless of the measure), or when the
+    stored ``back_job`` is "auto" (or missing), the kind default (``garment_template.BACK_JOB_DEFAULTS``) is "render"
+    and ``measured_plain is True``. False otherwise ("front"; "auto" on a kind whose default is "front"; "auto" on
+    trousers with a decorated or not yet measured back view).
+
+    Over a decorated back the default back job is the same job as before, so the key stays; only a trousers piece
+    whose back measures plain gets the flag — the one re-key accepted on 2026-11-27. Explicit "render" keeps its old
+    key on every kind."""
+    from app.core import garment_template as gt
+    if not params:
+        return False
+    stored = str(params.get("back_job") or "auto")
+    if stored == "render":
+        return True
+    if stored == "auto":
+        return gt.back_job_of(params) == "render" and measured_plain is True
+    return False
+
+
+def back_key_forced_of(character_name: str, item_id: str) -> bool:
+    """``back_key_forced`` for ``item_id`` from its stored params and ``character_name``'s accepted back view."""
+    from app.core import garment_template as gt
+    from app.models.inventory import get_item
+    measured = (None if back_view(character_name, item_id) is None
+                else is_plain_back(back_detail(character_name, item_id)))
+    return back_key_forced(gt.params_of(get_item(item_id)), measured)
 
 
 def prompt_variant(side: str = "front", decorated: bool = False) -> str:
@@ -1196,7 +1227,7 @@ def csig_for(character_name: str, item_id: str, islands_sha: str, islands: dict 
              back_forced: bool | None = None) -> str | None:
     """The csig of the piece for these islands with the CURRENT item picture and back view; None without a
     picture. ``has_back_panel`` None = read it from ``islands``; ``kind`` None = the item's (``item_kind``);
-    ``back_forced`` None = the piece's own ``back_job`` (``back_forced_of``), a bool = the key with that choice."""
+    ``back_forced`` None = the piece's key flag (``back_key_forced_of``), a bool = the key with that choice."""
     isha = item_sha(item_id)
     if isha is None:
         return None
@@ -1204,7 +1235,8 @@ def csig_for(character_name: str, item_id: str, islands_sha: str, islands: dict 
         has_back_panel = has_back(islands or {})
     kind = item_kind(item_id) if kind is None else kind
     return csig(islands_sha, isha, back_sha(character_name, item_id) if has_back_panel else "", prompt_sha_of(kind),
-                back_forced=bool(has_back_panel and (back_forced_of(item_id) if back_forced is None else back_forced)))
+                back_forced=bool(has_back_panel and (back_key_forced_of(character_name, item_id)
+                                                     if back_forced is None else back_forced)))
 
 
 def atlas_path(character_name: str, item_id: str, sig: str) -> Path:
@@ -2368,16 +2400,20 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                     "only": only or "", "sleeve_print": sleeve_print_of(item_id),
                     "trim_style": trim_style_of(item_id)}
     record["held"] = held_trims(kind, record["sleeve_print"])
-    # the user's forced back job (``back_forced_of``): part of the key, the back job runs over a plain back view
+    # effective forced back job (``back_forced_of``): the back job runs over a plain back view;
+    # the key flag (``back_key_forced_of``) is computed after the back view exists so ``record["back_forced"]`` matches ``csig``
     forced = "back" in parts and back_forced_of(item_id)
-    record["back_forced"] = bool(forced)
+    key_forced = False
+    record["back_forced"] = False
     sig = csig(pattern["islands_sha"], record["item_sha"], "", psha)
     try:
         if "back" in parts:
             _set_progress(key, "back_view")
             record["back_view"] = _ensure_back_view(character_name, item_id)
             record["back_sha"] = back_sha(character_name, item_id)
-        sig = csig(pattern["islands_sha"], record["item_sha"], record["back_sha"], psha, back_forced=forced)
+            key_forced = back_key_forced_of(character_name, item_id)
+        record["back_forced"] = bool(key_forced)
+        sig = csig(pattern["islands_sha"], record["item_sha"], record["back_sha"], psha, back_forced=key_forced)
     except Exception as e:  # noqa: BLE001 — the flow's failure is the record
         logger.warning("Cut texture %s %s: back view: %s", character_name, item_id, e)
         record.update({"csig": sig, "state": "failed", "reason": _failure_reason(e), "created_at": utc_now_iso()})
@@ -2606,7 +2642,8 @@ def recompose(character_name: str, item_id: str, *, accept: str | None = None, a
     refs = references(character_name, item_id, "back" in parts)
     record["fabric"] = {"item": refs["colour"], "prefill": list(refs["prefill"]) if refs["prefill"] else None,
                         "detail": refs["detail"]}
-    forced = "back" in parts and back_forced_of(item_id)     # part of ``sig``: the record was made the same way
+    forced = "back" in parts and back_forced_of(item_id)
+    record["back_forced"] = bool("back" in parts and back_key_forced_of(character_name, item_id))
     plain = "back" in parts and not forced and is_plain_back(refs["detail"].get("back"))
     record["back_plain"] = {"plain": bool(plain), "detail": refs["detail"].get("back"), "limit": PLAIN_BACK_DETAIL,
                             "forced": bool(forced)}
@@ -2670,11 +2707,11 @@ def set_sleeve_print(character_name: str, item_id: str, value: str, *, run=None)
 
 
 def set_back_job(character_name: str, item_id: str, value: str, *, render: bool = False, run=None) -> dict:
-    """Store the piece's ``back_job`` ("auto" / "render", ``garment_template.BACK_JOBS``; ``TEXTURE_ONLY``: no drape,
-    part of the atlas key ``csig``) and, with ``render``, start the flow's back job right away (``start`` with
-    ``only="back"``: the front answer of the other key is re-used, ``predecessor_fit`` "cross"). The setting is stored
-    before ``start`` checks: a refused start (media off, no route, busy) leaves it set and says why — Run all makes
-    it then. ``{"changed": bool, "started": bool}``."""
+    """Store the piece's ``back_job`` ("auto" / "render" / "front", ``garment_template.BACK_JOBS``; ``TEXTURE_ONLY``:
+    no drape, part of the atlas key ``csig``) and, with ``render``, start the flow's back job right away (``start``
+    with ``only="back"``: the front answer of the other key is re-used, ``predecessor_fit`` "cross"). The setting is
+    stored before ``start`` checks: a refused start (media off, no route, busy) leaves it set and says why — Run all
+    makes it then. ``{"changed": bool, "started": bool}``."""
     from app.core import garment_template as gt
     from app.models.inventory import get_item
     if value not in gt.BACK_JOBS:
@@ -3180,7 +3217,8 @@ def dialog_state(character_name: str, item_id: str) -> dict:
     - ``back_detail`` / ``back_plain`` / ``plain_back_limit`` — the back view's detail, whether the back is filled
       plain (the back is then the front's fabric, no back job; None without a back view or a back panel) and the
       threshold; ``back_measured_plain`` — whether the detail alone calls it plain, ``back_forced`` — the piece
-      renders its back job anyway (``back_forced_of``, "Render back job…")."""
+      renders its back job anyway (effective ``back_forced_of``), ``back_job`` — the stored param value (default
+      "auto"), ``back_job_default`` — the kind's default ("render" or "front", ``garment_template.BACK_JOB_DEFAULTS``)."""
     from app.core import garment_template as gt
     from app.core import piece_jobs
     from app.imagegen import routing as _routing
@@ -3229,14 +3267,18 @@ def dialog_state(character_name: str, item_id: str) -> dict:
         entry["can_use"] = bool(entry["can_use"] and not use_off)
     sleeve_print = str(params.get("sleeve_print") or "plain")
     forced = back_forced_of(item_id)
+    back_job = str(params.get("back_job") or "auto")
+    back_job_default = gt.BACK_JOB_DEFAULTS.get(str(params.get("kind") or ""), "front")
     if has_back(islands):
         detail = back_detail(character_name, item_id)
         measured = None if back_view(character_name, item_id) is None else is_plain_back(detail)
         out.update({"back_detail": detail, "back_plain": bool(measured) and not forced if measured is not None
                     else None, "back_measured_plain": measured, "back_forced": forced,
+                    "back_job": back_job, "back_job_default": back_job_default,
                     "plain_back_limit": PLAIN_BACK_DETAIL})
     else:
         out.update({"back_detail": None, "back_plain": None, "back_measured_plain": None, "back_forced": forced,
+                    "back_job": back_job, "back_job_default": back_job_default,
                     "plain_back_limit": PLAIN_BACK_DETAIL})
     out.update({"answers": answers, "sleeve_print": sleeve_print,
                 # the option's pieces: a top's sleeves, a fitted piece's small pieces (``TRIM_PARTS``); ``trim``

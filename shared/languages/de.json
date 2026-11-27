@@ -7594,6 +7594,11 @@
     "Nothing to report.": "Nichts zu berichten.",
     "Entry/exit at the location edge — click near a boundary edge; a road crossing the cell gets one on each side. Edit edge, width and linked room in the Plot panel.": "Ein-/Ausgang am Rand des Orts — nahe an eine Grundstückskante klicken; eine Straße durch die Zelle bekommt auf jeder Seite einen. Kante, Breite und verknüpften Raum im Grundstück-Panel bearbeiten.",
     "Front door ON THE BUILDING CONTOUR — for a storey whose hallway is its front: the corridor has no walls of its own, so the door is cut into the shell. Click near a contour edge; size, hinge and door prop are edited in the Storey panel.": "Eingangstür AN DER GEBÄUDEKONTUR — für ein Geschoss, dessen Flur die Front bildet: der Flur hat keine eigenen Wände, also wird die Tür in die Hülle geschnitten. Nahe an eine Konturkante klicken; Größe, Anschlag und Tür-Prop werden im Geschoss-Panel bearbeitet.",
-    "Select this prop — its settings open in this panel.": "Dieses Prop auswählen — seine Einstellungen öffnen sich in diesem Panel."
+    "Select this prop — its settings open in this panel.": "Dieses Prop auswählen — seine Einstellungen öffnen sich in diesem Panel.",
+    "Default of the kind": "Standard der Art",
+    "Default of the kind ({value})": "Standard der Art ({value})",
+    "Always render the back job": "Rückseiten-Job immer rendern",
+    "Front fabric when the back is plain": "Stoff der Vorderseite, wenn der Rücken schlicht ist",
+    "Back job by default for this kind — the back view measures plain (detail {d} ≤ {l})": "Rückseiten-Job als Standard dieser Art — die Rückansicht wird als schlicht gemessen (Detail {d} ≤ {l})"
   }
 }

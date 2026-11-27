@@ -415,11 +415,28 @@ TEXTURE_SOURCES = ("projection", "cut")
 #: ``garment_cut_texture.TRIM_PARTS``): plain = the main panels' fabric patch, picture = the answer, for an item whose
 #: picture shows a trim on them.
 SLEEVE_PRINTS = ("plain", "picture")
-#: Whether the texture from cut renders a BACK job (``garment_cut_texture.back_forced``): "auto" (default) — only when
-#: the back view is not plain (``garment_cut_texture.PLAIN_BACK_DETAIL``; a plain back gets the front panel's fabric);
-#: "render" — always, also for a back view measured plain (the user's call: back pockets, a small print, a yoke the
-#: measure reads as plain). Part of the cut atlas key (``garment_cut_texture.csig``), never of the drape key.
-BACK_JOBS = ("auto", "render")
+#: Whether the texture from cut renders a BACK job (``garment_cut_texture.back_forced_of``): "auto" (default) — the
+#: piece's kind default (``BACK_JOB_DEFAULTS``); "render" — always a back job, also over a plain back view; "front" —
+#: the measure decides: a plain back view (``garment_cut_texture.PLAIN_BACK_DETAIL``) gets the front panel's fabric, a
+#: decorated one its back job (what "auto" did for every kind before 2026-11-27; stored when the user turns a kind
+#: default "render" off). Part of the cut atlas key (``garment_cut_texture.csig``), never of the drape key.
+BACK_JOBS = ("auto", "render", "front")
+#: User decision 2026-11-27: back pockets, the yoke and the seams of trousers measure plain, so trousers render their
+#: back job by default (every other kind defaults to "front" — the measure decides).
+BACK_JOB_DEFAULTS: Dict[str, str] = {"trousers": "render"}
+
+
+def back_job_of(params: Optional[Dict[str, Any]]) -> str:
+    """Effective back-job policy of ``params`` ("render" or "front"): "auto" / missing / empty resolves through
+    ``BACK_JOB_DEFAULTS`` (default "front"); an explicit "render" or "front" wins. ``params`` None -> "front"."""
+    if not params:
+        return "front"
+    stored = str(params.get("back_job") or "auto")
+    if stored == "auto":
+        return BACK_JOB_DEFAULTS.get(str(params.get("kind") or ""), "front")
+    return stored
+
+
 #: The kinds cut into pattern pieces (``islands.json``, the texture from cut): a top (since
 #: step 3b also a strapless one, cut by ``wrap``), since step 3a every fitted kind, since step 3b a skirt, since step
 #: 3c / 3d (plan group B, phases C and D) a jacket and a dress — every kind. The builder knows no other UV since B17

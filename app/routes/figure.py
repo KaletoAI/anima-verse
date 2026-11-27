@@ -94,7 +94,8 @@ body actions):
 * ``POST /characters/{c}/figure/template/{item_id}/cut/sleeves {sleeve_print}`` — the sleeve option of the texture
   ("plain" / "picture"), a made atlas composed again on the CPU; 400 unknown value.
 * ``POST /characters/{c}/figure/template/{item_id}/cut/back-job {back_job, render?}`` — the back-job option
-  ("auto" / "render": a back job also over a plain back view; part of the atlas key), ``render`` starts the back job.
+  ("auto" / "render" / "front": kind default, always a back job, or front fabric over a plain back; part of the atlas
+  key), ``render`` starts the back job.
 * ``GET  /characters/{c}/figure/template/{item_id}/cut/<kind>.png[?v=<csig>]`` — the record's pictures (``kind``
   one of ``garment_cut_texture.CUT_FILES``); 404 when missing.
 * ``GET  /characters/{c}/figure/template/{item_id}/pattern.png`` — the debug pattern sheet of the current cut
@@ -635,6 +636,7 @@ def get_template_params(character_name: str, item_id: str, picture: bool = True,
             # stays metal on every fabric but a leather finish, which sets its own surface
             "material": piece_material.describe(item),
             "kind_defaults": {k: gt.kind_defaults(k) for k in gt.KINDS},
+            "back_job_defaults": dict(gt.BACK_JOB_DEFAULTS),
             # bug round 2026-11-20: named presets the dialog offers per kind (trousers: leggings)
             "presets": {"trousers": {"leggings": dict(gt.LEGGINGS)}},
             "cost": {"llm_calls": 1, "hub_jobs": 0, "cpu_s": gt.CPU_ESTIMATE_S},
@@ -1276,7 +1278,7 @@ def set_template_cut_sleeves(character_name: str, item_id: str, body: TemplateCu
 
 
 class TemplateCutBackJobRequest(BaseModel):
-    #: ``garment_template.BACK_JOBS``: "auto" (a plain back view gets the front's fabric) / "render" (always a back job).
+    #: ``garment_template.BACK_JOBS``: "auto" (kind default) / "render" (always a back job) / "front" (a plain back view gets the front's fabric).
     back_job: str
     #: Start the back job right away ("Render back job…"): the front answer is kept.
     render: bool = False

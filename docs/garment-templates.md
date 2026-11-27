@@ -940,20 +940,26 @@ hold, so:
   Build's cost note and the figure row count 0 back jobs; Redo back is not offered. A DECORATED back keeps its job,
   its detail gate from the back view's own detail (`references` → `detail.back`). A missing back view is made first
   and the counts assume the back job until it is measured.
-- **Forcing the back job** (2026-11-27: back pockets on jeans, a yoke or a small print can measure plain). The
-  template param **`back_job`** (`"auto"` default / `"render"`, `garment_template.BACK_JOBS`, `TEXTURE_ONLY`; set in
-  the Texture tab by "Render back job…" through `POST …/cut/back-job`) makes the back job run over a plain back view
-  (`back_forced_of`; `back_plain` is then False, the dialog's `back_measured_plain` still True). It is part of the
-  atlas key: `csig` appends `|back_job:render` only when forced, so every unforced key stays the key it was, and the
-  plain record and the rendered one both stay on disk — switching back ("Use the front fabric for the back") brings the
-  plain atlas back with 0 jobs. The front answer is the same request under both keys: `predecessor_fit` "cross" lets
-  `reused_jobs` take a record of the other flag's FRONT answer (never its back), so forcing renders the back job alone
-  — when a front answer exists. The button's count and its confirmation come from `job_plan`'s **`force_back`** (the
-  plan of `only="back"` under the forced key, None unless the back is plain): before the texture was made it renders
-  the front job (and an upscale) too, and the confirmation says there is no front answer to keep.
-  The record keeps `back_forced` and `back_plain.forced`. Without a back job the dialog's back template and back answer
-  thumbnails say "No back job — plain back"; the back view (`back_ref`, Picture 2) is written whenever there is a back
-  panel.
+- **Forcing the back job** (2026-11-27: back pockets on jeans, a yoke or seams can measure plain). The template param
+  **`back_job`** (`"auto"` default / `"render"` / `"front"`, `garment_template.BACK_JOBS`, `TEXTURE_ONLY`; set in the
+  Texture tab through `POST …/cut/back-job`) controls whether a back job runs over a plain back view. `"auto"` resolves
+  to the piece's kind default (`garment_template.BACK_JOB_DEFAULTS`: `"trousers"` → `"render"`, every other kind →
+  `"front"`, where the detail measure decides); `"render"` always runs a back job; `"front"` lets the measure decide
+  even on trousers (`garment_template.back_job_of` returns the effective `"render"` / `"front"`, `back_forced_of` is
+  True when effective `"render"` — `back_plain` is then False while `back_measured_plain` stays True). The atlas key
+  flag is **`back_key_forced`**: `csig` appends `|back_job:render` only when the stored `back_job` is explicitly
+  `"render"`, OR when it is `"auto"` on a kind whose default is `"render"` AND the back view measures plain — so only
+  trousers with a plain back re-keyed once on 2026-11-27, while every other kind and decorated trousers kept their
+  existing key. Both the plain record and the rendered one stay on disk — switching back ("Use the front fabric for
+  the back", which stores `"front"` on trousers and `"auto"` on every other kind) brings the plain atlas back with 0
+  jobs. The front answer is the same request under both keys: `predecessor_fit` "cross" lets `reused_jobs` take a
+  record of the other flag's FRONT answer (never its back), so forcing renders the back job alone — when a front
+  answer exists. The button's count and its confirmation come from `job_plan`'s **`force_back`** (the plan of
+  `only="back"` under the forced key, None unless the back is plain): before the texture was made it renders the front
+  job (and an upscale) too, and the confirmation says there is no front answer to keep. The record keeps `back_forced`
+  (the key flag that went into `csig`) and `back_plain.forced` (the effective forced flag). Without a back job the
+  dialog's back template and back answer thumbnails say "No back job — plain back"; the back view (`back_ref`, Picture
+  2) is written whenever there is a back panel.
 
 `POST_VERSION` 11 and the reworded prompts (`PROMPT_SHA`) make every older cut atlas stale.
 
@@ -1114,7 +1120,7 @@ or one without a recorded `cut_sig`, which no Build re-drapes for the cut).
 | `POST /characters/{c}/figure/template/{item_id}/cut/generate` | start the flow, body `{"only": "" / "front" / "back"}` (409 media off or another flow of the piece runs, 400 not cut / no picture, 503 no route — all before a thread starts) |
 | `POST /characters/{c}/figure/template/{item_id}/cut/use` | "Use this answer", body `{"job": "front" / "back"}`: the stored answer (also a rejected one) accepted and composed on the CPU, 0 image jobs (400 no answer / not cut, 409 a flow of the piece runs) |
 | `POST /characters/{c}/figure/template/{item_id}/cut/sleeves` | the sleeve option, body `{"sleeve_print": "plain" / "picture"}`: stored (no drape), a made atlas composed again on the CPU (400 unknown value) |
-| `POST /characters/{c}/figure/template/{item_id}/cut/back-job` | the back-job option, body `{"back_job": "auto" / "render", "render": bool}`: stored (part of the atlas key, no drape); `render` starts the back job (`only="back"`, the front answer kept); errors as `/cut/generate` |
+| `POST /characters/{c}/figure/template/{item_id}/cut/back-job` | the back-job option, body `{"back_job": "auto" / "render" / "front", "render": bool}`: stored (part of the atlas key, no drape); `render` starts the back job (`only="back"`, the front answer kept); errors as `/cut/generate` |
 | `GET /characters/{c}/figure/template/{item_id}/cut/{kind}.png` | `kind` = `template_front` / `item` / `raw_front` / `template_back` / `back_ref` / `raw_back` / `atlas` of the current (or the `v=`-named) csig |
 | `GET /characters/{c}/figure/template/{item_id}/pattern.png` | the DEBUG pattern sheet of the current cut (pastel islands, names, cm sizes, grain arrows, seam letters, cap height, px/cm), written by the cut-only run as `templates/cut/{item}_{cut_sig}.pattern.png` (rendered when missing); 404 while not cut or a grid kind. Never sent to a model. |
 

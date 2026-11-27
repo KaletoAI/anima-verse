@@ -62,6 +62,8 @@ interface TemplatePayload {
   default_kind?: string
   /** A172: the starting values per kind (a kind change starts from them). */
   kind_defaults?: Record<string, TemplateParams>
+  /** Per-kind default of `back_job` when stored as "auto" (`garment_template.BACK_JOB_DEFAULTS`). */
+  back_job_defaults?: Record<string, string>
   /** Bug round 2026-11-20: named presets per kind (`garment_template.LEGGINGS` for trousers). */
   presets?: Record<string, Record<string, Partial<TemplateParams>>>
   /** A223: the piece's material preset (`piece_material.describe`). */
@@ -415,7 +417,10 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                             onChange={(e) => set(key, e.target.value)}>
                             {f.choices.filter((c) => choiceAllowed(key, c, draft)).map((c) => (
                               <option key={c} value={c}>
-                                {t(choiceLabel(key, c))}
+                                {key === 'back_job' && c === 'auto'
+                                  ? t('Default of the kind ({value})').replace('{value}',
+                                    t(choiceLabel('back_job', data.back_job_defaults?.[draft.kind] || 'front')))
+                                  : t(choiceLabel(key, c))}
                                 {key === 'kind' && !data.built.includes(c) ? ` (${t('not built yet')})` : ''}
                               </option>
                             ))}
