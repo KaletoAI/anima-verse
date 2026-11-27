@@ -237,7 +237,7 @@ export function QueueView() {
 
   const gate = (() => {
     // Mirrors engine.RUN_NOW_OVERRIDES: these gates do not hold a forced entry.
-    if (status.forced && ['active', 'disabled', 'frozen', 'paused'].includes(status.reason)) {
+    if (status.forced && ['active', 'disabled', 'paused'].includes(status.reason)) {
       return t('Run now active')
     }
     switch (status.reason) {
@@ -245,7 +245,6 @@ export function QueueView() {
       case 'media_off':
         return `${t('Media generation off')} — ${t('CPU-only entries keep running')}`
       case 'disabled': return t('Engine off')
-      case 'frozen': return t('World frozen')
       case 'paused': return t('Task queue paused')
       case 'busy': return t('Step running')
       case 'active':
@@ -291,6 +290,9 @@ export function QueueView() {
         </label>
         <span className="ga-form-hint">
           {t('Idle since')} {mmss(status.idle_seconds)} · {gate}
+          {/* A freeze stops the world, not this engine — said so, because the
+              header shows the world as frozen while steps keep running. */}
+          {status.frozen ? ` · ${t('World frozen — improvements keep running')}` : ''}
         </span>
       </div>
 

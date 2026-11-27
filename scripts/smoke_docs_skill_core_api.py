@@ -132,6 +132,8 @@ NAME_ALIAS = {
     "find_candidates": "app.core.improvements.base.ImprovementType.find_candidates",
     "is_done": "app.core.improvements.base.ImprovementType.is_done",
     "list_candidates": "app.core.improvements.base.ImprovementType.list_candidates",
+    "invalid_reason": "app.core.improvements.base.ImprovementType.invalid_reason",
+    "release_invalid": "app.core.improvements.base.ImprovementType.release_invalid",
 }
 
 

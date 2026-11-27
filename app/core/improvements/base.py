@@ -55,6 +55,9 @@ class ParamField:
 class ImprovementType:
     id: str = ""
     label: str = ""
+    #: One English line under the type picker: what the type works on, when that is not obvious from the
+    #: label (the tab translates it).
+    description: str = ""
     params_schema: List[ParamField] = []
     # Whether a step of this type generates media (images, meshes, bakes).
     # With the world's media switch off the engine submits only steps of
@@ -93,6 +96,23 @@ class ImprovementType:
         engine never calls it; a subject that drops off the candidate list is
         closed as fulfilled."""
         raise NotImplementedError
+
+    def invalid_reason(self, key: str, params: Dict[str, Any]) -> str:
+        """Why a stored step of this type is WRONG under today's rules ("" = valid). Wrong means the step
+        must never run — its subject now belongs to another producer, or the key no longer names work this
+        type can do — not merely "satisfied" (that is the scan's ``fulfilled``). The engine asks it before
+        a step is submitted and in every validity pass (``engine.remove_invalid``) and drops a wrong step
+        instead of running it. It must be cheap (no hub, no image read) and RAISE when it cannot judge:
+        an unreadable roster must not read as "wrong"."""
+        return ""
+
+    def release_invalid(self, keys: List[str], params: Dict[str, Any], *,
+                        explicit: bool, dry_run: bool) -> Dict[str, Any]:
+        """Delete the files that belong ONLY to these wrong steps (``invalid_reason`` said so) — never a
+        file anything else still reaches, and only inside the world's storage. ``explicit`` = a person
+        asked (the "Remove invalid" click); ``dry_run`` only counts. Returns ``{"files": n, "bytes": n,
+        "kept": [{"key", "why"}]}`` — ``kept`` names what stayed because something else reaches it."""
+        return {"files": 0, "bytes": 0, "kept": []}
 
     #: The candidate-key heads whose second part is a character name (``character:<name>[:…]``).
     CHARACTER_KEY_HEADS = ("character", "base", "clothing", "outfit", "gallery")

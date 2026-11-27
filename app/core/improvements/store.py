@@ -260,6 +260,23 @@ def replace_steps_scan(improvement_id: str,
     return {"added": added, "closed": closed}
 
 
+def delete_steps(improvement_id: str, keys: Iterable[str]) -> int:
+    """Remove these steps of the entry (the engine's validity pass: a WRONG step is dropped, not closed).
+    A running step is never removed — its worker is inside ``apply`` and writes its result back. Returns
+    the number of rows removed."""
+    keys = [str(k) for k in keys]
+    if not keys:
+        return 0
+    removed = 0
+    with transaction() as conn:
+        for key in keys:
+            cur = conn.execute(
+                "DELETE FROM improvement_steps WHERE improvement_id=? AND candidate_key=? "
+                "AND status != 'running'", (improvement_id, key))
+            removed += cur.rowcount if cur.rowcount > 0 else 0
+    return removed
+
+
 def list_steps(improvement_id: str) -> List[Dict[str, Any]]:
     """Running first (that is what the panel wants at the top), then by label."""
     conn = get_connection()

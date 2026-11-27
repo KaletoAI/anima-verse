@@ -282,6 +282,9 @@ export function NewImprovementDialog({
                 ))}
               </select>
             </Field>
+            {type?.description ? (
+              <div className="ga-form-hint">{t(type.description)}</div>
+            ) : null}
 
             {type ? (
               <>

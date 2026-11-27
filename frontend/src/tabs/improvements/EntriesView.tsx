@@ -20,11 +20,12 @@ import { NewImprovementDialog } from './NewImprovementDialog'
 import { EntryDetail } from './EntryDetail'
 import {
   clearFinished, deleteImprovement, fetchImprovements, fetchTypes, pauseImprovement,
-  rescanImprovement, resumeImprovement, runNow, setOrder, stopRun,
+  previewInvalid, removeInvalid, rescanImprovement, resumeImprovement, runNow, setOrder,
+  stopRun,
 } from './api'
 import { STEP_STATUS_LABELS } from './types'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
-import type { Improvement, ImprovementType } from './types'
+import type { Improvement, ImprovementType, InvalidReport } from './types'
 
 /** What "Run now" did, by the server's reason (`engine.run_now`). */
 const RUN_NOW_MESSAGES: Record<string, string> = {
@@ -39,6 +40,11 @@ const ENTRY_STATUS_LABELS: Record<string, string> = {
   open: 'Open',
   paused: 'Paused',
   done: 'Done',
+}
+
+/** Megabytes with one decimal, for the file totals of "Remove invalid". */
+function megabytes(bytes: number): string {
+  return (bytes / 1e6).toFixed(1)
 }
 
 /** A system stamp (technical, not game time) rendered as date + wall clock,
@@ -59,6 +65,8 @@ export function EntriesView() {
   const [creating, setCreating] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<Improvement | null>(null)
   const [clearingFinished, setClearingFinished] = useState(false)
+  // The dry run of "Remove invalid", shown in the confirm dialog before anything goes.
+  const [invalidPreview, setInvalidPreview] = useState<InvalidReport | null>(null)
   const [busyId, setBusyId] = useState('')
   const [loadError, setLoadError] = useState('')
 
@@ -137,6 +145,49 @@ export function EntriesView() {
     await act(entry.id, () => deleteImprovement(entry.id))
   }, [act, pendingDelete, selectedId])
 
+  /** "Remove invalid", step 1: ask the server what is wrong — nothing changes yet. */
+  const checkInvalid = useCallback(() => act('invalid', async () => {
+    const report = await previewInvalid()
+    const unjudged = report.entries.filter((entry) => entry.error).length
+    if (report.removed === 0) {
+      toast(unjudged
+        ? t('{n} entries could not be checked right now').replace('{n}', String(unjudged))
+        : t('No invalid steps'), unjudged ? 'error' : undefined)
+      return
+    }
+    setInvalidPreview(report)
+  }), [act, t, toast])
+
+  /** Step 2, after the confirmation: drop them and their own files. */
+  const confirmRemoveInvalid = useCallback(async () => {
+    setInvalidPreview(null)
+    await act('invalid', async () => {
+      const report = await removeInvalid()
+      toast(t('{n} invalid steps removed, {f} files deleted ({mb} MB)')
+        .replace('{n}', String(report.removed))
+        .replace('{f}', String(report.files))
+        .replace('{mb}', megabytes(report.bytes)))
+    })
+  }, [act, t, toast])
+
+  const invalidMessage = useMemo(() => {
+    if (!invalidPreview) return ''
+    const lines = invalidPreview.entries.filter((entry) => entry.steps.length).map((entry) => {
+      const reasons = Array.from(new Set(entry.steps.map((step) => step.reason)))
+      return `${entry.label || typeLabel(entry.type_id)}: ${entry.steps.length} — ${reasons.map((r) => t(r)).join('; ')}`
+    })
+    const kept = invalidPreview.entries.reduce((n, entry) => n + entry.kept.length, 0)
+    return [
+      t('These steps may not run under the current rules and are removed:'),
+      ...lines,
+      t('{f} files ({mb} MB) that belong only to them are deleted.')
+        .replace('{f}', String(invalidPreview.files))
+        .replace('{mb}', megabytes(invalidPreview.bytes)),
+      kept ? t('{n} combinations keep their files because something else still uses them.')
+        .replace('{n}', String(kept)) : '',
+    ].filter(Boolean).join('\n')
+  }, [invalidPreview, t, typeLabel])
+
   /** The step log is a drawer: clicking the open row closes it again. */
   const toggleSelected = useCallback((id: string) => {
     setSelectedId((current) => (current === id ? '' : id))
@@ -164,6 +215,12 @@ export function EntriesView() {
             {t('Remove finished')}
           </button>
         ) : null}
+        <button type="button" className="ga-btn ga-btn-sm"
+          disabled={!!busyId}
+          title={t('Checks every step against the current rules and removes the ones that may not run, with the files that belong only to them.')}
+          onClick={checkInvalid}>
+          {t('Remove invalid')}
+        </button>
         <span className="ga-form-hint">
           {t('The engine works these top down — drag to reorder.')}
         </span>
@@ -249,7 +306,7 @@ export function EntriesView() {
                 ) : (
                   <button type="button" className="ga-btn ga-btn-sm"
                     disabled={busyId === entry.id}
-                    title={t('Runs all steps of this entry now, without waiting for the idle time, even with the engine off or the world frozen.')}
+                    title={t('Runs all steps of this entry now, without waiting for the idle time, even with the engine off or the task queue paused.')}
                     onClick={() => act(entry.id, async () => {
                       const r = await runNow(entry.id)
                       toast(t(RUN_NOW_MESSAGES[r.reason] || 'Nothing to run'),
@@ -293,6 +350,16 @@ export function EntriesView() {
           await act('clear-finished', clearFinished)
         }}
         onClose={() => setClearingFinished(false)}
+      />
+
+      <ConfirmDialog
+        open={!!invalidPreview}
+        title={t('Remove invalid')}
+        message={invalidMessage}
+        confirmLabel={t('Remove invalid')}
+        danger
+        onConfirm={confirmRemoveInvalid}
+        onClose={() => setInvalidPreview(null)}
       />
 
       <ConfirmDialog

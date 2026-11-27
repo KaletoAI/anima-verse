@@ -1486,7 +1486,7 @@ closed forever.
 
 **The class.** Subclass `app.core.improvements.base.ImprovementType`, set `id`
 (stable, it is stored with every entry), `label` (admin UI) and `params_schema`, then
-implement four methods (a fifth, `list_candidates`, only where the type withholds a subject):
+implement four methods (a fifth, `list_candidates`, only where the type withholds a subject; `invalid_reason` / `release_invalid` only where stored steps can turn wrong):
 
 | Member | Semantik |
 |---|---|
@@ -1495,6 +1495,9 @@ implement four methods (a fifth, `list_candidates`, only where the type withhold
 | `find_candidates(params) -> List[Candidate]` | Every subject NOT yet done, in a stable order (`(label.lower(), key)`). `Candidate(key, label, hub_jobs=0, note="")`: the key is unique per type and is what a step row stores (`"character:<name>:<token>"`, `"location:<id>:<file>"`) — it ends with the token that makes the work due (a version, a signature, the identity of the input it works from), because a scan reopens a key only when its step is `fulfilled`, never a `done` or `skipped` one: a subject due again for a NEW reason must be a new key; `hub_jobs` estimates the hub jobs the step submits on its first attempts (`None` = unknown, listed as such, never as 0), `note` is one line saying what that estimate counts, or a dry-run summary. A subject that could not be worked at all (nothing to generate FROM) is not a candidate |
 | `is_done(candidate, params) -> bool` | The type's own "is this subject finished" test — read the persisted asset, never a cached answer. The engine never calls it; `find_candidates` uses it to decide what to list. A subject that drops off that list closes its pending or done (ran) step as `fulfilled`; a `fulfilled` key listed again is pending again (the same reason recurred), a `done` key still listed stays done (its run did not satisfy the subject — never re-spent), a `skipped` one stays skipped |
 | `list_candidates(params) -> Listing` | What the engine's scan diffs onto the steps: `Listing(candidates, withheld=())`. The default wraps `find_candidates`. A type that leaves a subject out for a TRANSIENT reason (its run in progress elsewhere, its base model being built, its running jobs unreadable) overrides it, reports the subject in `withheld` as a key prefix (a step key is under it when it equals the prefix or starts with it plus `:`), and returns `list_candidates(params).candidates` from `find_candidates`. An unlisted step under a withheld prefix is left as it is — not closed, not `fulfilled` — so a done step whose run did not satisfy its subject is not re-offered when the subject flickers out and back; a listed key under it is handled as usual. A permanent exclusion (a persisted failure, a setting, a scope) is not withheld: the subject drops off and its step closes as `fulfilled` |
+| `invalid_reason(key, params) -> str` (optional) | Why a STORED step is wrong under today's rules (`""` = valid; the default). Wrong means it must never run — its subject belongs to another producer now, or the key names no work the type can do — not merely satisfied (that is `fulfilled`). The engine asks it in every validity pass and right before a step runs, and drops a wrong step instead of running it (`engine.remove_invalid`). Cheap (no hub, no image read); RAISE when it cannot judge — the entry is then left untouched |
+| `release_invalid(keys, params, *, explicit, dry_run) -> {"files", "bytes", "kept"}` (optional) | Deletes the files that belong ONLY to these wrong steps — never a file anything else still reaches, only inside the world's storage; `kept` lists `{"key", "why"}` for what stayed. `explicit` = a person asked (no grace window), `dry_run` only counts. The default deletes nothing |
+| `description: str` (optional) | One English line under the type picker, translated by the tab |
 | `apply(candidate, params, task_id)` | Does the work SYNCHRONOUSLY: it returns only once whatever it made is persisted. It runs in a queue worker thread (no event loop of its own, and `user_activity` is suppressed for the duration), so it calls the blocking producer directly — never a `trigger_*` thread wrapper, which would report success while nothing had been generated |
 
 `ParamField.show_if` maps earlier parameter keys to allowed string values, for
@@ -1532,10 +1535,21 @@ row with `removed: true` when its initial scan deleted it. `POST
 /improvements/clear-finished` cancels queued tasks and deletes every done entry;
 the admin list exposes this through **Remove finished** with confirmation.
 
+**Wrong steps.** Every open or paused entry is judged against `invalid_reason` once
+after a start and then every `SCAN_INTERVAL_S` (the tick and `GET /improvements`), a
+scan judges its entry before its diff, and a step is judged once more right before it
+is submitted and at the worker. A wrong step (pending, skipped or failed — never a
+running one, never done/fulfilled history) is deleted together with the files
+`release_invalid` names. `GET /improvements/invalid` is the dry run, `POST
+/improvements/remove-invalid` the explicit pass behind **Remove invalid** in the
+admin list (confirmation shows the dry run).
+
 **Run now** forces an entry (`improvements.forced`): the click submits its next
 pending step at once, and every following tick submits the next one, past the
-idle window, the engine switch, a world freeze and a task-queue pause (the admin
-tick runs the engine through both). The media switch, an improvement step
+idle window, the engine switch and a task-queue pause (the admin tick runs the
+engine through it). A world freeze is no gate for any entry: it stops the
+world's simulation, and an improvement is TaskQueue work, which keeps running
+while the world is frozen. The media switch, an improvement step
 already in flight and a busy deferral still hold it back. The flag clears itself
 once the entry has nothing pending or running, and on **Pause** or **Stop run**.
 
@@ -1572,7 +1586,7 @@ declaration.
 | `face_retexture` | Corrects stored character meshes for all or one character, scoped to all stored meshes or the current outfit |
 | `image_rerender` | Re-renders portraits/gallery images of one image backend on another |
 | `surface_bake` | Bakes the walkable-surface lattice of room and prop models |
-| `mesh_from_tpose` | Generates the character mesh of every stored outfit combination that has a T-pose render but no model |
+| `mesh_from_tpose` | Generates the character mesh of every stored outfit combination that has a T-pose render but no model, for characters OFF the base-body pipeline (animals); a humanoid's outfit models belong to its Figure Build, so its steps are wrong (`invalid_reason`) and their T-pose renders go only when the artefact graph reaches them no more |
 | `fallback_rerender` | Re-renders every image a fallback backend made (image meta `fallback_from`) EXPLICITLY on the backend its intended spec resolves to; while that spec resolves to nothing the step raises `CandidateBusy` and stays pending |
 
 ## Extension rig declarations (P1)

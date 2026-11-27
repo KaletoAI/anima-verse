@@ -36,7 +36,8 @@ sort_keys=True)``:
     the flag removed, init_schema → a fulfilled, b done, c skipped, d pending;
     the flag is set ("1"); a second init_schema changes nothing (a row set back
     to done with NULL duration stays done — the flag guards it).
-[3] End to end through a real type (mesh_from_tpose, standing entry; the
+[3] End to end through a real type (mesh_from_tpose, standing entry; Mia is
+    off the base-body pipeline, an animal — the type lists no one else; the
     T-pose render is a temp file T; key ``Mia:sig1:tok("tpose.png", size,
     mtime_ns)``): due → scan adds 1; the step runs → done; the model now exists
     → scan → fulfilled, nothing offered (the queue holds no step of the entry);
@@ -235,6 +236,7 @@ def part3():
         return f"Mia:sig1:{tok('tpose.png', st.st_size, st.st_mtime_ns)}"
 
     with patch.object(subjects, "characters", lambda: ["Mia"]), \
+         patch.object(mesh_from_tpose, "_on_figure_pipeline", lambda name: False), \
          patch.object(subjects, "character_tpose_signatures", lambda name: {"sig1"}), \
          patch.object(subjects, "character_model_signatures", lambda name: {"sig1"} if state["model"] else set()), \
          patch.object(subjects, "character_model_exists", lambda name, sig: state["model"]), \

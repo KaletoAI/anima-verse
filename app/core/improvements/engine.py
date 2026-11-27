@@ -7,8 +7,9 @@ runs work itself either: it submits one task, the queue worker calls
 ``handle_step`` back, and the type does the work synchronously in that call.
 """
 import threading
+import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from app.core import user_activity
 from app.core.improvements import registry, store
@@ -32,11 +33,24 @@ BUSY_DEFER_S = 300            # a step that came back busy sits out this long
 
 #: The gates a FORCED entry (the admin's "Run now", ``improvements.forced``)
 #: passes: it is the admin asking for this entry, so neither the idle window
-#: nor the engine switch nor a world freeze or task-queue pause (which stop
-#: autonomous work, not on-demand work) holds it back. The media switch and an
-#: in-flight step do. The flag is persisted, so it survives a restart, and the
-#: tick clears it once the entry has nothing left to run.
-RUN_NOW_OVERRIDES = ("active", "disabled", "frozen", "paused")
+#: nor the engine switch nor a task-queue pause holds it back. The media switch
+#: and an in-flight step do. The flag is persisted, so it survives a restart,
+#: and the tick clears it once the entry has nothing left to run.
+#: A world freeze is no gate at all: it stops the world's simulation, and an
+#: improvement is asset work for the TaskQueue, which keeps running while the
+#: world is frozen (CLAUDE.md "World freeze").
+RUN_NOW_OVERRIDES = ("active", "disabled", "paused")
+
+#: Step statuses a validity pass judges (``remove_invalid``): work still owed
+#: or given up. A running step belongs to its worker; a done or fulfilled one
+#: is history.
+VALIDATE_STATUSES = ("pending", "skipped", "failed")
+
+# improvement_id -> ``time.monotonic()`` of its last validity pass. In memory
+# on purpose: a restart forgets it, so the first tick after a start judges
+# every entry once.
+_validated_at: Dict[str, float] = {}
+_validated_lock = threading.Lock()
 
 # Steps that came back BUSY (BackendBusyError / CandidateBusy), keyed
 # (improvement_id, candidate_key) -> SYSTEM time until which ``tick`` passes
@@ -83,6 +97,10 @@ def scan(improvement_id: str) -> Dict[str, int]:
     improvement_type = registry.get(improvement["type_id"])
     if improvement_type is None:
         return {"added": 0, "closed": 0}
+    # Wrong steps go BEFORE the diff: a step the type no longer lists would
+    # otherwise be closed as "fulfilled", which it is not, and its own files
+    # would stay behind.
+    remove_invalid(improvement_id)
     listing = improvement_type.list_candidates(improvement["params"])
     result = store.replace_steps_scan(
         improvement_id,
@@ -111,6 +129,115 @@ def _scan_due(improvement: Dict[str, Any]) -> bool:
     except (ValueError, TypeError):
         return True
     return age >= SCAN_INTERVAL_S
+
+
+# ---------------------------------------------------------------------------
+# Validity
+# ---------------------------------------------------------------------------
+
+def _validate_due(improvement_id: str) -> bool:
+    with _validated_lock:
+        last = _validated_at.get(improvement_id)
+    return last is None or time.monotonic() - last >= SCAN_INTERVAL_S
+
+
+def remove_invalid(improvement_id: Optional[str] = None, *, keys: Optional[Iterable[str]] = None,
+                   explicit: bool = False, dry_run: bool = False) -> Dict[str, Any]:
+    """Judge the stored steps against today's rules (``ImprovementType.invalid_reason``) and drop the
+    WRONG ones together with the files that belong only to them (``ImprovementType.release_invalid``).
+
+    ``improvement_id`` None = every entry; ``keys`` narrows the pass to these steps (the check before a
+    step runs). Only steps in ``VALIDATE_STATUSES`` are judged — never a running one. ``explicit`` = a
+    person asked (the "Remove invalid" click: no grace window for the files); ``dry_run`` lists what would
+    go and changes nothing. An entry whose type cannot judge right now (it raised — a roster read failed)
+    is left untouched and reported with ``error``. Returns ``{"dry_run", "removed", "files", "bytes",
+    "entries": [{"id", "label", "type_id", "steps": [{"key", "label", "status", "reason"}], "files",
+    "bytes", "kept", "error"}]}`` — only entries with something wrong (or an error) are listed."""
+    wanted = set(str(k) for k in keys) if keys is not None else None
+    entries = ([store.get(improvement_id)] if improvement_id else store.list_all())
+    report: Dict[str, Any] = {"dry_run": dry_run, "removed": 0, "files": 0, "bytes": 0, "entries": []}
+    for improvement in entries:
+        if not improvement:
+            continue
+        improvement_type = registry.get(improvement["type_id"])
+        if improvement_type is None:
+            continue
+        entry: Dict[str, Any] = {"id": improvement["id"], "label": improvement["label"],
+                                 "type_id": improvement["type_id"], "steps": [], "files": 0, "bytes": 0,
+                                 "kept": [], "error": ""}
+        if not dry_run and wanted is None:
+            # Stamped also when the judgement fails below: the next try comes
+            # with the next interval, not with every tick.
+            with _validated_lock:
+                _validated_at[improvement["id"]] = time.monotonic()
+        try:
+            for step in store.list_steps(improvement["id"]):
+                if step["status"] not in VALIDATE_STATUSES:
+                    continue
+                if wanted is not None and step["candidate_key"] not in wanted:
+                    continue
+                reason = improvement_type.invalid_reason(step["candidate_key"], improvement["params"])
+                if reason:
+                    entry["steps"].append({"key": step["candidate_key"], "label": step["candidate_label"],
+                                           "status": step["status"], "reason": reason})
+        except Exception as e:  # noqa: BLE001 — an entry the type cannot judge now is left as it is
+            logger.warning("improvements: validity of %s not judged: %s", improvement["id"], e, exc_info=True)
+            entry["steps"], entry["error"] = [], str(e) or e.__class__.__name__
+            report["entries"].append(entry)
+            continue
+        if not entry["steps"]:
+            continue
+        step_keys = [s["key"] for s in entry["steps"]]
+        try:
+            released = improvement_type.release_invalid(step_keys, improvement["params"],
+                                                        explicit=explicit, dry_run=dry_run)
+        except Exception as e:  # noqa: BLE001 — the rows still go; the artefact GC owns what stays behind
+            logger.warning("improvements: files of the wrong steps of %s not released: %s",
+                           improvement["id"], e, exc_info=True)
+            released = {"files": 0, "bytes": 0, "kept": [{"key": k, "why": str(e)} for k in step_keys]}
+        entry["files"] = int(released.get("files") or 0)
+        entry["bytes"] = int(released.get("bytes") or 0)
+        entry["kept"] = list(released.get("kept") or [])
+        if not dry_run:
+            removed = store.delete_steps(improvement["id"], step_keys)
+            logger.info("improvements: %d wrong step(s) of %s (%s) removed, %d file(s) / %.1f MB deleted; "
+                        "reasons: %s", removed, improvement["id"], improvement["type_id"], entry["files"],
+                        entry["bytes"] / 1e6, sorted({s["reason"] for s in entry["steps"]}))
+            for step in entry["steps"]:
+                _undefer(improvement["id"], step["key"])
+            _close_if_finished(improvement["id"])
+        report["entries"].append(entry)
+        report["removed"] += len(entry["steps"])
+        report["files"] += entry["files"]
+        report["bytes"] += entry["bytes"]
+    return report
+
+
+def validate_due_entries() -> Dict[str, Any]:
+    """The automatic validity pass over every open or paused entry that was not judged within
+    ``SCAN_INTERVAL_S`` (the tick and the entry list call it; after a start every entry is due once)."""
+    total: Dict[str, Any] = {"removed": 0, "files": 0, "bytes": 0}
+    for improvement in store.list_all():
+        if improvement["status"] not in ("open", "paused") or not _validate_due(improvement["id"]):
+            continue
+        try:
+            result = remove_invalid(improvement["id"])
+        except Exception as e:  # noqa: BLE001 — one broken type must not stop the others
+            logger.warning("improvements: validity pass of %s failed: %s", improvement["id"], e, exc_info=True)
+            continue
+        for field in total:
+            total[field] += result[field]
+    return total
+
+
+def _dropped_as_invalid(row: Dict[str, Any]) -> Optional[bool]:
+    """The check right before a step runs: True = it was wrong and is gone now, False = valid, None = its
+    type could not judge it now (the caller holds it like a busy step)."""
+    result = remove_invalid(row["improvement_id"], keys=[row["candidate_key"]])
+    entry = next(iter(result["entries"]), None)
+    if entry is None:
+        return False
+    return None if entry["error"] else bool(entry["steps"])
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +273,8 @@ def ordered_queue() -> List[Dict[str, Any]]:
 
 def submit_allowed(needs_media: bool = True) -> Tuple[bool, str]:
     """(may a step be submitted right now, why not) — the reason is what the
-    admin panel shows: media_off | disabled | frozen | busy | active | ok.
+    admin panel shows: media_off | disabled | paused | busy | active | ok.
+    A world freeze is not among them (``RUN_NOW_OVERRIDES``).
 
     ``needs_media`` False asks for the gates BEHIND the media switch — what a
     CPU-only type (``ImprovementType.needs_media`` False) is held by."""
@@ -158,8 +286,6 @@ def submit_allowed(needs_media: bool = True) -> Tuple[bool, str]:
     settings = store.get_settings()
     if not settings["enabled"]:
         return False, "disabled"
-    if is_world_frozen():
-        return False, "frozen"
     # The admin tick runs this engine even while the task queue is paused (a
     # forced entry must go on); everything else stops with the pause as before.
     if get_task_queue().is_paused("default"):
@@ -178,7 +304,7 @@ def request_run_now(improvement_id: str) -> None:
 
 
 def stop_run_now(improvement_id: str) -> None:
-    """Back to the normal rules (idle window, engine switch, freeze)."""
+    """Back to the normal rules (idle window, engine switch, queue pause)."""
     store.update(improvement_id, forced=False)
 
 
@@ -227,7 +353,7 @@ def cancel_held(character_name: str, improvement_id: str, key: str) -> bool:
 def run_now(improvement_id: str) -> Dict[str, Any]:
     """The admin's "Run now": force the entry and submit its next pending step
     NOW — the following ones go out tick by tick, all past the idle window,
-    the engine switch, a freeze and a queue pause.
+    the engine switch and a queue pause.
 
     Only the media switch stops it (and only a type that ``needs_media``), and
     an improvement step already in flight makes it wait: the entry stays
@@ -242,9 +368,14 @@ def run_now(improvement_id: str) -> Dict[str, Any]:
         return {"ok": False, "reason": improvement["status"]}
     if not media_generation_enabled() and _needs_media(improvement["type_id"]):
         return {"ok": False, "reason": "media_off"}
-    row = next((r for r in ordered_queue()
-                if r["improvement_id"] == improvement_id
-                and r["status"] == "pending"), None)
+    row = None
+    for candidate in ordered_queue():
+        if candidate["improvement_id"] != improvement_id or candidate["status"] != "pending":
+            continue
+        # A wrong step is dropped here, not started (``remove_invalid``).
+        if _dropped_as_invalid(candidate) is False:
+            row = candidate
+            break
     if row is None:
         return {"ok": False, "reason": "empty"}
     request_run_now(improvement_id)
@@ -320,7 +451,12 @@ def tick() -> Dict[str, Any]:
             logger.warning("improvements: scan of %s failed: %s",
                            improvement["id"], e, exc_info=True)
 
-    # 3. One step.
+    # 3. Every entry that did not rescan is judged for wrong steps on the scan
+    #    interval (and once after a start) — a one_shot or paused entry never
+    #    rescans, and a scan judges its own entry first.
+    validate_due_entries()
+
+    # 4. One step.
     allowed, reason = submit_allowed()
     # With the media switch off the CPU-only types keep running: the gates
     # BEHIND the switch decide for them, and the loop below passes over every
@@ -359,6 +495,14 @@ def tick() -> Dict[str, Any]:
         # hammered every tick.
         if _deferred(row["improvement_id"], row["candidate_key"], now):
             deferred += 1
+            continue
+        # The check before the run: a wrong step is dropped, never submitted.
+        verdict = _dropped_as_invalid(row)
+        if verdict is None:
+            _defer(row["improvement_id"], row["candidate_key"])
+            deferred += 1
+            continue
+        if verdict:
             continue
         _undefer(row["improvement_id"], row["candidate_key"])
         task_id = _submit(row)
@@ -425,6 +569,21 @@ def handle_step(payload: Dict[str, Any]) -> Dict[str, Any]:
         # it until the Resume.
         store.mark_result(improvement_id, key, status="pending", count_attempt=False)
         return {"held": key}
+
+    # The check before the run, once more at the worker: the rules may have
+    # changed while the task waited.
+    try:
+        invalid = improvement_type.invalid_reason(key, improvement["params"])
+    except Exception as e:  # noqa: BLE001 — not judged now: held like a busy step
+        store.mark_result(improvement_id, key, status="pending", error=str(e), count_attempt=False)
+        _defer(improvement_id, key)
+        return {"busy": f"validity not judged: {e}"}
+    if invalid:
+        # Given back first — a running row is never removed — then dropped
+        # with its own files like in every validity pass.
+        store.mark_result(improvement_id, key, status="pending", count_attempt=False)
+        remove_invalid(improvement_id, keys=[key])
+        return {"skipped": f"invalid: {invalid}"}
 
     candidate = Candidate(key, step["candidate_label"],
                           hub_jobs=step.get("hub_jobs"), note=step.get("note") or "")

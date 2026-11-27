@@ -25,7 +25,32 @@ export interface ParamField {
 export interface ImprovementType {
   id: string
   label: string
+  /** One English line under the type picker ("" = none). */
+  description: string
   params_schema: ParamField[]
+}
+
+/** One entry of a validity pass (engine.remove_invalid): its WRONG steps and
+ *  the files that belonged only to them. */
+export interface InvalidEntry {
+  id: string
+  label: string
+  type_id: string
+  steps: Array<{ key: string; label: string; status: string; reason: string }>
+  files: number
+  bytes: number
+  /** Combinations whose files stay: something else still reaches them. */
+  kept: Array<{ key: string; why: string }>
+  /** The type could not judge this entry now — nothing of it was touched. */
+  error: string
+}
+
+export interface InvalidReport {
+  dry_run: boolean
+  removed: number
+  files: number
+  bytes: number
+  entries: InvalidEntry[]
 }
 
 /** A queue entry: the row plus the step counters the store joins in. */
@@ -43,7 +68,7 @@ export interface Improvement {
   last_scan_at?: string | null
   done_count: number
   failed_count: number
-  /** "Run now" is active: the entry runs past idle window, engine switch and freeze. */
+  /** "Run now" is active: the entry runs past idle window, engine switch and queue pause. */
   forced: boolean
   pending: number
   running: number
@@ -105,9 +130,10 @@ export interface EngineStatus {
   idle_seconds: number
   next_allowed_in_s: number
   frozen: boolean
-  /** 'media_off' | 'disabled' | 'frozen' | 'paused' | 'busy' | 'active' | 'ok' */
+  /** 'media_off' | 'disabled' | 'paused' | 'busy' | 'active' | 'ok' — a world
+   *  freeze is no gate (`frozen` above is shown beside it). */
   reason: string
-  /** An entry runs by "Run now" — past idle window, engine switch, freeze, pause. */
+  /** An entry runs by "Run now" — past idle window, engine switch and queue pause. */
   forced: boolean
   running_step: Step | null
   pending_total: number

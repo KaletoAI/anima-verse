@@ -699,8 +699,9 @@ _SUB_TASKS: List[tuple] = [
 # ---------------------------------------------------------------------------
 
 #: Sub-tasks that run while the world is frozen or the task queue paused. The
-#: improvements engine applies both gates itself, and an entry the admin forced
-#: with "Run now" must go on through them.
+#: improvements engine is TaskQueue work, not world simulation: a freeze does
+#: not hold it, the queue pause it applies itself, and an entry the admin
+#: forced with "Run now" goes on through that.
 _RUNS_WHILE_PAUSED = {"improvements"}
 
 #: Sub-tasks that run BESIDE the loop instead of inside it, each as its own

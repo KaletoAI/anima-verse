@@ -112,8 +112,10 @@ taken from the ``submit`` call.
      panel's "n steps pending" and the estimate derived from it.
 
  16. The three gates and the one-shot override.  Disabled →
-     (False, "disabled"); enabled but frozen → (False, "frozen"); thawed but
-     the user active 60 s ago → (False, "active").  ``request_run_now(A)``
+     (False, "disabled"); enabled, frozen and the user idle for an hour →
+     (True, "ok"): a freeze stops the world, not the TaskQueue work an
+     improvement is; the user active 60 s ago
+     → (False, "active").  ``request_run_now(A)``
      makes the NEXT tick submit A's k1 anyway; while that row is owed the
      status reason is "busy" and ``running_step`` is k1.  After the step is
      handled A has nothing left (and is gone): with the user still 60 s active
@@ -652,7 +654,8 @@ store.set_settings(False, 15)
 check("disabled", engine.submit_allowed(), (False, "disabled"))
 store.set_settings(True, 15)
 set_world_frozen(True)
-check("frozen", engine.submit_allowed(), (False, "frozen"))
+user_activity._set_for_test(3600)
+check("frozen is no gate: the user idle for an hour, the step may go", engine.submit_allowed(), (True, "ok"))
 set_world_frozen(False)
 user_activity._set_for_test(60)
 check("active", engine.submit_allowed(), (False, "active"))
@@ -849,7 +852,8 @@ check("frozen: the next tick runs the second step",
 worker_done(second["submitted"])
 engine.handle_step({"improvement_id": S, "candidate_key": "sb", "_task_id": second["submitted"]})
 check("…and the worked-off entry removed itself", store.get(S), None)
-check("frozen without a forced entry: nothing runs", engine.tick()["reason"], "frozen")
+check("frozen without a forced entry: the idle window holds it, not the freeze",
+      engine.tick()["reason"], "active")
 set_world_frozen(False)
 from app.core import periodic_jobs  # noqa: E402
 check("the admin tick runs the engine while frozen/paused",

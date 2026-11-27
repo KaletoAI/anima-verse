@@ -1,8 +1,8 @@
 /** One function per /improvements endpoint — no logic, just the call. */
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from '../../lib/api'
 import type {
-  EngineStatus, Improvement, ImprovementType, PreviewResult, QueueSnapshot,
-  Settings, Step,
+  EngineStatus, Improvement, ImprovementType, InvalidReport, PreviewResult,
+  QueueSnapshot, Settings, Step,
 } from './types'
 
 export function fetchTypes(): Promise<ImprovementType[]> {
@@ -79,4 +79,14 @@ export function saveSettings(enabled: boolean, idleMinutes: number): Promise<Set
 
 export function clearFinished(): Promise<{ removed: number }> {
   return apiPost('/improvements/clear-finished', {})
+}
+
+/** What "Remove invalid" would drop — nothing is changed. */
+export function previewInvalid(): Promise<InvalidReport> {
+  return apiGet<InvalidReport>('/improvements/invalid')
+}
+
+/** Drops every wrong step and the files that belong only to it. */
+export function removeInvalid(): Promise<InvalidReport> {
+  return apiPost<InvalidReport>('/improvements/remove-invalid', {})
 }

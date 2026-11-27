@@ -109,14 +109,30 @@ def _cancel_in_flight(improvement_id: str) -> None:
 
 @router.get("/types")
 def list_types() -> List[Dict[str, Any]]:
-    return [{"id": t.id, "label": t.label,
+    return [{"id": t.id, "label": t.label, "description": t.description,
              "params_schema": [f.to_dict() for f in t.params_schema]}
             for t in registry.list_types()]
 
 
 @router.get("")
 def list_improvements() -> List[Dict[str, Any]]:
+    """The entries — judged for wrong steps first when they are due (``engine.validate_due_entries``), so
+    the list never counts a step that may not run."""
+    engine.validate_due_entries()
     return store.list_all()
+
+
+@router.get("/invalid")
+def invalid_preview() -> Dict[str, Any]:
+    """What "Remove invalid" would drop: the wrong steps per entry with their reason, and the files that
+    belong only to them (nothing is changed)."""
+    return engine.remove_invalid(explicit=True, dry_run=True)
+
+
+@router.post("/remove-invalid")
+def remove_invalid_steps() -> Dict[str, Any]:
+    """Drops every wrong step and deletes the files that belong only to it (``engine.remove_invalid``)."""
+    return engine.remove_invalid(explicit=True)
 
 
 @router.post("")
@@ -208,8 +224,7 @@ def resume(improvement_id: str) -> Dict[str, Any]:
 @router.post("/{improvement_id}/run-now")
 def run_now(improvement_id: str) -> Dict[str, Any]:
     """Forces the entry and submits its next step at once; the rest follow
-    tick by tick, past the idle window, the engine switch, a freeze and a queue
-    pause. ``reason`` says what happened (``engine.run_now``)."""
+    tick by tick, past the idle window, the engine switch and a queue pause. ``reason`` says what happened (``engine.run_now``)."""
     _improvement_or_404(improvement_id)
     return engine.run_now(improvement_id)
 
