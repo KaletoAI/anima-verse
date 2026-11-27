@@ -2963,7 +2963,8 @@ def composite_outdated(record: Any) -> bool:
 
 def head_composite_outdated(record: Any, *, head_changed: bool) -> bool:
     """Whether a composite record (``edit_composite`` on the front, ``composite`` on back/side) is outdated for a
-    shape whose head changes: such a shape needs the draft's head on every view (Ruling A21) and the draft's alpha
+    shape whose head changes: such a shape needs the draft's head on every view (Ruling A21) at the current
+    ``view_composite.HEAD_VERSION`` (feathered zone boundary, hair below the cut removed) and the draft's alpha
     inside the head zone (``head.alpha == "draft"`` when ``alpha == "base"``)."""
     if not head_changed:
         return False
@@ -2971,6 +2972,12 @@ def head_composite_outdated(record: Any, *, head_changed: bool) -> bool:
         return True
     head = record.get("head")
     if not isinstance(head, dict):
+        return True
+    from app.core import view_composite
+    try:
+        if int(head.get("version", 1)) < view_composite.HEAD_VERSION:
+            return True
+    except (TypeError, ValueError):
         return True
     return record.get("alpha") == "base" and head.get("alpha") != "draft"
 
@@ -3023,23 +3030,39 @@ def front_garment_region(front: Optional[Path]) -> Optional[float]:
         return None
 
 
-_BANDS_CACHE: Dict[Tuple[str, int, str, int], List[float]] = {}
+_BANDS_CACHE: Dict[Tuple[str, int, str, int, Optional[int]], List[float]] = {}
 
 
 def front_garment_bands(front: Optional[Path], base_front: Optional[Path]) -> Optional[List[float]]:
-    """``view_composite.garment_bands`` of the DRESSED ``front`` on the plain ``base_front`` (round 2026-11-25: a
-    back / side view that keeps too little of a band the front is dressed in is refused), memoised per file
-    identity (path + mtime); None when a file is missing or unreadable. CPU, ~0.1 s on a miss."""
+    """``view_composite.garment_bands`` of a dressed view ``front`` on its plain ``base_front`` (round 2026-11-25: a
+    back / side view that keeps too little of a band the front is dressed in is refused), excluding removed hair when
+    its sidecar records ``edit_composite.head.cut_row`` (front) or ``composite.head.cut_row`` (stored back / side view,
+    ``view_lost_clothing``) via ``view_composite.removed_hair_exclude`` (removed hair over bare skin or background is
+    not clothing), memoised per file identity (path + mtime + ``cut_row``); None when a file is missing or unreadable.
+    CPU, ~0.1 s on a miss."""
     from app.core import view_composite
     if front is None or base_front is None:
         return None
+    meta = _ref_sidecar(front)
+    cut_row: Optional[int] = None
+    for key_name in ("edit_composite", "composite"):
+        raw_cut = _dict_of(_dict_of(meta.get(key_name)).get("head")).get("cut_row")
+        if isinstance(raw_cut, int) and not isinstance(raw_cut, bool):
+            cut_row = raw_cut
+            break
     try:
-        key = (str(front), Path(front).stat().st_mtime_ns, str(base_front), Path(base_front).stat().st_mtime_ns)
+        key = (str(front), Path(front).stat().st_mtime_ns, str(base_front), Path(base_front).stat().st_mtime_ns, cut_row)
     except OSError:
         return None
     if key not in _BANDS_CACHE:
         try:
-            bands = view_composite.garment_bands(view_composite.load_rgba(base_front), view_composite.load_rgba(front))
+            base_arr = view_composite.load_rgba(base_front)
+            front_arr = view_composite.load_rgba(front)
+            if cut_row is not None:
+                exclude = view_composite.removed_hair_exclude(base_arr, front_arr, cut_row)
+                bands = view_composite.garment_bands(base_arr, front_arr, exclude=exclude)
+            else:
+                bands = view_composite.garment_bands(base_arr, front_arr)
         except Exception:  # noqa: BLE001 — unknown bands: the band rule does not apply
             logger.debug("Front garment bands of %s not measured", front, exc_info=True)
             return None
@@ -4323,42 +4346,23 @@ def _head_image(path: Path, share: float):
     the top ``share`` of it cropped again to its own alpha box (the head,
     not the arm span)."""
     from PIL import Image
+    from app.core import view_composite
     try:
         with Image.open(path) as opened:
             image = opened.convert("RGBA")
     except (OSError, ValueError):
         return None
-    alpha = image.getchannel("A")
-    if alpha.getextrema()[0] == 255:
+    if image.getchannel("A").getextrema()[0] == 255:
         return None
-    box = alpha.getbbox()
-    if box is None:
-        return None
-    figure = image.crop(box)
-    head = figure.crop((0, 0, figure.width, max(1, round(figure.height * share))))
-    box = head.getchannel("A").getbbox()
-    if box is None:
-        return None
-    head = head.crop(box)
-    flat = Image.new("RGBA", head.size, (128, 128, 128, 255))
-    flat.alpha_composite(head)
-    return flat.convert("L")
+    return view_composite.head_region(image, share)
 
 
 def _head_vector(path: Path):
     """The head region (``_head_image`` of the top ``VIEW_GUARD_HEAD_SHARE``)
     resized to ``VIEW_GUARD_SIZE`` squared as a unit, zero-mean vector, or
     None when it cannot be measured (also a flat head region)."""
-    import numpy as np
-    from PIL import Image
-    grey = _head_image(path, VIEW_GUARD_HEAD_SHARE)
-    if grey is None:
-        return None
-    grey = grey.resize((VIEW_GUARD_SIZE, VIEW_GUARD_SIZE), Image.BILINEAR)
-    vector = np.asarray(grey, dtype=np.float64).ravel()
-    vector = vector - vector.mean()
-    norm = float(np.linalg.norm(vector))
-    return vector / norm if norm > 1e-9 else None
+    from app.core import view_composite
+    return view_composite.head_vector(_head_image(path, VIEW_GUARD_HEAD_SHARE), VIEW_GUARD_SIZE)
 
 
 def head_match(front: Optional[Path], base_front: Optional[Path]) -> Optional[float]:

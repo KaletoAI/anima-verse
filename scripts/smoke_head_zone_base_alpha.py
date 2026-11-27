@@ -37,8 +37,11 @@ Expected values, derived by hand:
     110..150 x cols 185..215): 15600 - 7200 - 1200 = 7200 pixels.
 [3] new code, ``compose(head=True, base_alpha=True)``: of the 7200 hair-only
     pixels 0 have alpha > 0 and 0 are opaque black (alpha >= 250 and RGB all
-    < 10); every pixel at row >= 180 has alpha equal to the base's alpha;
-    record has ``alpha == "base"``, ``head.alpha == "draft"``, ``ok == True``.
+    < 10); with feather ramp height ``n = round(0.02 * 760) = 15`` rows centred
+    on ``cut_row = 180`` (weight ``clip((180 + 7.5 - y) / 15, 0, 1)``, 0 from
+    ``180 + ceil(15 / 2) = 188`` on, and no hair below row 150), every pixel at
+    row >= 188 has alpha equal to the base's alpha; record has ``alpha == "base"``,
+    ``head.alpha == "draft"``, ``ok == True``.
 [4] old code proof (``e57308f8057a28d950b4dafbab4e8344781c656c``): with
     ``head=True, base_alpha=True`` all 7200 hair-only pixels are opaque and
     all 7200 are opaque black (draft RGB 0 made opaque by base alpha); without
@@ -50,8 +53,10 @@ Expected values, derived by hand:
     ``front=None`` passes ``head=True``.
 [7] ``head_composite_outdated``: ``head_changed=False`` -> False for any
     record; ``head_changed=True`` -> True for None, ``{"alpha": "base"}``,
-    ``{"alpha": "base", "head": {"cut_row": 180}}``; False for
-    ``{"alpha": "base", "head": {"cut_row": 180, "alpha": "draft"}}``.
+    ``{"alpha": "base", "head": {"cut_row": 180}}``, and version-1
+    ``{"alpha": "base", "head": {"cut_row": 180, "alpha": "draft"}}`` (default
+    version 1 < ``HEAD_VERSION`` 2); False for
+    ``{"alpha": "base", "head": {"cut_row": 180, "alpha": "draft", "version": 2}}``.
 [8] ``shape_view_shas`` / ``shape_view`` in temp storage for character
     ``Demo``: front with ``edit_composite`` lacking ``head`` has its sha when
     sidecar lacks ``outfit_body``, ``""`` when ``outfit_body.shape_inputs.hair
@@ -183,7 +188,7 @@ def main() -> int:
         check("hair-only alpha > 0", new_opaque, 0)
         check("hair-only opaque black", new_black, 0)
         base_u8 = load_rgba_u8(base)
-        check("row >= 180 alpha equals base", bool((new_u8[180:, :, 3] == base_u8[180:, :, 3]).all()), True)
+        check("row >= 188 alpha equals base", bool((new_u8[188:, :, 3] == base_u8[188:, :, 3]).all()), True)
         check("record ok / alpha / head.alpha",
               (new_rec["ok"], new_rec.get("alpha"), (new_rec.get("head") or {}).get("alpha")),
               (True, "base", "draft"))
@@ -278,9 +283,13 @@ def main() -> int:
               base_body.head_composite_outdated({"alpha": "base"}, head_changed=True), True)
         check("head_changed=True no draft alpha",
               base_body.head_composite_outdated({"alpha": "base", "head": {"cut_row": 180}}, head_changed=True), True)
-        check("head_changed=True draft alpha present",
+        check("head_changed=True version 1 (< HEAD_VERSION)",
               base_body.head_composite_outdated({"alpha": "base", "head": {"cut_row": 180, "alpha": "draft"}},
-                                                head_changed=True), False)
+                                                head_changed=True), True)
+        check("head_changed=True draft alpha + HEAD_VERSION",
+              base_body.head_composite_outdated(
+                  {"alpha": "base", "head": {"cut_row": 180, "alpha": "draft", "version": vc.HEAD_VERSION}},
+                  head_changed=True), False)
 
         print("[8] shape_view_shas / shape_view in temp storage")
         bsig = "bb12345678"

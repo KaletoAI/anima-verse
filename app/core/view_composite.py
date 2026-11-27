@@ -141,14 +141,25 @@ flare's blur 3) — as a grey PNG: outside it the composite IS the base, so a
 gate that compares it with the base (``garment_gates.worn_gate``'s head
 share) leaves the support out.
 
-HEAD (Ruling A21, Task 11g-fix4b): a dressed view of a shape whose head
-differs from the plain views (a bald shape on haired plain views, D4 — the
-caller measures it: ``base_body.head_match`` of the dressed front) is
-composited with ``head=True``: everything above the draft's shoulder line
-(``_head_zone``) is the draft — its head, neck and shoulder tops, the flow
-there on the draft's own outline, the base's figure (its hair) gone — so the
-result is never a bald head stretched into the haired outline. The record
-gains ``head`` with the zone and the seam ΔE along its neck line. Without
+HEAD (Ruling A21, Task 11g-fix4b; ``HEAD_VERSION`` 2): a dressed view of a
+shape whose head differs from the plain views (a bald shape on haired plain
+views, D4 — the caller measures it: ``base_body.head_match`` of the dressed
+front) is composited with ``head=True``: everything above the draft's shoulder
+line (``_head_zone``) is the draft — its head, neck and shoulder tops, the
+flow there on the draft's own outline, the base's figure (its hair) gone — so
+the result is never a bald head stretched into the haired outline. Across
+``HEAD_FEATHER_SHARE`` of the base figure height around ``cut_row`` a linear
+row ramp blends the head-zone composite into the plain garment composite so
+no hard horizontal step remains; hair strands of the base extending below the
+head zone (``_removed_hair``, modelled in Lab from the base hair removed
+inside the zone and linked to rows ``< cut_row``) are replaced on all four
+channels (alpha included) by the seam-matched draft. Removed hair that became
+bare skin or background (``removed_hair_exclude``) is excluded from ``put_on``
+and ``garment_bands`` so a haircut alone is not counted as clothing while a
+garment over former hair still is. ``check`` refuses a head composite with a
+hard seam at ``cut_row`` (``seam_ratio > HEAD_SEAM_MAX`` and above the draft's
+own step there) or one that did not take the draft's head
+(``composite_head_match < HEAD_TAKEN_MIN``, ``head_likeness``). Without
 ``head`` the composite is byte for byte what it was.
 
 The callers re-draft once on a failed check, then refuse with the numbers
@@ -157,6 +168,7 @@ texture. ``compose`` refuses to run on the event loop and inside a GPU-queue
 worker (``_guard_thread``): it is 3..5 s of CPU per view at 1536 rows.
 """
 import asyncio
+import math
 import threading
 import time
 from pathlib import Path
@@ -263,6 +275,31 @@ HEAD_NECK_BAND = (0.06, 0.22)
 HEAD_SHOULDER_RATIO = 2.0
 HEAD_SHOULDER_SEARCH = 0.32
 HEAD_ZONE_MARGIN = 0.04
+#: Version of the ``head=True`` composite (1 = c5742f5f1: hard cut at ``cut_row``, hair below the cut kept;
+#: 2: feathered zone boundary, base hair connected to the zone removed, excluded from put-on/bands, seam + head gates).
+HEAD_VERSION = 2
+#: Feather ramp height across ``cut_row`` as a share of the base figure height (Liv 1302 px: 26 rows).
+HEAD_FEATHER_SHARE = 0.02
+#: Removed-hair mask (``_removed_hair``): minimum hair sample inside the head zone (px), Lab Mahalanobis radius,
+#: Lab ΔE76 from the draft over draft figure, 8-connected link dilation share to rows ``< cut_row`` (Liv: 6 px),
+#: mask growth share (Liv: 4 px) and Gaussian feather sigma share (Liv: 2.6 px).
+HAIR_SAMPLE_MIN = 200
+HAIR_MAHA = 3.0
+HAIR_DE = 6.0
+HAIR_LINK_SHARE = 0.0046
+HAIR_GROW_SHARE = 0.003
+HAIR_FEATHER_SHARE = 0.002
+#: Head-zone seam check (``seam_ratio``): 8-bit floor for the local median row step, and maximum step ratio at
+#: ``cut_row``. Measured 2026-11-27: natural ratios at that row Liv base 1.06, Sigrun base 1.36, Sigrun dressed front
+#: 1.18; Liv bald head composite at c5742f5f1 3.04 (new 1.25..1.34) -> geometric mean sqrt(1.36 * 3.04) = 2.03,
+#: rounded down to 2.0.
+SEAM_FLOOR = 1.0
+HEAD_SEAM_MAX = 2.0
+#: Minimum ``head_likeness`` of the final head composite against the registered draft: derived from ONE real pair
+#: (Liv obe7650f3f, 2026-11-27: correct head composite 0.995, the stretched "triple face" 0.708, the black hair
+#: shadow 0.443); front drafts are not stored, so the limit is to be re-checked against the recorded
+#: ``composite_head_match`` values of later runs.
+HEAD_TAKEN_MIN = 0.9
 #: The sidecar value of an empty composite (module docstring).
 EMPTY = "empty"
 #: The smallest back/front garment-region ratio of the published dressed backs that kept the clothing (module
@@ -277,6 +314,8 @@ NOT_ALIGNED = "the draft does not line up with the base"
 NOT_COVERED = "the composite did not put on what the draft wears"
 NO_FIGURE = "the draft has no figure"
 DROPPED = "the composite left out a garment the draft wears"
+HEAD_SEAM = "a hard seam at the head zone's lower edge"
+HEAD_NOT_TAKEN = "the composite did not take the draft's head"
 #: Neutral grey of a flattened composite (``model_refs.VIEW_REFERENCE_BACKGROUND``).
 GREY = (128, 128, 128)
 
@@ -802,6 +841,138 @@ def _seam_de(img: np.ndarray, mask: np.ndarray, d_lab: np.ndarray, skin_d: Skin,
     return float(np.median(color.deltaE_ciede2000(lab_i[ys[ok], xs[ok]], lab_i[iy[ok], ix[ok]])))
 
 
+def _removed_hair(base: np.ndarray, dw: np.ndarray, zone: np.ndarray, cut: int, height: int) -> np.ndarray:
+    """Base hair strands (bool, base frame) connected to the head zone: Lab
+    Gaussian model of opaque base pixels inside ``zone`` outside the draft
+    figure (at least ``HAIR_SAMPLE_MIN`` px), matched across the base figure
+    (``HAIR_MAHA``) where the draft has no figure within 2 px or differs by
+    more than ``HAIR_DE``, opened, linked to rows ``< cut`` at
+    ``HAIR_LINK_SHARE`` (8-connected) and grown by ``HAIR_GROW_SHARE``."""
+    from scipy import ndimage as ndi
+    lb, ld = _lab(base), _lab(dw)
+    dfig = dw[..., 3] > FIGURE_ALPHA
+    sample = zone & (base[..., 3] > 240) & ~dfig
+    if int(sample.sum()) < HAIR_SAMPLE_MIN:
+        return np.zeros(base.shape[:2], bool)
+    pts = lb[sample]
+    mu = pts.mean(0)
+    icov = np.linalg.inv(np.cov(pts.T) + np.eye(3))
+    diff = lb - mu
+    m2 = np.einsum("...i,ij,...j->...", diff, icov, diff)
+    hairlike = np.sqrt(np.maximum(m2, 0.0)) < HAIR_MAHA
+    far = ~ndi.binary_dilation(dfig, _disk(2))
+    de = np.linalg.norm(lb - ld, axis=-1)
+    cand = (base[..., 3] > FIGURE_ALPHA) & hairlike & (far | (dfig & (de > HAIR_DE)))
+    cand = ndi.binary_opening(cand, _disk(1))
+    if not cand.any():
+        return np.zeros(base.shape[:2], bool)
+    link = ndi.binary_dilation(cand, _disk(max(1, round(HAIR_LINK_SHARE * height))))
+    labels, n_labels = ndi.label(link, structure=np.ones((3, 3), int))
+    if not n_labels:
+        return np.zeros(base.shape[:2], bool)
+    top_ids = np.unique(labels[:max(0, int(cut))])
+    top_ids = top_ids[top_ids > 0]
+    if not top_ids.size:
+        return np.zeros(base.shape[:2], bool)
+    removed = cand & np.isin(labels, top_ids)
+    if not removed.any():
+        return np.zeros(base.shape[:2], bool)
+    return ndi.binary_dilation(removed, _disk(max(1, round(HAIR_GROW_SHARE * height)))) & (
+        (base[..., 3] > 0) | (dw[..., 3] > 0)
+    )
+
+
+def removed_hair_exclude(base: np.ndarray, view: np.ndarray, cut: int) -> np.ndarray:
+    """Pixels (bool, base frame) where hair of ``base`` removed by a head
+    composite (``cut`` = ``head.cut_row``) became bare skin or background in
+    the finished ``view`` — excluded from ``put_on`` and ``garment_bands`` so
+    removed hair does not count as clothing while a garment over former hair
+    still does. Pure."""
+    base = np.asarray(base, dtype=np.float64)
+    view = np.asarray(view, dtype=np.float64)
+    bm = figure_mask(base)
+    if not bm.any() or view.shape[:2] != bm.shape:
+        return np.zeros(base.shape[:2], bool)
+    top, bottom = _bbox(bm)[:2]
+    height = bottom - top
+    zone = np.zeros_like(bm)
+    zone[:max(0, int(cut))] = True
+    removed = _removed_hair(base, view, zone, int(cut), height)
+    if not removed.any():
+        return removed
+    skin = Skin(_lab(base), bm & (base[..., 3] > 240))
+    return removed & (~(view[..., 3] > FIGURE_ALPHA) | skin.like(_lab(view)))
+
+
+def seam_ratio(img: np.ndarray, row: int, n: int) -> Optional[float]:
+    """Step at ``row`` (mean ``|img[r] - img[r-1]|`` across the 4 RGBA channels
+    in columns where either row has alpha > ``FIGURE_ALPHA``) over
+    ``max(median(step(r)), SEAM_FLOOR)`` for valid rows ``r != row`` in
+    ``row - 2*n .. row + 2*n``; None when no valid step exists. Pure."""
+    h = img.shape[0]
+    if row < 1 or row >= h:
+        return None
+
+    def step(r: int) -> Optional[float]:
+        cols = (img[r, :, 3] > FIGURE_ALPHA) | (img[r - 1, :, 3] > FIGURE_ALPHA)
+        if not cols.any():
+            return None
+        return float(np.abs(img[r, cols] - img[r - 1, cols]).mean())
+
+    at_row = step(row)
+    if at_row is None:
+        return None
+    lo, hi = max(1, row - 2 * n), min(h - 1, row + 2 * n)
+    others = [s for r in range(lo, hi + 1) if r != row and (s := step(r)) is not None]
+    if not others:
+        return None
+    return float(at_row / max(float(np.median(others)), SEAM_FLOOR))
+
+
+def head_region(image, share: float):
+    """The head region of a PIL RGBA ``image`` as a greyscale ("L") image on
+    neutral grey ``GREY``, or None when it has no figure: cropped to its alpha
+    bbox, the top ``share`` cropped again to its own alpha bbox."""
+    from PIL import Image
+    box = image.getchannel("A").getbbox()
+    if box is None:
+        return None
+    figure = image.crop(box)
+    head = figure.crop((0, 0, figure.width, max(1, round(figure.height * share))))
+    box = head.getchannel("A").getbbox()
+    if box is None:
+        return None
+    head = head.crop(box)
+    flat = Image.new("RGBA", head.size, GREY + (255,))
+    flat.alpha_composite(head)
+    return flat.convert("L")
+
+
+def head_vector(grey, size: int) -> Optional[np.ndarray]:
+    """``grey`` (PIL "L", or None) resized to ``(size, size)`` (bilinear) as a
+    unit zero-mean vector, or None when ``grey`` is None or flat."""
+    if grey is None:
+        return None
+    from PIL import Image
+    resized = grey.resize((size, size), Image.BILINEAR)
+    vector = np.asarray(resized, dtype=np.float64).ravel()
+    vector = vector - vector.mean()
+    norm = float(np.linalg.norm(vector))
+    return vector / norm if norm > 1e-9 else None
+
+
+def head_likeness(a: np.ndarray, b: np.ndarray, *, share: float = PUT_ON_HEAD_SHARE,
+                  size: int = 64) -> Optional[float]:
+    """Head-region correlation (``to_image``, ``head_region``, ``head_vector``)
+    of two RGBA float arrays ``a`` and ``b``; None when either cannot be
+    measured."""
+    va = head_vector(head_region(to_image(a), share), size)
+    vb = head_vector(head_region(to_image(b), share), size)
+    if va is None or vb is None:
+        return None
+    return round(float(va @ vb), 4)
+
+
 def _cells(rgba: np.ndarray, size: Tuple[int, int]) -> Tuple[np.ndarray, np.ndarray]:
     """``(Lab cells, figure cells)`` of an RGBA array on neutral grey,
     box-resampled to ``size`` (w, h)."""
@@ -814,13 +985,24 @@ def _cells(rgba: np.ndarray, size: Tuple[int, int]) -> Tuple[np.ndarray, np.ndar
     return _lab(np.concatenate([rgb, np.full(rgb.shape[:2] + (1,), 255.0)], -1)), alpha >= 128
 
 
+def _exclude_cells(exclude: np.ndarray, size: Tuple[int, int]) -> np.ndarray:
+    """Box-resample a full-resolution bool mask ``exclude`` to ``size`` (w, h)
+    like ``_cells``; True where the excluded fraction is ``>= 0.5``."""
+    from PIL import Image
+    im = Image.fromarray(np.where(exclude, 255, 0).astype(np.uint8), "L")
+    return np.asarray(im.resize(size, Image.BOX)) >= 128
+
+
 def put_on(base: np.ndarray, draft: np.ndarray, result: np.ndarray, *, work_height: Optional[int] = PUT_ON_WORK_HEIGHT,
            head_share: float = PUT_ON_HEAD_SHARE, region_min: float = PUT_ON_MIN_REGION,
-           dilate: int = PUT_ON_DILATE) -> Dict[str, Any]:
+           dilate: int = PUT_ON_DILATE, exclude: Optional[np.ndarray] = None) -> Dict[str, Any]:
     """The put-on score of Task 11f of ``result`` against ``base`` and the
     REGISTERED ``draft`` — three RGBA arrays in the base frame (module
     docstring). ``{"score", "region", "base_de", "draft_de"}``; a garment
-    region below ``PUT_ON_MIN_REGION`` has score 0.0 and ``nothing`` True."""
+    region below ``PUT_ON_MIN_REGION`` has score 0.0 and ``nothing`` True.
+    ``exclude``: full-resolution bool mask of pixels not counted as garment
+    (``removed_hair_exclude``); adds ``"excluded"`` (excluded cell share of
+    base figure cells)."""
     from scipy import ndimage as ndi
     h, w = base.shape[:2]
     size = (w, h) if work_height is None else (max(1, round(w * work_height / float(h))), work_height)
@@ -829,15 +1011,21 @@ def put_on(base: np.ndarray, draft: np.ndarray, result: np.ndarray, *, work_heig
     lab_r, _fig_r = _cells(result, size)
     rows = np.nonzero(fig_b.any(axis=1))[0]
     if rows.size == 0:
-        return {"score": 0.0, "region": 0.0, "nothing": True}
+        return {"score": 0.0, "region": 0.0, "nothing": True,
+                **({"excluded": 0.0} if exclude is not None else {})}
     head = int(rows[0]) + int(round(head_share * (rows[-1] - rows[0] + 1)))
     region = fig_d & (np.linalg.norm(lab_d - lab_b, axis=-1) > PUT_ON_REGION_DE)
     if PUT_ON_OPEN:
         region = ndi.binary_opening(region, iterations=PUT_ON_OPEN)
+    extra: Dict[str, Any] = {}
+    if exclude is not None:
+        exc = _exclude_cells(exclude, size)
+        region = region & ~exc
+        extra["excluded"] = round(float(exc.sum()) / max(int(fig_b.sum()), 1), 4)
     region[:head] = False
     share = float(region.sum()) / max(int(fig_b.sum()), 1)
     if share < region_min or not region.any():
-        return {"score": 0.0, "region": round(share, 5), "nothing": True}
+        return {"score": 0.0, "region": round(share, 5), "nothing": True, **extra}
     if dilate:
         region = ndi.binary_dilation(region, iterations=dilate)
         region[:head] = False
@@ -845,7 +1033,7 @@ def put_on(base: np.ndarray, draft: np.ndarray, result: np.ndarray, *, work_heig
     to_draft = float(np.linalg.norm(lab_r - lab_d, axis=-1)[region].mean())
     score = to_base / (to_base + to_draft) if to_base + to_draft > 0 else 0.5
     return {"score": round(score, 4), "region": round(share, 4), "base_de": round(to_base, 2),
-            "draft_de": round(to_draft, 2)}
+            "draft_de": round(to_draft, 2), **extra}
 
 
 # --- Clothing lost against the dressed front (round 2026-11-25) ---------------
@@ -866,11 +1054,11 @@ CLOTHING_LOST = "clothing of the dressed front lost in this view"
 
 
 def garment_bands(base: np.ndarray, view: np.ndarray, *, work_height: int = PUT_ON_WORK_HEIGHT,
-                  count: int = BAND_COUNT) -> List[float]:
+                  count: int = BAND_COUNT, exclude: Optional[np.ndarray] = None) -> List[float]:
     """The garment share of ``view`` over ``base`` (two RGBA arrays in the same frame) per horizontal band of the
     base figure below its head: the cells whose Lab colour differs by more than ``PUT_ON_REGION_DE`` (opened, as
-    ``put_on``'s region) over the base figure's cells of that band. A share may exceed 1 where the view's figure
-    is wider than the base's (a skirt). Pure."""
+    ``put_on``'s region, minus ``exclude`` when given) over the base figure's cells of that band. A share may exceed
+    1 where the view's figure is wider than the base's (a skirt). Pure."""
     from scipy import ndimage as ndi
     h, w = base.shape[:2]
     size = (max(1, round(w * work_height / float(h))), work_height)
@@ -883,6 +1071,8 @@ def garment_bands(base: np.ndarray, view: np.ndarray, *, work_height: int = PUT_
     region = fig_v & (np.linalg.norm(lab_v - lab_b, axis=-1) > PUT_ON_REGION_DE)
     if PUT_ON_OPEN:
         region = ndi.binary_opening(region, iterations=PUT_ON_OPEN)
+    if exclude is not None:
+        region = region & ~_exclude_cells(exclude, size)
     region[:head] = False
     edges = np.linspace(head, rows[-1] + 1, count + 1).astype(int)
     return [round(float(region[a:e].sum()) / max(int(fig_b[a:e].sum()), 1), 3) for a, e in zip(edges[:-1], edges[1:])]
@@ -923,22 +1113,32 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: boo
     """``composite_arrays`` plus the support mask (module docstring; all
     False when the result is the base).
 
-    ``take_head`` (Ruling A21): the draft wears another head than the base (a
-    bald shape on haired plain views) — the HEAD ZONE (``_head_zone`` of
-    the aligned draft: everything above its shoulder line) comes from the
-    draft: the flow runs on the draft's own outline there (the base's hair
-    does not stretch the draft's head and neck), the zone joins the mask
-    and the base's figure goes where the draft has none (no hair left on a
-    bald head). Never EMPTY (the head is put on). The record gains
-    ``head`` = the zone's rows and the seam ΔE along its neck line
-    (``neck_seam_de``); without it nothing changes.
+    ``take_head`` (Ruling A21, ``HEAD_VERSION`` 2): the draft wears another
+    head than the base (a bald shape on haired plain views) — the HEAD ZONE
+    (``_head_zone`` of the aligned draft: everything above its shoulder line)
+    comes from the draft: the flow runs on the draft's own outline there (the
+    base's hair does not stretch the draft's head and neck), the zone joins
+    the mask and the base's figure goes where the draft has none. Across
+    ``HEAD_FEATHER_SHARE`` of the base figure height around ``cut_row`` a
+    linear row ramp blends the head-zone composite into the plain garment
+    composite; base hair strands reaching below ``cut_row`` (``_removed_hair``)
+    are replaced by the draft (seam-matched on a ring outside the removed hair)
+    on all four channels (alpha included), and removed hair that became bare
+    skin or background (``removed_hair_exclude``) is excluded from ``put_on``
+    and ``garment_bands``.
+    Never EMPTY (the head is put on). ``record["head"]`` carries the zone,
+    ``version`` (``HEAD_VERSION``), ``feather_rows``, ``removed_hair``,
+    ``removed_hair_to_row``, ``seam_ratio`` / ``draft_seam_ratio`` (checked
+    against ``HEAD_SEAM_MAX``), ``draft_head_match`` / ``composite_head_match``
+    (checked against ``HEAD_TAKEN_MIN``) and ``neck_seam_de``; without
+    ``take_head`` nothing changes.
 
     ``base_alpha`` (Ruling A125, an edit of the base view): the composite's
-    alpha is the base's everywhere except the head zone, which keeps the
-    draft's alpha (Ruling A21) — a garment never adds figure, the silhouette
-    (and so the registration on the mesh) is the base's by construction; the
-    record says ``alpha: "base"`` (and ``head.alpha: "draft"`` with
-    ``take_head``)."""
+    alpha is the base's everywhere except the feathered head zone and removed
+    hair, which take the draft's alpha (Ruling A21) — a garment never adds
+    figure, the silhouette (and so the registration on the mesh) is the base's
+    by construction; the record says ``alpha: "base"`` (and
+    ``head.alpha: "draft"`` with ``take_head``)."""
     from scipy import ndimage as ndi
     started = time.perf_counter()
     if rule not in RULES:
@@ -976,6 +1176,7 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: boo
     dwm = figure_mask(dw)
     mask, _de, broad = _garment_mask(base, dw, bm, dwm, skin_b, skin_d, opening=spec["opening"],
                               min_component=spec["min_component"])
+    garment = mask
     if zone is not None:
         # Every base pixel of the zone (its hair's soft matte edge and loose strands too) and the draft's figure.
         mask = (mask & ~zone) | (zone & (dwm | (base[..., 3] > 0) | (dw[..., 3] > 0)))
@@ -989,21 +1190,63 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: boo
         touch = np.unique(fl[ndi.binary_dilation(mask, _disk(3)) & flare])
         flare = np.isin(fl, touch[touch > 0])
     matched, ring_offset = _seam_colour_match(base, dw, mask, skin_b, skin_d)
-    out = _blend(base, matched, mask, aligned, flare, clear=zone)
-    if base_alpha:
-        out[..., 3] = base[..., 3] if zone is None else np.where(zone, out[..., 3], base[..., 3])
-        record["alpha"] = "base"
+    if zone is None:
+        out = _blend(base, matched, mask, aligned, flare, clear=None)
+        if base_alpha:
+            out[..., 3] = base[..., 3]
+            record["alpha"] = "base"
+        removed = None
+        feather_rows = 0
+    else:
+        cut = zone_record["cut_row"]
+        bt, bb = _bbox(bm)[:2]
+        height = bb - bt
+        feather_rows = max(2, round(HEAD_FEATHER_SHARE * height))
+        removed = _removed_hair(base, dw, zone, cut, height)
+        z_ramp = np.zeros_like(zone)
+        z_ramp[:min(shape[0], cut + math.ceil(feather_rows / 2))] = True
+        mask_ramp = (garment & ~z_ramp) | (z_ramp & (dwm | (base[..., 3] > 0) | (dw[..., 3] > 0)))
+        matched_ramp, _ = _seam_colour_match(base, dw, mask_ramp | removed, skin_b, skin_d)
+        out_zone = _blend(base, matched_ramp, mask_ramp, aligned, flare, clear=z_ramp)
+        out_plain = _blend(base, matched_ramp, garment, aligned, flare)
+        if base_alpha:
+            out_zone[..., 3] = np.where(z_ramp, out_zone[..., 3], base[..., 3])
+            out_plain[..., 3] = base[..., 3]
+            record["alpha"] = "base"
+        w = np.clip((cut + feather_rows / 2.0 - np.arange(shape[0], dtype=np.float64)) / feather_rows,
+                    0.0, 1.0)[:, None, None]
+        out = out_zone * w + out_plain * (1.0 - w)
+        r = ndi.gaussian_filter(removed.astype(float), max(1.0, HAIR_FEATHER_SHARE * height))
+        r = np.where(removed, np.maximum(r, 0.5), r)
+        out = out * (1.0 - r[..., None]) + matched_ramp * r[..., None]
     # The registered draft as the composite sees it: the warped draft, the flare unwarped.
     registered = np.where(flare[..., None], aligned, dw)
     cm = figure_mask(out)
     magnitude = np.hypot(v, u)[bm]
-    coverage = put_on(base, registered, out, **spec["put_on"])
+    exclude = removed_hair_exclude(base, out, zone_record["cut_row"]) if zone is not None else None
+    coverage = put_on(base, registered, out, **spec["put_on"]) if exclude is None \
+        else put_on(base, registered, out, **spec["put_on"], exclude=exclude)
     seam = _seam_de(out, mask, _lab(dw), skin_d)
     if zone_record is not None:
+        from app.core.base_body import VIEW_GUARD_HEAD_SHARE, VIEW_GUARD_SIZE
         cut = zone_record["cut_row"]
         neck_seam = _seam_de(out, mask, _lab(dw), skin_d, rows=(cut - 1, cut + 7))
-        record["head"] = {**zone_record, "neck_seam_de": None if neck_seam is None else round(neck_seam, 2),
-                          **({"alpha": "draft"} if base_alpha else {})}
+        sr = seam_ratio(out, cut, feather_rows)
+        dsr = seam_ratio(dw, cut, feather_rows)
+        rem_rows = np.nonzero(removed.any(1))[0]
+        record["head"] = {
+            **zone_record,
+            "version": HEAD_VERSION,
+            "feather_rows": feather_rows,
+            "removed_hair": round(float(removed.sum() / bm.sum()), 4),
+            "removed_hair_to_row": int(rem_rows[-1]) if rem_rows.size else None,
+            "seam_ratio": None if sr is None else round(sr, 3),
+            "draft_seam_ratio": None if dsr is None else round(dsr, 3),
+            "draft_head_match": head_likeness(registered, base, share=VIEW_GUARD_HEAD_SHARE, size=VIEW_GUARD_SIZE),
+            "composite_head_match": head_likeness(out, registered, share=VIEW_GUARD_HEAD_SHARE, size=VIEW_GUARD_SIZE),
+            "neck_seam_de": None if neck_seam is None else round(neck_seam, 2),
+            **({"alpha": "draft"} if base_alpha else {}),
+        }
     record.update({
         "alignment": alignment,
         "warp": {"mean_px": round(float(magnitude.mean()), 2), "p95_px": round(float(np.percentile(magnitude, 95)), 2),
@@ -1021,9 +1264,15 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: boo
         "broad": round(float(broad.sum() / bm.sum()), 4),
     })
     if front_bands:
-        record["bands"] = garment_bands(base, out)
+        record["bands"] = garment_bands(base, out) if exclude is None else garment_bands(base, out, exclude=exclude)
     reasons = check(record)
     support = ndi.binary_dilation(mask | flare, _disk(SUPPORT_GROW))
+    if zone is not None:
+        if removed.any():
+            support |= ndi.binary_dilation(removed, _disk(SUPPORT_GROW))
+        ramp = np.zeros_like(bm)
+        ramp[max(0, cut - feather_rows // 2 - 1):cut + feather_rows // 2 + 2] = True
+        support |= ramp & (mask | flare | (base[..., 3] > 0) | (dw[..., 3] > 0))
     if coverage.get("nothing") and not reasons and zone is None and not broad.any():
         # EMPTY: nothing of the draft shows in this view — the base unchanged. Not with a broad change put on
         # (Ruling A99b): the put-on region needs ΔE > 20, a cream blouse over pale skin differs by ~9.5.
@@ -1041,7 +1290,10 @@ def check(record: Dict[str, Any]) -> List[str]:
     that keeps too little of a band the front is dressed in (``clothing_lost``)
     is refused whether or not it is EMPTY (round 2026-11-25); a
     garment left out refuses it either way (Ruling A99b: Tilda's
-    cream-blouse front passed as EMPTY, put-on region 0.0019)."""
+    cream-blouse front passed as EMPTY, put-on region 0.0019); a head
+    composite (``head``) is refused when its seam step ratio at ``cut_row``
+    exceeds ``HEAD_SEAM_MAX`` and the draft's own step there, or when
+    ``composite_head_match`` is below ``HEAD_TAKEN_MIN``."""
     reasons = []
     coverage = record.get("coverage") or {}
     aligned = float(record.get("iou") or 0.0) >= IOU_MIN
@@ -1063,6 +1315,14 @@ def check(record: Dict[str, Any]) -> List[str]:
     dropped = record.get("dropped")
     if dropped is not None and float(dropped) > DROP_MAX:
         reasons.append(f"{DROPPED} (region {float(dropped):.3f} > {DROP_MAX})")
+    head = record.get("head")
+    if isinstance(head, dict):
+        sr = head.get("seam_ratio")
+        if sr is not None and float(sr) > HEAD_SEAM_MAX and float(sr) > float(head.get("draft_seam_ratio") or 0.0):
+            reasons.append(f"{HEAD_SEAM} (ratio {float(sr):.2f} > {HEAD_SEAM_MAX})")
+        hm = head.get("composite_head_match")
+        if hm is not None and float(hm) < HEAD_TAKEN_MIN:
+            reasons.append(f"{HEAD_NOT_TAKEN} (head match {float(hm):.3f} < {HEAD_TAKEN_MIN})")
     if not aligned:
         reasons.append(f"{NOT_ALIGNED} (IoU {float(record.get('iou') or 0.0):.3f} < {IOU_MIN})")
     return reasons
