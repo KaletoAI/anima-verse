@@ -414,6 +414,81 @@ def get_character_stream_between(perceiver: str, start_game_ts: str,
     return [dict(row) for row in rows]
 
 
+def get_character_stream_since(perceiver: str, *, since_ts: str, after_id: int = 0,
+                               limit: int = 40) -> List[Dict[str, Any]]:
+    """Subjective perception lines for ``perceiver`` across all rooms since ``since_ts``.
+
+    Reads content exclusively from ``perceptions.content`` (never ``utterances.content``),
+    drops contentless kinds (``CONTENTLESS_KINDS``) and ``display_only`` lines in SQL,
+    and excludes empty content. ``since_ts`` is truncated to whole seconds in the
+    ``utc_now_iso()`` seconds format to match ``utterances.ts`` (empty = no time filter).
+    Returns the newest ``limit`` matching rows, oldest first.
+    """
+    if limit <= 0 or not perceiver:
+        return []
+    from datetime import timezone
+    from app.core.perception import CONTENTLESS_KINDS
+    from app.core.timeutils import parse_iso
+
+    excluded = tuple(sorted(CONTENTLESS_KINDS))
+    where = [
+        "p.perceiver = ?",
+        "p.id > ?",
+        "COALESCE(json_extract(p.meta, '$.display_only'), 0) = 0",
+        "TRIM(p.content) <> ''",
+    ]
+    params: List[Any] = [perceiver, int(after_id)]
+    if excluded:
+        where.append(f"p.kind NOT IN ({','.join('?' * len(excluded))})")
+        params.extend(excluded)
+    if isinstance(since_ts, str) and since_ts.strip():
+        try:
+            since_sec = parse_iso(since_ts.strip()).astimezone(timezone.utc).isoformat(timespec="seconds")
+        except (ValueError, TypeError):
+            since_sec = since_ts.strip()
+        where.append("u.ts >= ?")
+        params.append(since_sec)
+    params.append(int(limit))
+    sql = (
+        "SELECT p.id, u.speaker, u.addressees, p.content, u.game_ts "
+        "FROM perceptions p JOIN utterances u ON u.id = p.utterance_id "
+        "WHERE " + " AND ".join(where) + " "
+        "ORDER BY p.id DESC LIMIT ?"
+    )
+    rows = get_connection().execute(sql, params).fetchall()
+    out: List[Dict[str, Any]] = []
+    for row in reversed(rows):
+        raw_addr = row["addressees"]
+        if isinstance(raw_addr, str):
+            try:
+                parsed_addr = json.loads(raw_addr)
+                addressees = parsed_addr if isinstance(parsed_addr, list) else []
+            except (TypeError, ValueError):
+                addressees = []
+        elif isinstance(raw_addr, list):
+            addressees = raw_addr
+        else:
+            addressees = []
+        out.append({
+            "id": int(row["id"]),
+            "speaker": row["speaker"] or "",
+            "addressees": addressees,
+            "content": row["content"],
+            "game_ts": row["game_ts"] or "",
+        })
+    return out
+
+
+def newest_perception_id(perceiver: str) -> int:
+    """Highest ``perceptions.id`` for ``perceiver``, or 0 when none exists."""
+    if not perceiver:
+        return 0
+    row = get_connection().execute(
+        "SELECT MAX(id) FROM perceptions WHERE perceiver=?",
+        (perceiver,)).fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
+
+
 def prune_wilderness_rows(cutoff_ts: str) -> Tuple[int, int]:
     """Delete LOCATION-LESS speech acts older than ``cutoff_ts`` together with
     their perceptions. Returns ``(utterances, perceptions)`` deleted.

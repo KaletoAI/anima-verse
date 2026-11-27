@@ -12,7 +12,8 @@ Conventions:
 - Foreign keys enabled, ON DELETE CASCADE where appropriate
 """
 
-SCHEMA_VERSION = 14  # 14: quest_templates.giver_role, quest_run_objects, quest_run_payouts (quest stage 2)
+SCHEMA_VERSION = 15  # 15: quest_judgements (quest stage 3)
+#                     14: quest_templates.giver_role, quest_run_objects, quest_run_payouts (quest stage 2)
 #                     13: quest system tables (quest_templates, quest_runs, quest_facts)
 #                     12: world_dev_runs.max_tokens (per-reply cap kept across restarts)
 #                     (ALTER only, no bump): world_dev_runs.bounds (a free-mode run's build box)
@@ -1240,6 +1241,25 @@ SCHEMA_STATEMENTS = [
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         PRIMARY KEY (run_id, position)
+    )""",
+    # Cached LLM judgement verdicts per (run, step, criterion, mind) (quest stage 3,
+    # app/models/quests.py). Filled by the background quest_judgement task-queue job;
+    # the quest engine reads only this cache and never calls an LLM directly.
+    """CREATE TABLE IF NOT EXISTS quest_judgements (
+        run_id         TEXT NOT NULL,
+        step           INTEGER NOT NULL,
+        criterion_key  TEXT NOT NULL,
+        mind           TEXT NOT NULL,
+        avatar         TEXT NOT NULL DEFAULT '',
+        state          TEXT NOT NULL DEFAULT 'pending'
+                       CHECK(state IN ('pending', 'yes', 'no', 'error')),
+        reason         TEXT NOT NULL DEFAULT '',
+        judged_through INTEGER NOT NULL DEFAULT 0,
+        requested_at   TEXT NOT NULL DEFAULT '',
+        judged_at      TEXT NOT NULL DEFAULT '',
+        attempts       INTEGER NOT NULL DEFAULT 0,
+        task_id        TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (run_id, step, criterion_key, mind)
     )""",
 ]
 

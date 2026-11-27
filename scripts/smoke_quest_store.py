@@ -432,10 +432,10 @@ print("(l) v14: giver_role, setup_effects, rewards")
 import inspect  # noqa: E402
 from app.core import world_db_schema  # noqa: E402
 
-check("SCHEMA_VERSION == 14", world_db_schema.SCHEMA_VERSION == 14, str(world_db_schema.SCHEMA_VERSION))
+check("SCHEMA_VERSION == 15", world_db_schema.SCHEMA_VERSION == 15, str(world_db_schema.SCHEMA_VERSION))
 meta_ver = db.get_connection().execute(
     "SELECT value FROM schema_meta WHERE key='version'").fetchone()
-check("schema_meta version == '14'", meta_ver is not None and meta_ver[0] == "14", str(dict(meta_ver) if meta_ver else None))
+check("schema_meta version == '15'", meta_ver is not None and meta_ver[0] == "15", str(dict(meta_ver) if meta_ver else None))
 tpl_cols = {c[1]: (c[2], c[3], c[4]) for c in db.get_connection().execute("PRAGMA table_info(quest_templates)")}
 check("quest_templates.giver_role column shape",
       tpl_cols.get("giver_role") == ("TEXT", 1, "''"), str(tpl_cols.get("giver_role")))
@@ -505,7 +505,7 @@ obj_idxs = {r[1] for r in db.get_connection().execute("PRAGMA index_list(quest_r
 check("quest_run_objects indexes exist",
       {"idx_quest_run_objects_run", "idx_quest_run_objects_status"}.issubset(obj_idxs),
       str(obj_idxs))
-check("SCHEMA_VERSION is still 14", world_db_schema.SCHEMA_VERSION == 14)
+check("SCHEMA_VERSION is 15", world_db_schema.SCHEMA_VERSION == 15)
 check("add_object(status=bogus) → IntegrityError",
       raises(sqlite3.IntegrityError,
              lambda: quests.add_object(run["id"], effect_key="k", position="setup",

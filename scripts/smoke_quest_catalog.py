@@ -196,9 +196,10 @@ except TypeError:
     ok = False
 check("payload is JSON-safe", ok)
 check("descriptor keys", set(qc.public_descriptor(qc.get("a_two"))) ==
-      {"id", "kind", "label", "description", "params", "signals", "needs_open_run", "object_kind",
-       "object_kind_when"})
+      {"id", "kind", "label", "description", "params", "signals", "needs_open_run", "step_only",
+       "object_kind", "object_kind_when"})
 check("needs_open_run defaults to False", qc.public_descriptor(qc.get("a_two"))["needs_open_run"] is False)
+check("step_only defaults to False", qc.public_descriptor(qc.get("a_two"))["step_only"] is False)
 check("descriptor signals is a list", qc.public_descriptor(qc.get("a_two"))["signals"] == ["s.a"])
 
 # --- (b) owner cleanup ---------------------------------------------------------------
@@ -555,6 +556,54 @@ check("19. object_kind_for takes precedence over object_kind_when",
       qc.entry_object_kind(bp, {"room": "glade"}) == "custom_kind",
       qc.entry_object_kind(bp, {"room": "glade"}))
 hooks.unregister_owned_providers("test_when")
+
+# --- (i) step_only placement rules (stage 3, Task 1) --------------------------------
+print("(i) step_only placement rules")
+from app.core import quest_engine as qe  # noqa: E402
+
+qc.register("test_step_only", lambda: [
+    stub("so_cond", kind="condition", step_only=True),
+    stub("plain_cond", kind="condition"),
+])
+check("20. step_only public_descriptor is True",
+      qc.public_descriptor(qc.get("so_cond"))["step_only"] is True)
+
+
+def _tpl(step_cond, start_cond=None, prereq_cond=None):
+    return {
+        "title": "Step-only test",
+        "roles": [],
+        "steps": [{"id": "s1", "text": "Do it.", "condition": step_cond}],
+        "start_condition": start_cond or {},
+        "prerequisites": {"condition": prereq_cond or {}},
+    }
+
+
+def _issue_pairs(tpl):
+    return [(i["code"], i["path"]) for i in qe.validate_template(tpl)]
+
+
+SO_LEAF = {"type": "so_cond", "params": {}}
+PL_LEAF = {"type": "plain_cond", "params": {}}
+check("21. step_only directly in step condition -> []",
+      _issue_pairs(_tpl(SO_LEAF)) == [], str(_issue_pairs(_tpl(SO_LEAF))))
+check("22. step_only inside all/any in step condition -> []",
+      _issue_pairs(_tpl({"all": [PL_LEAF, {"any": [SO_LEAF, PL_LEAF]}]})) == [],
+      str(_issue_pairs(_tpl({"all": [PL_LEAF, {"any": [SO_LEAF, PL_LEAF]}]}))))
+check("23. step_only in start_condition -> not_allowed_here",
+      _issue_pairs(_tpl(PL_LEAF, start_cond=SO_LEAF)) == [("not_allowed_here", "start_condition.type")],
+      str(_issue_pairs(_tpl(PL_LEAF, start_cond=SO_LEAF))))
+check("24. step_only in prerequisites.condition -> not_allowed_here",
+      _issue_pairs(_tpl(PL_LEAF, prereq_cond=SO_LEAF)) == [("not_allowed_here", "prerequisites.condition.type")],
+      str(_issue_pairs(_tpl(PL_LEAF, prereq_cond=SO_LEAF))))
+check("25. step_only under not in step condition -> not_allowed_here",
+      _issue_pairs(_tpl({"not": SO_LEAF})) == [("not_allowed_here", "steps.0.condition.not.type")],
+      str(_issue_pairs(_tpl({"not": SO_LEAF}))))
+check("26. step_only under all -> not in step condition -> not_allowed_here",
+      _issue_pairs(_tpl({"all": [PL_LEAF, {"not": {"any": [SO_LEAF]}}]}))
+      == [("not_allowed_here", "steps.0.condition.all.1.not.any.0.type")],
+      str(_issue_pairs(_tpl({"all": [PL_LEAF, {"not": {"any": [SO_LEAF]}}]}))))
+hooks.unregister_owned_providers("test_step_only")
 
 print()
 if failures:

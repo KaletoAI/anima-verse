@@ -2,7 +2,8 @@
 
 Storage only: no engine logic, no effects, no notifications. Tables are
 declared in ``world_db_schema`` (``quest_templates``, ``quest_runs``,
-``quest_facts``, ``quest_run_objects``, ``quest_run_payouts``).
+``quest_facts``, ``quest_run_objects``, ``quest_run_payouts``,
+``quest_judgements``).
 
 A **template** refers to roles; its editable fields carry an integer
 ``revision`` (``update_template`` compares ``base_revision`` inside the
@@ -31,13 +32,14 @@ call these from inside an open transaction.
 """
 from __future__ import annotations
 
+from datetime import timedelta
 import json
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.db import get_connection, transaction
 from app.core.keyed_lock import keyed_lock
-from app.core.timeutils import game_time, utc_now_iso
+from app.core.timeutils import game_time, parse_iso, utc_now_iso
 
 RUN_OPEN_STATES = ("preparing", "hidden", "open")
 RUN_ENDED_STATES = ("done", "failed", "cancelled", "broken")
@@ -432,6 +434,9 @@ def record_step_done(run_id: str, step_index: int, *, avatar: str,
                 (_dump(log), idx + 1, step_started, now, run_id, idx))
         if cur.rowcount == 0:
             return None
+        conn.execute(
+            "DELETE FROM quest_judgements WHERE run_id=? AND step<=?",
+            (run_id, idx))
         if isinstance(steps, list) and 0 <= idx < len(steps):
             step_obj = steps[idx]
             if isinstance(step_obj, dict):
@@ -702,3 +707,141 @@ def rearm_payout(run_id: str, position: str) -> bool:
             "updated_at=? WHERE run_id=? AND position=? AND state='failed'",
             (utc_now_iso(), run_id, position))
         return cur.rowcount > 0
+
+
+# ── Judgements ───────────────────────────────────────────────────────────
+
+_JUDGEMENT_FINAL_STATES = ("yes", "no", "error")
+
+
+def _is_older_than(requested_at: str, now_dt, threshold_s: float) -> bool:
+    """True when ``requested_at`` is blank, unparseable, or at least ``threshold_s`` before ``now_dt``."""
+    if not isinstance(requested_at, str) or not requested_at.strip():
+        return True
+    try:
+        req_dt = parse_iso(requested_at)
+    except (ValueError, TypeError):
+        return True
+    return req_dt <= now_dt - timedelta(seconds=float(threshold_s))
+
+
+def get_judgement(run_id: str, step: int, criterion_key: str, mind: str) -> dict | None:
+    """Read one cached judgement row, or None when absent."""
+    row = get_connection().execute(
+        "SELECT * FROM quest_judgements WHERE run_id=? AND step=? AND criterion_key=? AND mind=?",
+        (run_id, int(step), criterion_key, mind)).fetchone()
+    return dict(row) if row is not None else None
+
+
+def claim_judgement(run_id: str, step: int, criterion_key: str, mind: str, avatar: str, *,
+                    now: str, min_interval_s: float, newest_id: int,
+                    pending_stale_s: float = 600) -> bool:
+    """Atomically claim a judgement slot for ``(run_id, step, criterion_key, mind)``.
+
+    Returns True and writes ``state='pending'``, ``requested_at=now``, ``avatar``, ``attempts+1``,
+    ``task_id=''`` when:
+      (a) no row exists yet;
+      (b) the row is ``'no'`` or ``'error'``, ``requested_at`` is at least ``min_interval_s``
+          before ``now`` (or blank/unparseable), AND ``judged_through < newest_id``; or
+      (c) the row is ``'pending'`` and ``requested_at`` is older than ``pending_stale_s``
+          (a restart lost the queued job).
+    Never claims a ``'yes'`` row. Returns False without writing otherwise.
+    """
+    idx = int(step)
+    newest = int(newest_id)
+    now_dt = parse_iso(now)
+    with keyed_lock("quest_run", run_id), transaction() as conn:
+        row = conn.execute(
+            "SELECT state, judged_through, requested_at FROM quest_judgements "
+            "WHERE run_id=? AND step=? AND criterion_key=? AND mind=?",
+            (run_id, idx, criterion_key, mind)).fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT INTO quest_judgements (run_id, step, criterion_key, mind, avatar, "
+                "state, requested_at, attempts, task_id) VALUES (?,?,?,?,?,'pending',?,1,'')",
+                (run_id, idx, criterion_key, mind, avatar or "", now))
+            return True
+        state = row["state"]
+        if state == "yes":
+            return False
+        req_at = row["requested_at"] or ""
+        if state in ("no", "error"):
+            if int(row["judged_through"] or 0) >= newest:
+                return False
+            if not _is_older_than(req_at, now_dt, min_interval_s):
+                return False
+        elif state == "pending":
+            if not _is_older_than(req_at, now_dt, pending_stale_s):
+                return False
+        else:
+            return False
+        conn.execute(
+            "UPDATE quest_judgements SET state='pending', requested_at=?, avatar=?, "
+            "attempts=attempts+1, task_id='' "
+            "WHERE run_id=? AND step=? AND criterion_key=? AND mind=?",
+            (now, avatar or "", run_id, idx, criterion_key, mind))
+        return True
+
+
+def note_judgement_task(run_id: str, step: int, criterion_key: str, mind: str,
+                        task_id: str) -> bool:
+    """Store ``task_id`` on an existing ``pending`` judgement row."""
+    with keyed_lock("quest_run", run_id), transaction() as conn:
+        cur = conn.execute(
+            "UPDATE quest_judgements SET task_id=? "
+            "WHERE run_id=? AND step=? AND criterion_key=? AND mind=? AND state='pending'",
+            (task_id or "", run_id, int(step), criterion_key, mind))
+        return cur.rowcount > 0
+
+
+def set_judgement(run_id: str, step: int, criterion_key: str, mind: str, *,
+                  state: str, reason: str, judged_through: int) -> bool:
+    """Record a judgement verdict (``'yes'``, ``'no'``, or ``'error'``).
+
+    Raises ValueError for any other state. Writes only while the run still exists with
+    ``state='open'`` and ``current_step == step`` (checked under the run lock and transaction);
+    returns False without writing otherwise.
+    """
+    if state not in _JUDGEMENT_FINAL_STATES:
+        raise ValueError(f"invalid judgement state: {state!r}")
+    idx = int(step)
+    clean_reason = (reason or "")[:500]
+    through = int(judged_through)
+    judged_at = utc_now_iso(timespec="microseconds")
+    with keyed_lock("quest_run", run_id), transaction() as conn:
+        run_row = conn.execute(
+            "SELECT state, current_step FROM quest_runs WHERE id=?",
+            (run_id,)).fetchone()
+        if run_row is None or run_row["state"] != "open" or int(run_row["current_step"]) != idx:
+            return False
+        conn.execute(
+            "INSERT INTO quest_judgements (run_id, step, criterion_key, mind, state, reason, "
+            "judged_through, judged_at) VALUES (?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(run_id, step, criterion_key, mind) DO UPDATE SET "
+            "state=excluded.state, reason=excluded.reason, "
+            "judged_through=excluded.judged_through, judged_at=excluded.judged_at",
+            (run_id, idx, criterion_key, mind, state, clean_reason, through, judged_at))
+        return True
+
+
+def delete_judgements(run_id: str | None = None, mind: str | None = None) -> int:
+    """Delete judgement rows matching ``run_id`` and/or ``mind``; returns the deleted count.
+    With neither filter given, deletes nothing and returns 0."""
+    where: List[str] = []
+    params: List[Any] = []
+    if run_id is not None:
+        where.append("run_id=?")
+        params.append(run_id)
+    if mind is not None:
+        where.append("mind=?")
+        params.append(mind)
+    if not where:
+        return 0
+    sql = "DELETE FROM quest_judgements WHERE " + " AND ".join(where)
+    if run_id is not None:
+        with keyed_lock("quest_run", run_id), transaction() as conn:
+            cur = conn.execute(sql, params)
+            return cur.rowcount
+    with transaction() as conn:
+        cur = conn.execute(sql, params)
+        return cur.rowcount

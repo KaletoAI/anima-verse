@@ -514,6 +514,20 @@ def validate_template(template: dict) -> list[dict]:
                     f"prerequisites.condition{leaf_path}.type", "not_allowed_here",
                     f"'{t.label}' counts from the opening; with a start condition the run opens only once the "
                     f"prerequisites pass, so it would stay hidden forever"))
+    for path, expr, _kinds, where in _expressions(template):
+        is_step = isinstance(where, str) and where.startswith("step:")
+        for leaf_path, leaf in quest_catalog.walk(expr):
+            t = known.get(leaf["type"])
+            if t is None or not t.step_only:
+                continue
+            if not is_step:
+                issues.append(_issue(
+                    f"{path}{leaf_path}.type", "not_allowed_here",
+                    f"'{t.label}' is only allowed in a step condition"))
+            elif ".not" in leaf_path:
+                issues.append(_issue(
+                    f"{path}{leaf_path}.type", "not_allowed_here",
+                    f"'{t.label}' cannot be used under 'not'"))
     limit = template.get("time_limit_s")
     limit = 0 if limit is None else limit
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
@@ -772,7 +786,11 @@ def cancel_run(run_id: str) -> bool:
 def on_character_deleted(name: str) -> None:
     """Every not yet ended run that binds ``name`` to a character role turns ``broken`` (``delete_character``
     step 0b; the fast path in front of the tick's reference check)."""
-    from app.models.quests import RUN_OPEN_STATES, list_runs, set_run_state
+    from app.models.quests import RUN_OPEN_STATES, delete_judgements, list_runs, set_run_state
+    try:
+        delete_judgements(mind=name)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("quest engine: deleting judgements for %s failed: %s", name, e)
     changed: List[str] = []
     for run in list_runs(states=RUN_OPEN_STATES):
         roles = (run.get("template_snapshot") or {}).get("roles") or []
@@ -973,22 +991,27 @@ _worker: Optional[threading.Thread] = None
 def _heard(payload: Dict[str, Any]) -> None:
     """A conversation line of a non-avatar (``source == "loop"``) addressed to avatars that heard it: each such
     avatar's MIND has spoken with the speaker's mind. The fact is written whether or not a run is open (a talk before
-    the quest started counts); then the avatar is evaluated."""
+    the quest started counts); then the avatar is evaluated. Every ``utterance.heard`` payload also evaluates each
+    hearing avatar (and the speaker when it is an avatar) with ``utterance.spoken``."""
     from app.core.linked_characters import mind_of
     from app.core.quest_types import FACT_SPOKE_WITH
     from app.models.quests import add_fact
     speaker = payload.get("speaker") or ""
-    if not speaker or payload.get("speaker_is_avatar") or payload.get("source") != "loop":
-        return
-    heard = set(payload.get("avatars") or [])
-    targets = list(dict.fromkeys(a for a in payload.get("addressees") or [] if a in heard and a != speaker))
-    for avatar in targets:
-        try:
-            add_fact(mind_of(avatar), FACT_SPOKE_WITH, mind_of(speaker))
-        except Exception as e:  # noqa: BLE001 - one failed write never costs the other targets their fact
-            logger.warning("quest engine: the spoke_with fact %s -> %s was not written: %s", avatar, speaker, e)
-    for avatar in targets:
-        evaluate(avatar, "utterance.heard")
+    if speaker and not payload.get("speaker_is_avatar") and payload.get("source") == "loop":
+        heard = set(payload.get("avatars") or [])
+        targets = list(dict.fromkeys(a for a in payload.get("addressees") or [] if a in heard and a != speaker))
+        for avatar in targets:
+            try:
+                add_fact(mind_of(avatar), FACT_SPOKE_WITH, mind_of(speaker))
+            except Exception as e:  # noqa: BLE001 - one failed write never costs the other targets their fact
+                logger.warning("quest engine: the spoke_with fact %s -> %s was not written: %s", avatar, speaker, e)
+        for avatar in targets:
+            evaluate(avatar, "utterance.heard")
+    spoken_avatars: List[str] = [a for a in (payload.get("avatars") or []) if isinstance(a, str) and a]
+    if speaker and payload.get("speaker_is_avatar"):
+        spoken_avatars.append(speaker)
+    for avatar in dict.fromkeys(spoken_avatars):
+        evaluate(avatar, "utterance.spoken")
 
 
 def _learned(payload: Dict[str, Any]) -> None:
@@ -1049,6 +1072,13 @@ def _work() -> None:
             logger.exception("quest engine: handling %s failed", event)
         finally:
             _queue.task_done()
+
+
+def notify(event: str, character: str) -> None:
+    """Queue a signal for ``character`` on the quest engine worker (ignores blank character)."""
+    if not isinstance(character, str) or not character.strip():
+        return
+    _enqueue(event, {"character": character})
 
 
 def _enqueue(event: str, payload: Dict[str, Any]) -> None:

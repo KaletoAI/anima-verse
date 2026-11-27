@@ -83,6 +83,9 @@ class QuestType:
     #: True for a type that can only be read once the run has opened (it counts from ``started_game_ts``): it is
     #: refused in a start condition, where a hidden run has not opened yet and the type would stay unavailable.
     needs_open_run: bool = False
+    #: True for a type that is only allowed directly in a step condition, never in a start condition,
+    #: prerequisites or under ``not``.
+    step_only: bool = False
     #: An effect type's apply runs on the effects worker (a later task).
     apply: Callable[[dict, "EffectContext"], list["CreatedObject"]] | None = None
     #: The kind of the first object the effect records, the one a target param resolves to ("" = it records no object).
@@ -173,6 +176,7 @@ def public_descriptor(t: QuestType) -> Dict[str, Any]:
     return {"id": t.id, "kind": t.kind, "label": t.label, "description": t.description,
             "params": [{k: v for k, v in dict(p).items() if not callable(v)} for p in t.params],
             "signals": list(t.signals), "needs_open_run": bool(t.needs_open_run),
+            "step_only": bool(t.step_only),
             "object_kind": t.object_kind,
             "object_kind_when": [[k, v] for k, v in t.object_kind_when]}
 

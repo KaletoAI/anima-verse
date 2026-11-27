@@ -39,6 +39,8 @@ STAT_OPS = (">=", "<=", ">", "<", "=")
 FACT_SPOKE_WITH = "spoke_with"
 #: The fact kind ``found_item`` reads (written by the engine on ``item.discovered``).
 FACT_FOUND = "found"
+#: Maximum length of an ``llm_judgement`` criterion.
+MAX_JUDGEMENT_CRITERION_CHARS = 500
 
 
 def found_subject(location_id: str, room_id: str, item_id: str) -> str:
@@ -376,6 +378,37 @@ def _relationship_at_least(params: dict, ctx: QuestContext) -> ConditionResult:
     return ConditionResult(True, False, f"Relationship to {other} is {strength:g} (needs {need})")
 
 
+def _validate_llm_judgement(params: dict, bindings: dict | None) -> List[ConditionIssue]:
+    criterion = params.get("criterion")
+    if isinstance(criterion, str) and len(criterion) > MAX_JUDGEMENT_CRITERION_CHARS:
+        return [ConditionIssue(
+            "too_long",
+            f"Criterion must be at most {MAX_JUDGEMENT_CRITERION_CHARS} characters",
+        )]
+    return []
+
+
+def _llm_judgement(params: dict, ctx: QuestContext) -> ConditionResult:
+    from app.core import quest_engine, quest_judgement
+    from app.models.quests import get_judgement
+    run = ctx.run or {}
+    criterion = quest_engine.render_text(str(params.get("criterion") or ""), run)
+    run_id = str(run.get("id") or "")
+    if not run_id:
+        return ConditionResult(True, False, "Not judged yet")
+    step = int(run.get("current_step") or 0)
+    key = quest_judgement.criterion_key(criterion)
+    try:
+        row = get_judgement(run_id, step, key, ctx.mind)
+    except Exception as e:  # noqa: BLE001 - a failed read is unavailable
+        return ConditionResult(False, False, f"Judgement unavailable: {e}")
+    if row is not None and row.get("state") == "yes":
+        return ConditionResult(True, True, "")
+    quest_judgement.request(ctx, criterion)
+    reason = (row.get("reason") or "").strip() if row is not None else ""
+    return ConditionResult(True, False, reason or "Not judged yet")
+
+
 def _role(key: str, label: str, kinds: List[str], description: str) -> Dict[str, Any]:
     return {"key": key, "type": "role", "label": label, "description": description,
             "role_kinds": kinds, "required": True}
@@ -454,6 +487,12 @@ def _builtin_types() -> list:
                     {"key": "radius_m", "type": "float", "label": "Radius (m)",
                      "description": "How close in metres", "min": 1, "max": 200, "default": 10}),
             signals=("character.entered_room", "world_tick"), evaluate=_near_object),
+        QuestType(
+            id="llm_judgement", kind="condition", label="The scene shows ...",
+            description="The tool model judges what the avatar said and heard since this step began against a criterion.",
+            params=({"key": "criterion", "type": "text", "label": "What must have happened", "required": True},),
+            signals=("utterance.spoken", "quest.judged"),
+            validate=_validate_llm_judgement, evaluate=_llm_judgement, step_only=True),
         QuestType(
             id="relationship_at_least", kind="prerequisite", label="Relationship at least",
             description="The avatar's relationship strength to the bound character is at least the value (0-100).",
