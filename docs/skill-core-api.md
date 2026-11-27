@@ -1542,8 +1542,9 @@ before it is submitted and at the worker. While the world is frozen or the task
 queue is paused (`engine.automatic_pass_held`, shown in the queue panel as
 `validity_held`) the automatic deleting of a NOT forced entry is held like every
 hygiene job: the tick's validity pass skips it, and its standing rescan only ADDS
-(`scan(add_only=True)` — new candidates, reopened fulfilled ones; nothing judged,
-closed or deleted, `last_scan_at` left at the last full scan). Its full rescan and
+(`app.core.improvements.engine.scan(improvement_id, add_only=True)` — new
+candidates, reopened fulfilled ones; nothing judged, closed or deleted,
+`last_scan_at` left at the last full scan). Its full rescan and
 validity pass are due on the first tick after. A forced (**Run now**) entry runs
 under a freeze or pause by design, so its rescans and validity passes go on. Explicit
 work is not held either: **Remove invalid**, the scan of a new or rescanned entry and
