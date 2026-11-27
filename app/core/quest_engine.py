@@ -144,6 +144,11 @@ def _player_texts(template: dict) -> List[Tuple[str, Any]]:
     for i, step in enumerate(_steps(template)):
         if isinstance(step, dict):
             out += [(f"steps.{i}.text", step.get("text")), (f"steps.{i}.hint", step.get("hint"))]
+            rnotes = step.get("role_notes")
+            if isinstance(rnotes, list):
+                for j, note in enumerate(rnotes):
+                    if isinstance(note, dict):
+                        out.append((f"steps.{i}.role_notes.{j}.text", note.get("text")))
     out.append(("prerequisites.locked_text", _prerequisites(template).get("locked_text")))
     positions = effect_positions(template)
     if positions:
@@ -337,6 +342,8 @@ def _expressions(template: dict) -> List[Tuple[str, Any, Tuple[str, ...], str]]:
 
 #: The largest `time_limit_s` SQLite can store (a signed 64-bit integer).
 MAX_TIME_LIMIT_S = 2 ** 63 - 1
+#: Maximum length of one step role note text.
+MAX_ROLE_NOTE_CHARS = 500
 
 
 def check_template_fields(body: Dict[str, Any]) -> Optional[str]:
@@ -417,6 +424,29 @@ def validate_template(template: dict) -> list[dict]:
         cond = step.get("condition")
         if not isinstance(cond, dict) or not cond:
             issues.append(_issue(f"steps.{i}.condition", "required", "A step needs a condition"))
+        if "role_notes" in step and step["role_notes"] is not None:
+            rnotes = step["role_notes"]
+            if not isinstance(rnotes, list):
+                issues.append(_issue(f"steps.{i}.role_notes", "shape", "'role_notes' must be a list"))
+            else:
+                for j, note in enumerate(rnotes):
+                    if not isinstance(note, dict):
+                        issues.append(_issue(f"steps.{i}.role_notes.{j}", "shape", "A role note must be an object"))
+                        continue
+                    rkey = note.get("role")
+                    if not isinstance(rkey, str) or role_kinds.get(rkey) != "character":
+                        issues.append(_issue(
+                            f"steps.{i}.role_notes.{j}.role", "unknown_role",
+                            f"Role '{rkey or ''}' is not a character role of this quest",
+                        ))
+                    ntext = note.get("text")
+                    if _blank(ntext):
+                        issues.append(_issue(f"steps.{i}.role_notes.{j}.text", "required", "A role note needs a text"))
+                    elif len(ntext) > MAX_ROLE_NOTE_CHARS:
+                        issues.append(_issue(
+                            f"steps.{i}.role_notes.{j}.text", "too_long",
+                            f"A role note is at most {MAX_ROLE_NOTE_CHARS} characters",
+                        ))
     for path, text in _player_texts(template):
         if not isinstance(text, str):
             continue

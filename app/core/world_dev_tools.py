@@ -7665,7 +7665,8 @@ def _quest_issue_blocks(issue: Dict[str, str]) -> bool:
        "create_quest_template{title, summary?, gm_notes?, giver_role?, roles?, steps?, "
        "start_condition?, prerequisites?, setup_effects?, rewards?, time_limit_s?}",
        "a DRAFT quest template (roles instead of fixed characters/places, steps as catalog "
-       "conditions, setup_effects / steps[].on_done / rewards as effect lists — list_catalog "
+       "conditions with optional role_notes [{role, text}] for per-step NPC prompt lines, "
+       "setup_effects / steps[].on_done / rewards as effect lists — list_catalog "
        "quest_types / quest_roles); the admin readies it")
 def _create_quest_template(step: _Step, args: Dict[str, Any]) -> str:
     """Plan p3 Task 7 (E9) + quest stage 2 Task 13. One draft template through

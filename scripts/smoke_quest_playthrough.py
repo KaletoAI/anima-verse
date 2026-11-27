@@ -119,6 +119,33 @@ WHAT FOLLOWS BY HAND (PART 2)
       run 2's rock placement + prop, box item + glade placement, and hint secret all gone ("reverted");
       run 2's permanent marker prop + glade placement stay ("live") and sidecar has no "quest_run";
       no reward paid for run 2 (A2 still holds 1 charm total).
+
+PART 3 — Conversation quest ("A mug for the guard") under a FROZEN game clock (world_frozen=True,
+game_time stays Y0001-D010T12:00:00 throughout), exercising spoke_with since_step (system-time
+ordering), give_item, take_item, and step role_notes end to end over the REAL routes.
+
+FIXTURE (PART 3)
+    Avatar A (moved back to L1/r1), NPC N (host, in L1/r1), NPC W (guard, in L1/r1), stackable item
+    "Ale" (nobody holds it). Before the quest starts, N and W each speak to A (record_utterance
+    source="loop" -> both spoke_with facts already exist in quest_facts).
+    Template: roles host (character), guard (character), ale (item); giver_role "host".
+    - Step 0 "Ask {host} for the ale.": spoke_with(host, since_step=True); on_done [give_item(ale)];
+      role_notes [{role: "host", text: "Hand the adventurer a jug of ale for {guard}."}].
+    - Step 1 "Bring the ale to {guard}.": all[spoke_with(guard, since_step=True), holds_item(ale, 1)];
+      on_done [take_item(ale, to="guard")]; role_notes [{role: "guard", text: "You are waiting for your ale."}].
+
+WHAT FOLLOWS BY HAND (PART 3)
+ 1. Start -> state "open", current_step 0 (pre-start talks do NOT fulfil since_step=True).
+    lines_for("N") contains 'Quest "A mug for the guard": Hand the adventurer a jug of ale for W.';
+    lines_for("W") == [].
+ 2. W speaks to A -> current_step stays 0.
+ 3. N speaks to A -> step 0 done, current_step 1, state "open"; pass_once() -> A holds 1 Ale.
+    Step 1 is NOT fulfilled yet (W's talk happened before step 1 started).
+    lines_for("N") no longer contains the host role note;
+    lines_for("W") == ['Quest "A mug for the guard": You are waiting for your ale.'].
+ 4. W speaks to A -> run state "done"; pass_once() -> A holds 0 Ale, W holds 1 Ale.
+ 5. GET /play/quests as player -> 200; neither "role_notes" nor "step_started_at" appears in resp.text.
+ 6. Game clock stayed frozen at Y0001-D010T12:00:00 throughout PART 3.
 """
 import json
 import os
@@ -644,6 +671,122 @@ def main() -> int:
             qfx._prop_has_model = orig_has_model
             qfx._prop_media_problem = orig_media_problem
             item_images.generate_item_image_sync = orig_item_gen
+
+        # ══════════════════════════════════════════════════════════════════════════════════════════
+        # PART 3 — Conversation quest (since_step, take_item, role_notes) under frozen game time
+        # ══════════════════════════════════════════════════════════════════════════════════════════
+        import time
+        from app.core.timeutils import game_time
+
+        print("[P3.1] fixture and pre-start talks under frozen game clock")
+        t3_start_game = game_time().canonical()
+        check("p3 world is frozen", world.is_world_frozen(), True)
+        chars.save_character_current_room("A", "r1")
+        assert chars.save_character_profile(
+            "W", {"current_location": "L1", "current_room": "r1", "language": "en"}, create_new=True
+        ), "W"
+        ale_id = inventory.add_item("Ale", stackable=True, max_stack=20)["id"]
+        record_utterance(speaker="N", content="Good day, traveler.", location_id="L1", room_id="r1",
+                         addressees=["A"], source="loop")
+        record_utterance(speaker="W", content="Move along.", location_id="L1", room_id="r1",
+                         addressees=["A"], source="loop")
+        check("p3 drain pre-start talks", quest_engine.drain(), True)
+        check("p3 pre-start facts exist",
+              (quests_mod.has_fact("A", "spoke_with", "N"), quests_mod.has_fact("A", "spoke_with", "W")),
+              (True, True))
+
+        tpl3_body = {
+            "title": "A mug for the guard",
+            "summary": "Fetch ale from {host} for {guard}.",
+            "giver_role": "host",
+            "roles": [
+                {"key": "host", "kind": "character", "description": "The innkeeper"},
+                {"key": "guard", "kind": "character", "description": "The thirsty guard"},
+                {"key": "ale", "kind": "item", "description": "A jug of ale"},
+            ],
+            "steps": [
+                {
+                    "id": "s1",
+                    "text": "Ask {host} for the ale.",
+                    "hint": "",
+                    "condition": {"type": "spoke_with", "params": {"character": "host", "since_step": True}},
+                    "on_done": [{"key": "pour", "type": "give_item", "params": {"item": "ale"}}],
+                    "role_notes": [{"role": "host", "text": "Hand the adventurer a jug of ale for {guard}."}],
+                },
+                {
+                    "id": "s2",
+                    "text": "Bring the ale to {guard}.",
+                    "hint": "",
+                    "condition": {"all": [
+                        {"type": "spoke_with", "params": {"character": "guard", "since_step": True}},
+                        {"type": "holds_item", "params": {"item": "ale", "count": 1}},
+                    ]},
+                    "on_done": [{"key": "hand", "type": "take_item", "params": {"item": "ale", "to": "guard"}}],
+                    "role_notes": [{"role": "guard", "text": "You are waiting for your ale."}],
+                },
+            ],
+            "start_condition": {},
+            "prerequisites": {},
+            "time_limit_s": 0,
+        }
+        resp = call("POST", "/quests/templates", tpl3_body)
+        check("p3 POST 200", resp.status_code, 200)
+        tpl3 = resp.json() if resp.status_code == 200 else {}
+        resp = call("PUT", f"/quests/templates/{tpl3.get('id')}", {"state": "ready", "base_revision": 1})
+        check("p3 PUT ready 200", resp.status_code, 200)
+        time.sleep(0.002)
+        bindings3 = {"host": {"name": "N"}, "guard": {"name": "W"}, "ale": {"item_id": ale_id}}
+        resp = call("POST", f"/quests/templates/{tpl3.get('id')}/start", {"bindings": bindings3})
+        check("p3 start 200", resp.status_code, 200)
+        run3 = resp.json() if resp.status_code == 200 else {}
+        rid3_talk = run3.get("id")
+        check("p3 open at step 0 (old talks do not count)",
+              (run3.get("state"), run3.get("current_step")), ("open", 0))
+        host_note = 'Quest "A mug for the guard": Hand the adventurer a jug of ale for W.'
+        guard_note = 'Quest "A mug for the guard": You are waiting for your ale.'
+        check("p3 N lines contain host note", host_note in qp.lines_for("N"), True)
+        check("p3 W lines empty on step 0", qp.lines_for("W"), [])
+
+        print("[P3.2] W talks to A -> step 0 stays current")
+        time.sleep(0.002)
+        record_utterance(speaker="W", content="Still waiting.", location_id="L1", room_id="r1",
+                         addressees=["A"], source="loop")
+        check("p3 drain W talk", quest_engine.drain(), True)
+        check("p3 current_step still 0", quests_mod.get_run(rid3_talk)["current_step"], 0)
+
+        print("[P3.3] N talks to A -> step 0 done, A gets Ale, step 1 still open")
+        time.sleep(0.002)
+        record_utterance(speaker="N", content="Here is the ale for the guard.", location_id="L1", room_id="r1",
+                         addressees=["A"], source="loop")
+        check("p3 drain N talk", quest_engine.drain(), True)
+        r3_mid = quests_mod.get_run(rid3_talk)
+        check("p3 step 0 done, current_step 1, open", (r3_mid["state"], r3_mid["current_step"]), ("open", 1))
+        qfx.pass_once()
+        check("p3 A holds 1 Ale", inventory.get_item_quantity("A", ale_id), 1)
+        check("p3 drain after give_item", quest_engine.drain(), True)
+        check("p3 step 1 still open (W talked before step 1)",
+              (quests_mod.get_run(rid3_talk)["state"], quests_mod.get_run(rid3_talk)["current_step"]),
+              ("open", 1))
+        check("p3 N no longer sees host note", host_note in qp.lines_for("N"), False)
+        check("p3 W sees guard note", qp.lines_for("W"), [guard_note])
+
+        print("[P3.4] W talks to A -> done, take_item transfers Ale to W")
+        time.sleep(0.002)
+        record_utterance(speaker="W", content="Thanks for the ale!", location_id="L1", room_id="r1",
+                         addressees=["A"], source="loop")
+        check("p3 drain W final talk", quest_engine.drain(), True)
+        check("p3 run done", quests_mod.get_run(rid3_talk)["state"], "done")
+        qfx.pass_once()
+        check("p3 A has 0 Ale, W has 1 Ale",
+              (inventory.get_item_quantity("A", ale_id), inventory.get_item_quantity("W", ale_id)),
+              (0, 1))
+
+        print("[P3.5] player quest book leaks neither role_notes nor step_started_at")
+        resp_book3 = call("GET", "/play/quests", role="player")
+        check("p3 GET /play/quests 200", resp_book3.status_code, 200)
+        check("p3 no role_notes in response text", "role_notes" in resp_book3.text, False)
+        check("p3 no step_started_at in response text", "step_started_at" in resp_book3.text, False)
+        check("p3 game clock stayed frozen throughout PART 3", game_time().canonical(), t3_start_game)
 
     quest_engine.drain()
     if FAILURES:

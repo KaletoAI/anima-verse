@@ -1,8 +1,10 @@
-"""Per-turn quest prompt block for quest givers and hint holders (D15).
+"""Per-turn quest prompt block for quest givers, step role notes, and hint holders (D15).
 
 Builds at most ``MAX_LINES`` short English lines for a character:
 - one per live quest run (``hidden`` or ``open``) in which the character is
   bound to the template's ``giver_role``;
+- one per ``role_notes`` entry on the current step of an ``open`` run whose
+  role is bound to the character;
 - one per ``live`` quest hint secret owned by the character's mind in an
   ``open`` run (never a ``hidden`` run, so hidden runs never leak secret ids).
 
@@ -17,7 +19,7 @@ from app.core.log import get_logger
 
 logger = get_logger(__name__)
 
-MAX_LINES = 3
+MAX_LINES = 4
 
 
 def lines_for(character_name: str) -> list[str]:
@@ -74,7 +76,37 @@ def lines_for(character_name: str) -> list[str]:
             if len(lines) >= MAX_LINES:
                 return lines[:MAX_LINES]
 
-        # Hint lines after all giver lines (open runs only)
+        # Role note lines for the current step (open runs only)
+        for run in runs:
+            if run.get("state") != "open":
+                continue
+            snap = run.get("template_snapshot") or {}
+            steps = snap.get("steps")
+            i = run.get("current_step")
+            if not (isinstance(steps, list) and isinstance(i, int)
+                    and not isinstance(i, bool) and 0 <= i < len(steps)
+                    and isinstance(steps[i], dict)):
+                continue
+            rnotes = steps[i].get("role_notes")
+            if not isinstance(rnotes, list) or not rnotes:
+                continue
+            bindings = run.get("bindings") or {}
+            title = quest_engine.render_text(snap.get("title") or "", run).strip()
+            for note in rnotes:
+                if not isinstance(note, dict):
+                    continue
+                role_key = note.get("role") or ""
+                b = bindings.get(role_key) if isinstance(role_key, str) else None
+                if not (isinstance(b, dict) and b.get("name") == character_name):
+                    continue
+                text = quest_engine.render_text(note.get("text") or "", run).strip()
+                if not text:
+                    continue
+                lines.append(f'Quest "{title}": {text}')
+                if len(lines) >= MAX_LINES:
+                    return lines[:MAX_LINES]
+
+        # Hint lines after all giver and role note lines (open runs only)
         mind = mind_of(character_name)
         for run in runs:
             if run.get("state") != "open":

@@ -1139,10 +1139,51 @@ def main() -> int:
     section("[29]", "item.discovered in SIGNALS")
     check("item.discovered in SIGNALS", "item.discovered" in qe.SIGNALS, True)
 
+    # 30 ---------------------------------------------------------------------------------------
+    section("[30]", "role_notes validation")
+    rn_ok = {**ERRAND, "steps": [
+        {**ERRAND["steps"][0], "role_notes": [{"role": "giver", "text": "Mention {place} and {thing}."}]}
+    ]}
+    check("valid role_notes -> []", qe.validate_template(rn_ok), [])
+    rn_not_list = {**ERRAND, "steps": [{**ERRAND["steps"][0], "role_notes": "oops"}]}
+    check("role_notes not list -> shape",
+          [(i["path"], i["code"]) for i in qe.validate_template(rn_not_list)],
+          [("steps.0.role_notes", "shape")])
+    rn_unknown = {**ERRAND, "steps": [
+        {**ERRAND["steps"][0], "role_notes": [{"role": "ghost", "text": "Hi"}]}
+    ]}
+    check("unknown role -> unknown_role",
+          [(i["path"], i["code"]) for i in qe.validate_template(rn_unknown)],
+          [("steps.0.role_notes.0.role", "unknown_role")])
+    rn_place = {**ERRAND, "steps": [
+        {**ERRAND["steps"][0], "role_notes": [{"role": "place", "text": "Hi"}]}
+    ]}
+    check("room role -> unknown_role",
+          [(i["path"], i["code"]) for i in qe.validate_template(rn_place)],
+          [("steps.0.role_notes.0.role", "unknown_role")])
+    rn_blank = {**ERRAND, "steps": [
+        {**ERRAND["steps"][0], "role_notes": [{"role": "giver", "text": "   "}]}
+    ]}
+    check("blank text -> required",
+          [(i["path"], i["code"]) for i in qe.validate_template(rn_blank)],
+          [("steps.0.role_notes.0.text", "required")])
+    rn_long = {**ERRAND, "steps": [
+        {**ERRAND["steps"][0], "role_notes": [{"role": "giver", "text": "x" * 501}]}
+    ]}
+    check("text > 500 -> too_long",
+          [(i["path"], i["code"]) for i in qe.validate_template(rn_long)],
+          [("steps.0.role_notes.0.text", "too_long")])
+    rn_bad_ph = {**ERRAND, "steps": [
+        {**ERRAND["steps"][0], "role_notes": [{"role": "giver", "text": "Ask {nobody}."}]}
+    ]}
+    check("unknown placeholder -> unknown_role",
+          [(i["path"], i["code"]) for i in qe.validate_template(rn_bad_ph)],
+          [("steps.0.role_notes.0.text", "unknown_role")])
+
     if FAILURES:
         print(f"FAIL smoke_quest_engine: {len(FAILURES)} failed: {FAILURES}")
         return 1
-    print("PASS smoke_quest_engine: [1]-[29]")
+    print("PASS smoke_quest_engine: [1]-[30]")
     return 0
 
 

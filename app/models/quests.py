@@ -238,20 +238,23 @@ def create_run(*, template: dict, bindings: dict, state: str, started_by: str = 
     if has_setup:
         run_state = "preparing"
         started = ""
+        step_started = ""
         run_expires = ""
     else:
         run_state = state
         started = game_time().canonical() if state == "open" else ""
+        step_started = utc_now_iso(timespec="microseconds") if state == "open" else ""
         run_expires = expires_at or ""
     with keyed_lock("quest_run", run_id), transaction() as conn:
         conn.execute(
             "INSERT INTO quest_runs (id, template_id, state, bindings, "
             "binding_labels, template_snapshot, started_by, started_game_ts, "
-            "expires_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "step_started_at, expires_at, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (run_id, str(snapshot.get("id") or ""), run_state,
              _dump(_container(bindings, dict)),
              _dump(_container(binding_labels, dict)), _dump(snapshot), started_by or "",
-             started, run_expires, now, now))
+             started, step_started, run_expires, now, now))
         if has_setup:
             conn.execute(
                 "INSERT INTO quest_run_payouts (run_id, position, avatar, state, "
@@ -308,11 +311,12 @@ def count_runs(states: tuple[str, ...], *, template_id: str = "") -> int:
 
 def open_run(run_id: str, *, started_game_ts: str, expires_at: str = "") -> bool:
     """``hidden`` → ``open`` with the given stamps; any other state is refused."""
+    step_started = utc_now_iso(timespec="microseconds")
     with keyed_lock("quest_run", run_id), transaction() as conn:
         cur = conn.execute(
-            "UPDATE quest_runs SET state='open', started_game_ts=?, expires_at=?, "
-            "updated_at=? WHERE id=? AND state='hidden'",
-            (started_game_ts, expires_at or "", utc_now_iso(), run_id))
+            "UPDATE quest_runs SET state='open', started_game_ts=?, step_started_at=?, "
+            "expires_at=?, updated_at=? WHERE id=? AND state='hidden'",
+            (started_game_ts, step_started, expires_at or "", utc_now_iso(), run_id))
         return cur.rowcount > 0
 
 
@@ -325,11 +329,12 @@ def finish_preparing(run_id: str, *, to_state: str, started_game_ts: str,
     """
     if to_state not in ("hidden", "open"):
         raise ValueError(f"finish_preparing target must be 'hidden' or 'open', got {to_state!r}")
+    step_started = utc_now_iso(timespec="microseconds") if to_state == "open" else ""
     with keyed_lock("quest_run", run_id), transaction() as conn:
         cur = conn.execute(
-            "UPDATE quest_runs SET state=?, started_game_ts=?, expires_at=?, "
-            "updated_at=? WHERE id=? AND state='preparing'",
-            (to_state, started_game_ts, expires_at, utc_now_iso(), run_id))
+            "UPDATE quest_runs SET state=?, started_game_ts=?, step_started_at=?, "
+            "expires_at=?, updated_at=? WHERE id=? AND state='preparing'",
+            (to_state, started_game_ts, step_started, expires_at, utc_now_iso(), run_id))
         return cur.rowcount > 0
 
 
@@ -412,18 +417,19 @@ def record_step_done(run_id: str, step_index: int, *, avatar: str,
         steps = run["template_snapshot"].get("steps")
         total = len(steps) if isinstance(steps, list) else 0
         now = utc_now_iso()
+        step_started = utc_now_iso(timespec="microseconds")
         is_last = idx + 1 >= total
         if is_last:
             cur = conn.execute(
                 "UPDATE quest_runs SET step_log=?, current_step=?, state='done', "
-                "ended_game_ts=?, ended_at=?, updated_at=? "
+                "step_started_at=?, ended_game_ts=?, ended_at=?, updated_at=? "
                 "WHERE id=? AND state='open' AND current_step=?",
-                (_dump(log), idx + 1, game_stamp, now, now, run_id, idx))
+                (_dump(log), idx + 1, step_started, game_stamp, now, now, run_id, idx))
         else:
             cur = conn.execute(
-                "UPDATE quest_runs SET step_log=?, current_step=?, updated_at=? "
-                "WHERE id=? AND state='open' AND current_step=?",
-                (_dump(log), idx + 1, now, run_id, idx))
+                "UPDATE quest_runs SET step_log=?, current_step=?, step_started_at=?, "
+                "updated_at=? WHERE id=? AND state='open' AND current_step=?",
+                (_dump(log), idx + 1, step_started, now, run_id, idx))
         if cur.rowcount == 0:
             return None
         if isinstance(steps, list) and 0 <= idx < len(steps):
@@ -464,19 +470,42 @@ def expire_runs(now_canonical: str) -> list[str]:
 # ── Facts ────────────────────────────────────────────────────────────────
 
 def add_fact(mind: str, kind: str, subject: str) -> bool:
-    """Record a fact once; True only when it was newly written."""
+    """Record a fact; True only when it was newly written.
+
+    On a repeat call for the same ``(mind, kind, subject)``, updates
+    ``last_at`` to the current UTC system time (microseconds) in the same
+    transaction and returns False.
+    """
+    gts = game_time().canonical()
+    now = utc_now_iso()
+    now_us = utc_now_iso(timespec="microseconds")
     with transaction() as conn:
         cur = conn.execute(
             "INSERT OR IGNORE INTO quest_facts (mind, kind, subject, game_ts, "
-            "created_at) VALUES (?,?,?,?,?)",
-            (mind, kind, subject, game_time().canonical(), utc_now_iso()))
-        return cur.rowcount > 0
+            "last_at, created_at) VALUES (?,?,?,?,?,?)",
+            (mind, kind, subject, gts, now_us, now))
+        if cur.rowcount > 0:
+            return True
+        conn.execute(
+            "UPDATE quest_facts SET last_at=? WHERE mind=? AND kind=? AND subject=?",
+            (now_us, mind, kind, subject))
+        return False
 
 
 def has_fact(mind: str, kind: str, subject: str) -> bool:
     return get_connection().execute(
         "SELECT 1 FROM quest_facts WHERE mind=? AND kind=? AND subject=?",
         (mind, kind, subject)).fetchone() is not None
+
+
+def fact_last_at(mind: str, kind: str, subject: str) -> str:
+    """UTC system timestamp (microseconds) when this fact was last recorded, or ``""`` when absent."""
+    row = get_connection().execute(
+        "SELECT last_at, created_at FROM quest_facts WHERE mind=? AND kind=? AND subject=?",
+        (mind, kind, subject)).fetchone()
+    if row is None:
+        return ""
+    return str(row[0] or row[1] or "")
 
 
 def delete_facts_about(name: str) -> int:

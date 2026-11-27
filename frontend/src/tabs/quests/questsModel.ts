@@ -12,7 +12,8 @@ export interface Role { key: string; kind: RoleKind; description: string }
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- `{}` IS the "always true" expression (D7)
 export type Expr = {} | { type: string; params: Record<string, unknown> } | { all: Expr[] } | { any: Expr[] } | { not: Expr }
 export interface EffectEntry { key: string; type: string; params: Record<string, unknown>; permanent: boolean }
-export interface Step { id: string; text: string; hint: string; condition: Expr; on_done: EffectEntry[] }
+export interface RoleNote { role: string; text: string }
+export interface Step { id: string; text: string; hint: string; condition: Expr; on_done: EffectEntry[]; role_notes: RoleNote[] }
 export interface TemplateDraft {
   id: string; revision: number; title: string; summary: string; gm_notes: string
   giver_role: string
@@ -92,6 +93,14 @@ function readEffects(raw: unknown): EffectEntry[] {
   })
 }
 
+function readRoleNotes(raw: unknown): RoleNote[] {
+  if (!Array.isArray(raw)) return []
+  return raw.map((entry) => {
+    if (!isObject(entry)) return { role: '', text: '' }
+    return { role: str(entry.role), text: str(entry.text) }
+  })
+}
+
 function writeEffect(e: EffectEntry): Record<string, unknown> {
   const out: Record<string, unknown> = { key: e.key, type: e.type, params: copyParams(e.params) }
   if (e.permanent === true) out.permanent = true
@@ -127,6 +136,7 @@ export function rowToDraft(row: unknown): TemplateDraft {
         hint: str(o.hint),
         condition: copyExpr(o.condition),
         on_done: readEffects(o.on_done),
+        role_notes: readRoleNotes(o.role_notes),
       }
     }),
     rewards: readEffects(r.rewards),
@@ -151,6 +161,7 @@ export function draftToRow(d: TemplateDraft): Record<string, unknown> {
     steps: d.steps.map((s) => {
       const step: Record<string, unknown> = { id: s.id, text: s.text, hint: s.hint, condition: copyExpr(s.condition) }
       if (s.on_done.length > 0) step.on_done = s.on_done.map(writeEffect)
+      if (s.role_notes.length > 0) step.role_notes = s.role_notes.map((n) => ({ role: n.role, text: n.text }))
       return step
     }),
     rewards: d.rewards.map(writeEffect),
