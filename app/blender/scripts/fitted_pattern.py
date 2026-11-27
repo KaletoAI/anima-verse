@@ -164,6 +164,35 @@ def boxers(kind, f):
     return kind == "briefs" and float(f.get("leg_length_m") or 0.0) > 0
 
 
+def cup_top_line(style, apex_z, zc, lift, clear_m, seam_min_m):
+    """Keep a straight cup top's lifted rim clear of the tip collider and omit a balconette's horizontal cup seam when
+    it would sit on (or less than ``seam_min_m`` below) the top edge and cut sliver islands.
+
+    For ``style`` in ("balconette", "bandeau"): if the lifted rim ``zc + lift - apex_z`` lands in ``(0, clear_m)``,
+    raise ``zc`` to ``apex_z - lift + clear_m`` (``raise_m = new_zc - zc``); otherwise leave ``zc`` unchanged
+    (``raise_m = 0.0``). Other styles are never raised.
+    ``seam_z`` is ``apex_z`` only for "balconette" when ``new_zc - apex_z >= seam_min_m``, else ``None``.
+
+    Returns ``(zc, seam_z | None, raise_m)``.
+    """
+    apex_z, zc, lift, clear_m, seam_min_m = (
+        float(apex_z), float(zc), float(lift), float(clear_m), float(seam_min_m)
+    )
+    if style in ("balconette", "bandeau"):
+        rim = zc + lift - apex_z
+        if 0.0 < rim < clear_m:
+            new_zc = apex_z - lift + clear_m
+            raise_m = new_zc - zc
+        else:
+            new_zc = zc
+            raise_m = 0.0
+    else:
+        new_zc = zc
+        raise_m = 0.0
+    seam_z = apex_z if (style == "balconette" and new_zc - apex_z >= seam_min_m) else None
+    return new_zc, seam_z, raise_m
+
+
 def seam_planes(kind, f, joints, info):
     """The seam planes of a fitted piece: [(point, normal, side | None, region tag | None)] — ``build_fitted``
     bisects each (``clear_outer`` False) on the geometry of its side (x - cx has that sign) and region (``in_region``)
@@ -237,7 +266,9 @@ def seam_planes(kind, f, joints, info):
                 out.append((np.array([cx + s * gh, cy, 0.0]), X.copy(), s, "front"))
             if f["style"] == "balconette":
                 for s, key in ((1, "l"), (-1, "r")):
-                    hz(float(info["apex"][key][2]), s, "front")
+                    sz = info["cup_seam_z"][key]
+                    if sz is not None:
+                        hz(float(sz), s, "front")
     elif kind == "gloves":
         for s in (1, -1):
             for tag, p, n in _arm_planes(joints, s, info.get("arm_centres", {}).get(str(s))):
@@ -310,7 +341,7 @@ def parts(kind, f, c, joints, info, pre=None):
       ``GUSSET_RISE_M`` over it — across the whole crotch: its sides are the leg openings, so no strip beside it is cut
       off) > waistband > hip band (``sides`` string, past the panel corners) > front / back (y against cy);
     * tights: (full tights) waistband > gusset; (the others) top band; then leg_l / leg_r;
-    * bra: cups (balconette: cup / cup_top at the apex height) > gore > straps > band halves; a bandeau: straps >
+    * bra: cups (balconette: cup / cup_top at the cup seam height ``cup_seam_z``) > gore > straps > band halves; a bandeau: straps >
       front / back;
     * gloves: cuff > thumb (past Thumb2) > back of the hand (dorsal side of the region's plane) / palm."""
     c = np.asarray(c, float)
@@ -385,8 +416,10 @@ def parts(kind, f, c, joints, info, pre=None):
         if f["style"] == "bandeau":
             return out
         if f["style"] == "balconette":
-            apex_z = np.where(left, float(info["apex"]["l"][2]), float(info["apex"]["r"][2]))
-            up = cups & (c[:, 2] > apex_z)
+            sz = info["cup_seam_z"]
+            seam_z = np.where(left, float(sz["l"]) if sz["l"] is not None else np.inf,
+                              float(sz["r"]) if sz["r"] is not None else np.inf)
+            up = cups & (c[:, 2] > seam_z)
             out[up] = lr("cup_top", up)
         return out
     if kind == "gloves":

@@ -47,7 +47,8 @@ Hand-derived expectations (the synthetic measure ``M``: waist_y 1.05, hip_y 0.90
           -0.067;
      [C4] length 0.60 -> 0.845 under the waist 0.95 -> hem 0.950, band 0.090, hem_clamped 0.95 - 0.845 = +0.105;
      [C5b] on M itself: length 0.455 -> min(max(0.99, 1.05), 1.028) = 1.028, band 0.012 (never a negative band);
-     [C5] a bra's fitted spec on M is the dict it was at d0bae1f34 (``git archive``, a subprocess; no hem_y, no top);
+     [C5] a bra's fitted spec on M is the dict it was at d0bae1f34 plus ``tip_clear_m`` 0.012 and ``top_seam_min_m``
+          0.003 (``git archive``, a subprocess; no hem_y, no top);
      [C6] the drawing of [C1] (``garment_preview._bra``) on MC with a breast fold at 1.06 (``bra_fold``: the
           drawing raises the underbust line to it, as the builder does): the band's fill still reaches down to the
           ABSOLUTE hem_y 0.99 (px y (2 - 0.99) x 1000 = 1010), not fold - band = 1.01 — the lowest point of the band.
@@ -317,8 +318,15 @@ else:
         if r.returncode != 0:
             raise RuntimeError(r.stderr[-1500:])
         return r.stdout.strip().splitlines()[-1]
-    check(f"[C5] three bras' fitted specs on M as at {_OLD}",
-          _specs(Path(__file__).resolve().parent.parent) == _specs(_d / "old"))
+    _new_specs = _json.loads(_specs(Path(__file__).resolve().parent.parent))
+    _old_specs = _json.loads(_specs(_d / "old"))
+    _tip_ok = all(s["fitted"].get("tip_clear_m") == gt.CUP_TIP_CLEAR_M
+                  and s["fitted"].get("top_seam_min_m") == gt.CUP_TOP_SEAM_MIN_M for s in _new_specs)
+    for _s in _new_specs:
+        _s["fitted"].pop("tip_clear_m", None)
+        _s["fitted"].pop("top_seam_min_m", None)
+    check(f"[C5] three bras' fitted specs on M carry tip_clear_m / top_seam_min_m and otherwise match {_OLD}",
+          _tip_ok and _new_specs == _old_specs)
 # [C6] the drawing reaches the hem
 MC6 = {**MC, "bra_fold": [1.06]}
 fills6 = [s for s in gp.shapes(cupped(0.455), MC6, Reg())["shapes"] if s["kind"] == "fill" and s["role"] == "band"]

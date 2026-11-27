@@ -85,9 +85,11 @@ FITTED_PATTERN_FILE = UV_PATTERN_FILE.parent / "fitted_pattern.py"
 #: The fitted kinds' part rules (step 3a) PER FITTED KIND, in the cut key of that kind only: the md5[:12] of the
 #: ``fitted_pattern.py`` that last changed the kind's islands — a bra or trouser rule never re-cuts the gloves. Same
 #: guard as ``UV_PATTERN_KEYS`` (``FITTED_PATTERN_REVIEWED``); all started at the md5 at ac232ef4d (no key moved).
+#: The balconette cup-seam change is scoped by ``CUP_TIP_VERSION`` (``cup_tip``), so molded and triangle bras keep their
+#: cut keys without changing ``FITTED_PATTERN_KEYS["bra"]``.
 FITTED_PATTERN_KEYS: Dict[str, str] = {"briefs": "7c6512ca8e33", "bra": "7c6512ca8e33", "gloves": "7c6512ca8e33",
                                        "tights": "7c6512ca8e33", "trousers": "7c6512ca8e33"}
-FITTED_PATTERN_REVIEWED = "7c6512ca8e33"
+FITTED_PATTERN_REVIEWED = "480c7ee63483"
 
 
 def file_sha(path: Path) -> str:
@@ -191,6 +193,9 @@ def cut_sig(params: Dict[str, Any], *, base_sha: str, lower: List[str]) -> str:
     if gt.build_kind(params) == "bra" and gt.BRA_EDGE_VERSION:
         # round 2026-11-25: a bra's straight band top and smoothed edges move its islands (``BRA_EDGE_VERSION``)
         payload["bra_edges"] = gt.BRA_EDGE_VERSION
+    if gt.straight_cup_top(params) and gt.CUP_TIP_VERSION:
+        # straight cup top clearance and balconette cup seam (``CUP_TIP_VERSION``)
+        payload["cup_tip"] = gt.CUP_TIP_VERSION
     return hashlib.md5(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
 
 

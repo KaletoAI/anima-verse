@@ -162,6 +162,13 @@ CORSET_STRAPS_VERSION = 1
 #: (``garment_template_fitted.stitch_strip_end``) — one piece with the cups and the band — and moves with the cup's
 #: push-up, the draw toward the middle included, fading out along it.
 BRA_EDGE_VERSION = 4
+#: A straight cup top's lifted rim that would end 0..this far over the apex is raised to this clearance, so it never
+#: hangs on the tip collider.
+CUP_TIP_CLEAR_M = 0.012
+#: The balconette's horizontal cup seam is cut at the apex only when the top edge lies at least this far over it.
+CUP_TOP_SEAM_MIN_M = 0.003
+#: Part of the drape AND cut key of a ``straight_cup_top`` piece only (balconette / bandeau).
+CUP_TIP_VERSION = 1
 #: Round 2026-11-25 (Kai's jeans: an outward dome over the upper calf under a pinch ring in the knee hollow): a widened
 #: trouser leg (``knee_piece``: every leg shape but skinny) bridges the knee hollow from the lower thigh to the calf's
 #: widest point and falls straight to the hem (``garment_template_fitted.knee_bridge``), after the pattern UVs. Part of
@@ -575,6 +582,12 @@ def build_kind(params: Dict[str, Any]) -> str:
     kind. Every build decision (fitted or bodice / corset / panel, poses, shape groups, keys, the cut's family, the
     preview) reads this; the piece's layer rank (``LAYER_RANK``), body regions and name stay its kind's."""
     return "bra" if cupped_top(params) else str(params.get("kind") or "")
+
+
+def straight_cup_top(params: Optional[Dict[str, Any]]) -> bool:
+    """A piece built as a bra with a straight cup top edge (balconette or bandeau): its lifted rim is kept clear of
+    the tip collider (``CUP_TIP_CLEAR_M``, ``CUP_TIP_VERSION``)."""
+    return bool(params) and build_kind(params) == "bra" and params.get("cup_style") in ("balconette", "bandeau")
 
 
 def template_version(params: Dict[str, Any]) -> int:
@@ -2159,7 +2172,8 @@ def fitted_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
                     "push": params["push_up"], "band_m": round(band, 4), "back_strap_m": BACK_STRAP_M,
                     "gore_half_m": gore_half, "gore_h_m": gore_h, "closure": params["closure"],
                     "rigid_cups": params["cup_style"] == "molded",
-                    "push_m": [PUSH_LIFT_M, PUSH_IN_M, PUSH_OUT_M], "straps": strap_spec(params, meas)})
+                    "push_m": [PUSH_LIFT_M, PUSH_IN_M, PUSH_OUT_M], "tip_clear_m": CUP_TIP_CLEAR_M,
+                    "top_seam_min_m": CUP_TOP_SEAM_MIN_M, "straps": strap_spec(params, meas)})
         rows = [round(meas.get("shoulder_y", bust + 0.15), 4), round(under - max(band, BACK_STRAP_M), 4)]
         if cupped_top(params):
             # round 2026-11-25 (plan E4): a top with cups is a bra whose band runs from the underbust line down to the
@@ -2306,6 +2320,9 @@ def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List
     if build_kind(params) == "bra" and BRA_EDGE_VERSION:
         # round 2026-11-25: straight band top, smoothed free edges (``BRA_EDGE_VERSION``; 0 = the keys before it)
         payload["bra_edges"] = BRA_EDGE_VERSION
+    if straight_cup_top(params) and CUP_TIP_VERSION:
+        # straight cup top clearance over the tip collider and balconette cup seam (``CUP_TIP_VERSION``)
+        payload["cup_tip"] = CUP_TIP_VERSION
     if knee_piece(params):
         # round 2026-11-25: the knee bridge of a widened trouser leg (``KNEE_VERSION``)
         payload["knee"] = KNEE_VERSION

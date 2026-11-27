@@ -1010,7 +1010,9 @@ def bra_geometry(p: Dict[str, Any], m: Dict[str, Any], spec: Dict[str, Any], x0:
     * ``under`` = the spec's underbust line, raised to the lowest breast fold the body shows (``bra_fold``);
     * the band's bottom = ``under`` - band, or a top with cups' ``hem_y`` (its band runs down to its hem);
     * per side the apex (``bra_apex``, else ``APEX_FALLBACK_X_M`` out on the bust line), H = max(3 cm, apex - under),
-      zc = apex + (coverage - 0.5) x 2H; the cup runs from the gore (centre ± ``gore_half``, at most ``r_in`` = |apex
+      zc = apex + (coverage - 0.5) x 2H (for balconette / bandeau, if the lifted rim ``zc + push * lift - apex`` lands
+      in ``(0, tip_clear_m)``, zc is raised to ``apex - push * lift + tip_clear_m`` to clear the tip collider); the cup
+      runs from the gore (centre ± ``gore_half``, at most ``r_in`` = |apex
       - centre| - gore_half (>= 2 cm) inside the apex) to ``CUP_R_OUT_M`` outside it; its top over u = |x - apex| / r:
       molded zc - H/2 u^2 (a dome), triangle peak - (peak - (under + ``TRIANGLE_RIM_M``)) u with peak = zc + 0.8H,
       balconette zc (straight); never under under + ``CUP_TOP_MIN_M``; bandeau: one band from under to the higher zc;
@@ -1045,6 +1047,11 @@ def bra_geometry(p: Dict[str, Any], m: Dict[str, Any], spec: Dict[str, Any], x0:
         ax, ay = (float(a[0]), float(a[1])) if a else (x0 + sgn * APEX_FALLBACK_X_M, float(spec["bust_y"]))
         H = max(0.03, ay - under)
         zc = ay + (cov - 0.5) * 2.0 * H
+        if style in ("balconette", "bandeau"):
+            tip_clear = float(spec["tip_clear_m"])
+            rim = zc + push * lift - ay
+            if 0.0 < rim < tip_clear:
+                zc = ay - push * lift + tip_clear
         r_in = max(0.02, abs(ax - x0) - gore_half)
         tops[sgn] = (ax, ay, H, zc, r_in)
         out["apex"][sgn] = [ax, ay]

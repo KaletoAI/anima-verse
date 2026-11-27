@@ -418,13 +418,24 @@ def bra_region(f, co, tree, cx, cy):
     info = {"apex": {("l" if s > 0 else "r"): [round(float(x), 4) for x in a] for s, a in apex.items()},
             "under_z": round(under, 4), **info_fold}
     tops = {}
+    cup_seam_z = {}
+    cup_tip_raise_mm = {}
+    lift = float(f["push"]) * float(f["push_m"][0])
+    tip_clear_m = float(f["tip_clear_m"])
+    top_seam_min_m = float(f["top_seam_min_m"])
     for s, a in apex.items():
         H = max(0.03, float(a[2]) - under)
         zc = float(a[2]) + (cov - 0.5) * 2.0 * H
+        zc, seam_z, raise_m = fpat.cup_top_line(style, float(a[2]), zc, lift, tip_clear_m, top_seam_min_m)
+        key = "l" if s > 0 else "r"
+        cup_seam_z[key] = round(seam_z, 4) if seam_z is not None else None
+        cup_tip_raise_mm[key] = round(raise_m * 1000.0, 1)
         r_in = max(0.02, abs(float(a[0]) - cx) - gore_half)
         zs = np.linspace(under, max(zc, float(a[2])), CUP_REACH_ROWS)
         r_out = (zs, *_side_contour(co, a, s, cx, zs))
         tops[s] = (a, H, zc, r_in, r_out)
+    info["cup_seam_z"] = cup_seam_z
+    info["cup_tip_raise_mm"] = cup_tip_raise_mm
     info["cup_reach_m"] = {("l" if s > 0 else "r"): [round(float(r), 3) for r in t[4][1]] for s, t in tops.items()}
     back_y = cy - CUP_BACK_M
     info["cup_back_y"] = round(back_y, 4)

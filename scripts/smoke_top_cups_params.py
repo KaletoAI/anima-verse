@@ -29,8 +29,9 @@ hand from the schema:
      ``keyed_params(validate_params(p))`` equals the old one, and ``validate_params(p)`` less its new key "cups" equals
      the old one (the active set of a piece without cups is unchanged). Also the full keys: ``tsig`` and
      ``garment_template_cut.cut_sig`` with fixed other inputs (base0 / tex0 / [item_a]) equal the old ones — for the
-     bra with ``BRA_EDGE_VERSION`` set to 0 (the review fix of this round re-keys every bra on purpose: its band top
-     is cut straight); with the shipped version a bra's two keys differ from the old ones and the others' do not.
+     bra (balconette) with ``BRA_EDGE_VERSION`` and ``CUP_TIP_VERSION`` set to 0 (both re-key a balconette bra on
+     purpose: straight band top + tip-collider rim clearance); with the shipped versions a bra's two keys differ from
+     the old ones and the others' do not.
 [P7] Round trip none -> bra -> none (E6), T0 = {kind top, shoulders straps, neckline sweetheart, length_m 0.27,
      straps wide, fabric leather_rough}: S1 = stored(T0 + cups bra + cup_style balconette), S2 = stored(S1 + cups
      none) -> S2 shoulders straps and neckline sweetheart (never the schema default strapless, the review's finding);
@@ -147,6 +148,7 @@ paths.init(s / "world"); paths.init_instance(s / "instance")
 from app.core import garment_template as gt, garment_template_cut as gtc
 if sys.argv[3] == "1":
     gt.BRA_EDGE_VERSION = 0
+    gt.CUP_TIP_VERSION = 0
 out = {}
 for name, raw in json.loads(sys.argv[2]).items():
     p, _e = gt.validate_params(raw)
@@ -187,7 +189,7 @@ else:
         check(f"[P6] {name}: active set less cups as at {OLD}", active == old[name]["active"],
               {k: (active.get(k), old[name]["active"].get(k)) for k in set(active) | set(old[name]["active"])
                if active.get(k) != old[name]["active"].get(k)})
-        check(f"[P6] {name}: tsig / cut_sig as at {OLD} (BRA_EDGE_VERSION 0)",
+        check(f"[P6] {name}: tsig / cut_sig as at {OLD} (BRA_EDGE_VERSION 0, CUP_TIP_VERSION 0)",
               (off[name]["tsig"], off[name]["cut_sig"]) == (old[name]["tsig"], old[name]["cut_sig"]),
               (off[name]["tsig"], off[name]["cut_sig"], old[name]["tsig"], old[name]["cut_sig"]))
         rekeyed = name == "bra"

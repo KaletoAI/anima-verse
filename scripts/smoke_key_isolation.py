@@ -25,21 +25,22 @@ THE CASES (``garment_template.validate_params`` of each):
 
 Their predicates, read off the definitions in ``app/core/garment_template.py`` by hand:
 
-    case              build_kind  pattern_group  panel  leg  strap  corset  corset_straps  neck(cut)  bra_edge  no_bodice_dress
-    skirt             skirt       skirt          yes    yes  -      -       -              -          -         -
-    dress_straps      dress       dress          yes    yes  yes    -       -              yes        -         -
-    dress_strapless   dress       dress          yes    yes  -      -       -              yes        -         yes
-    top_covered       top         top            -      -    -      -       -              -          -         -
-    top_corset        top         corset_top     yes    -    -      yes     -              -          -         -
-    top_corset_straps top         corset_top     yes    -    -      yes     yes            -          -         -
-    top_cups          bra         bra            -      -    -      -       -              -          yes       -
-    jacket            jacket      jacket         yes    -    -      -       -              yes        -         -
+    case              build_kind  pattern_group  panel  leg  strap  corset  corset_straps  neck(cut)  bra_edge  cup_tip  no_bodice_dress
+    skirt             skirt       skirt          yes    yes  -      -       -              -          -         -        -
+    dress_straps      dress       dress          yes    yes  yes    -       -              yes        -         -        -
+    dress_strapless   dress       dress          yes    yes  -      -       -              yes        -         -        yes
+    top_covered       top         top            -      -    -      -       -              -          -         -        -
+    top_corset        top         corset_top     yes    -    -      yes     -              -          -         -        -
+    top_corset_straps top         corset_top     yes    -    -      yes     yes            -          -         -        -
+    top_cups          bra         bra            -      -    -      -       -              -          yes       yes      -
+    jacket            jacket      jacket         yes    -    -      -       -              yes        -         -        -
     trousers .. tights  = their kind (fitted), no feature column
 
     (panel = ``panel_piece``: PANEL_KINDS skirt/jacket/dress, or a top with shoulders strapless/straps; leg =
     ``leg_piece``: skirt, dress; strap = ``strap_piece``: dress/top with straps and a neckline not straight/sweetheart —
     the corset with straps has a sweetheart neckline, so no; corset = ``corset_top``; neck = ``neck_piece``: every
     jacket and dress, a covered top only with a collar or a placket — the case has neither; bra_edge = build kind "bra";
+    cup_tip = ``straight_cup_top`` (balconette / bandeau: top_cups is balconette -> yes, bra default molded -> no);
     no_bodice_dress = a dress without a bodice: ``STRAPLESS_UNDERARM_M`` in its tsig.)
 
 WHAT IS CHECKED, and where every expected value comes from
@@ -54,6 +55,7 @@ WHAT IS CHECKED, and where every expected value comes from
       CORSET_VERSION            -> corset = yes
       CORSET_STRAPS_VERSION     -> corset_straps = yes
       BRA_EDGE_VERSION          -> bra, top_cups
+      CUP_TIP_VERSION           -> top_cups
       STRAPLESS_UNDERARM_M      -> dress_strapless
       NECK_VERSION, UV_PATTERN_KEYS[*], FITTED_PATTERN_KEYS[*], CORSET_DARTS_KEYS[*] -> none (cut-only)
     In particular, for the gloves: only TEMPLATE_VERSIONS["gloves"] and FITTED_VERSIONS["gloves"] move the key.
@@ -61,7 +63,7 @@ WHAT IS CHECKED, and where every expected value comes from
       TEMPLATE_VERSIONS[k], FITTED_VERSIONS[k] -> as in [A]
       UV_PATTERN_KEYS[g]        -> the cases whose pattern_group is g
       FITTED_PATTERN_KEYS[k]    -> the cases whose build_kind is the fitted kind k
-      PANEL_VERSION, LEG_VERSION, STRAP_VERSION, CORSET_STRAPS_VERSION, BRA_EDGE_VERSION -> as in [A]
+      PANEL_VERSION, LEG_VERSION, STRAP_VERSION, CORSET_STRAPS_VERSION, BRA_EDGE_VERSION, CUP_TIP_VERSION -> as in [A]
       CORSET_VERSION            -> corset = yes (build kind top and a panel piece)
       CORSET_DARTS_KEYS[v]      -> the corset top of variant v (``corset_variant``: shoulders "straps" -> "straps",
                                    else "strapless"): [strapless] top_corset only, [straps] top_corset_straps only
@@ -196,6 +198,7 @@ CORSET = {"top_corset", "top_corset_straps"}
 CORSET_STRAPS = {"top_corset_straps"}
 NECK = {"dress_straps", "dress_strapless", "jacket"}
 BRA_EDGE = {"bra", "top_cups"}
+CUP_TIP = {"top_cups"}
 NO_BODICE_DRESS = {"dress_strapless"}
 
 KINDS = ("skirt", "dress", "top", "jacket", "trousers", "briefs", "bra", "gloves", "tights")
@@ -246,6 +249,7 @@ KNOBS += [
     ("CORSET_VERSION", lambda: bump_attr(gt, "CORSET_VERSION"), CORSET, CORSET),
     ("CORSET_STRAPS_VERSION", lambda: bump_attr(gt, "CORSET_STRAPS_VERSION"), CORSET_STRAPS, CORSET_STRAPS),
     ("BRA_EDGE_VERSION", lambda: bump_attr(gt, "BRA_EDGE_VERSION"), BRA_EDGE, BRA_EDGE),
+    ("CUP_TIP_VERSION", lambda: bump_attr(gt, "CUP_TIP_VERSION"), CUP_TIP, CUP_TIP),
     ("STRAPLESS_UNDERARM_M", lambda: bump_attr(gt, "STRAPLESS_UNDERARM_M"), NO_BODICE_DRESS, set()),
     ("NECK_VERSION", lambda: bump_attr(gt, "NECK_VERSION"), set(), NECK),
     ("CORSET_DARTS_KEYS[strapless]", lambda: bump_entry(gtc, "CORSET_DARTS_KEYS", "strapless"), set(),

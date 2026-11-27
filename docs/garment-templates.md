@@ -753,6 +753,14 @@ the hip, whatever the length: the hem is held at the waist at the lowest, `body_
   face in the crease under the arm) is filled. And the cloth keeps its 4 mm: after a tip's sphere joined the
   collider, `_join_body_collider_late` cleared the built cloth to the drape thickness + 4 mm = 5.5 mm (every gap of
   a bra measured 1.5 mm too wide); a bra is now cleared to its own `offset_m` (the drape's pre-inflate leaves 4.5 mm).
+- **Straight cup top clearance (`CUP_TIP_VERSION` 1, balconette / bandeau only).** A straight-edged cup top
+  (`straight_cup_top`: `build_kind` "bra" with `cup_style` "balconette" or "bandeau") lifts its unlifted edge `zc` to
+  `apex_z - lift + CUP_TIP_CLEAR_M` (`CUP_TIP_CLEAR_M` = 0.012 m) whenever its lifted rim `zc + lift - apex_z` would
+  land in `(0, CUP_TIP_CLEAR_M)` over the apex (`fitted_pattern.cup_top_line`), so the free rim never hangs on the
+  breast-tip collider sphere. A balconette's horizontal cup seam is cut at the apex only when the top edge sits at least
+  `CUP_TOP_SEAM_MIN_M` (0.003 m) above the apex; otherwise that side stays a single cup island (`cup_seam_z` = `None`)
+  instead of cutting sliver islands on the rim. `CUP_TIP_VERSION` enters `tsig` and `cut_sig` for `straight_cup_top`
+  pieces only, so molded and triangle cups keep their keys byte for byte.
 - **A narrow island's overhang is its own cloth.** `cut_texture_post.narrow_overhang`: round an island narrower than
   `NARROW_ISLAND_CM` (5 cm; a cup's upper part, the gore, a strap) the ring within `POCKET_CM` takes the colour of its
   nearest island pixel. Lirien's upper cup parts carried a light and dark rim from the image model into the ring (the
@@ -1055,7 +1063,7 @@ version in them is scoped to what it changes:
 
 - `TEMPLATE_VERSIONS` / `FITTED_VERSIONS` per built kind (`template_version`, `fitted_version`); the feature versions
   (`PANEL_VERSION`, `LEG_VERSION`, `STRAP_VERSION`, `CORSET_VERSION`, `CORSET_STRAPS_VERSION`, `NECK_VERSION`,
-  `BRA_EDGE_VERSION`) only in the keys of the pieces their predicate names.
+  `BRA_EDGE_VERSION`, `CUP_TIP_VERSION`) only in the keys of the pieces their predicate names.
 - The flattening and the fitted part rules are pinned per group (`UV_PATTERN_KEYS`, `FITTED_PATTERN_KEYS`): the md5 of
   the file that last changed that group's islands. Changing `uv_pattern.py` / `fitted_pattern.py` means deciding which
   groups' islands change, moving those pins to the new md5 and `UV_PATTERN_REVIEWED` / `FITTED_PATTERN_REVIEWED` with
