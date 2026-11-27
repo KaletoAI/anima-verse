@@ -1878,6 +1878,36 @@ def play_location_scene(location_id: str, request: Request):
                                           "Cache-Control": "no-cache"})
 
 
+@router.get("/play/locations/{location_id}/items")
+def play_location_items(location_id: str, request: Request, user=Depends(get_current_user)):
+    """Per-viewer world-placeable items lying at ``location_id`` (pure read).
+
+    Returns only placeable entries with a stored anchor that are visible to the
+    active avatar via ``placement_seen_by`` (never writes discovery rows).
+    """
+    from fastapi.responses import Response
+    from app.core.http_files import etag_matches
+    from app.core.item_world import build_items_payload, items_etag
+    from app.models.account import get_active_character
+    from app.models.character import get_character_language
+    from app.models.world import get_location_by_id
+
+    loc = get_location_by_id(location_id)
+    if not loc:
+        raise HTTPException(status_code=404, detail="Location not found")
+    viewer = (get_active_character() or "").strip()
+    lang = (get_character_language(viewer) or "de") if viewer else "de"
+    etag = f'"{items_etag(loc, viewer, lang)}"'
+    if etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers={"ETag": etag,
+                                                  "Cache-Control": "no-cache"})
+    payload = build_items_payload(loc, viewer, lang)
+    resp = _json_off_loop(payload)
+    resp.headers["ETag"] = etag
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 @router.post("/play/scene-preview")
 async def play_scene_preview(request: Request, _=Depends(require_admin)):
     """The same payload for an UNSAVED location draft (contract § B3) — the

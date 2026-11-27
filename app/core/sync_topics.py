@@ -441,13 +441,24 @@ def profile_patched(character: str, before: dict, after: dict) -> None:
         logger.warning("profile_patched(%s) failed: %s", character, e)
 
 
-def room_items_changed(loc_id: str, room_id: str, visible_before: bool, visible_after: bool) -> None:
-    """Refresh belongings only for readers of a visible item in this room."""
+def room_items_changed(loc_id: str, room_id: str, visible_before: bool, visible_after: bool,
+                       *, item_id: str = "") -> None:
+    """Refresh belongings/items for readers of a visible item.
+
+    For a ``world_placeable`` item, notify every avatar at the whole location so
+    the 3D client refetches ``/play/locations/{id}/items``; otherwise only the room.
+    """
     if not (visible_before or visible_after):
         return
     try:
         from app.core.room_entry import characters_in_room
         from app.models.world import GROUND_ROOM_ID
-        avatars(characters_in_room(loc_id, room_id or GROUND_ROOM_ID), "self")
+        target_room = room_id or GROUND_ROOM_ID
+        if item_id:
+            from app.models.inventory import get_item
+            item = get_item(item_id)
+            if item and item.get("world_placeable"):
+                target_room = ""
+        avatars(characters_in_room(loc_id, target_room), "self")
     except Exception as e:
         logger.debug("room item sync failed: %s", e)

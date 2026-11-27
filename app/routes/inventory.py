@@ -897,7 +897,7 @@ def _patch_room_item_route_sync(location_id: str, room_id: str, item_id: str,
         if not upsert_location(location, sync_world=False):
             raise HTTPException(400, "Failed to update placement")
         sync_topics.room_items_changed(location_id, room_id, visible_before,
-                                       not placement.get("hidden", False))
+                                       not placement.get("hidden", False), item_id=item_id)
     return {"ok": True}
 
 

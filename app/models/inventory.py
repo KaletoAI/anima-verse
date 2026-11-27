@@ -1441,6 +1441,18 @@ def discovered_by(location_id: str, room_id: str, item_id: str) -> list[str]:
     return [row[0] for row in rows]
 
 
+def placement_seen_by(viewer: str, location_id: str, room_id: str, placement: dict) -> bool:
+    """Pure visibility read for a room placement: no locks, no inserts, no notifications."""
+    if not placement.get("hidden"):
+        return True
+    if not viewer:
+        return False
+    item_id = placement.get("item_id", "")
+    if not item_id:
+        return False
+    return viewer in discovered_by(location_id, room_id, item_id)
+
+
 def placement_visible_to(viewer: str, location_id: str, room_id: str,
                          placement: dict, *, profile: dict | None = None) -> bool:
     """Reveal a hidden placement once per viewer, without changing world geometry.
@@ -1481,11 +1493,15 @@ def placement_visible_to(viewer: str, location_id: str, room_id: str,
         from app.core.keyed_lock import _after_locks
         from app.models.notifications import create_notification
         lang = profile.get("language") or "de"
-        item_name = localized(get_item(item_id), "name", lang) or item_id
+        item = get_item(item_id)
+        item_name = localized(item, "name", lang) or item_id
         create_notification(
             viewer, t("You discovered {item}.", lang).format(item=item_name),
             notification_type="item_discovered",
             metadata={"item_id": item_id, "location_id": location_id, "room_id": room_id})
+        if item and item.get("world_placeable"):
+            from app.core import sync_topics
+            sync_topics.avatars([viewer], "self")
         _after_locks(lambda: emit("item.discovered", character=viewer, location_id=location_id,
                                   room_id=room_id, item_id=item_id))
     return True
@@ -1560,7 +1576,8 @@ def add_item_to_room(location_id: str,
                                 if not upsert_location(loc, sync_world=False):
                                     return False
                                 from app.core import sync_topics
-                                sync_topics.room_items_changed(location_id, room_id, visible_before, not hidden)
+                                sync_topics.room_items_changed(
+                                    location_id, room_id, visible_before, not hidden, item_id=item_id)
                                 return True
                         # Add a new entry.
                         new_entry: Dict[str, Any] = {
@@ -1579,7 +1596,8 @@ def add_item_to_room(location_id: str,
                         if not upsert_location(loc, sync_world=False):
                             return False
                         from app.core import sync_topics
-                        sync_topics.room_items_changed(location_id, room_id, False, not hidden)
+                        sync_topics.room_items_changed(
+                            location_id, room_id, False, not hidden, item_id=item_id)
                         logger.info("Item %s in Raum %s/%s platziert", item_id, location_id, room_id)
                         return True
         return False
@@ -1618,7 +1636,9 @@ def remove_item_from_room(location_id: str,
                                             "DELETE FROM item_discoveries WHERE location_id=? AND room_id=? AND item_id=?",
                                             (location_id, room_id, item_id))
                                 from app.core import sync_topics
-                                sync_topics.room_items_changed(location_id, room_id, visible_before, visible_before and ri["quantity"] > 0)
+                                sync_topics.room_items_changed(
+                                    location_id, room_id, visible_before,
+                                    visible_before and ri["quantity"] > 0, item_id=item_id)
                                 logger.info("Item %s aus Raum %s/%s entfernt", item_id, location_id, room_id)
                                 return True
         return False
