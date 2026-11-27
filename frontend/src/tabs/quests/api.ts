@@ -1,7 +1,8 @@
 /** One function per /quests endpoint the Quests tab calls — no logic, just the call — plus the reader of the
  *  route's error shape (`{code, message[, issues | current]}`, see the docstring of app/routes/quests.py). */
 import { ApiError, apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
-import type { Catalog, Issue } from './questsModel'
+import { generatedParam } from './questsModel'
+import type { Catalog, Issue, TemplateFilter } from './questsModel'
 
 /** A row of `GET /quests/templates`. */
 export interface TemplateListRow {
@@ -9,6 +10,7 @@ export interface TemplateListRow {
   title: string
   state: 'draft' | 'ready'
   origin?: string
+  kept?: boolean
   revision: number
   updated_at?: string
   open_runs: number
@@ -21,8 +23,8 @@ export function fetchCatalog(): Promise<Catalog> {
   return apiGet<Catalog>('/quests/catalog')
 }
 
-export async function fetchTemplates(): Promise<TemplateListRow[]> {
-  const data = await apiGet<{ templates?: TemplateListRow[] }>('/quests/templates')
+export async function fetchTemplates(filter: TemplateFilter = 'library'): Promise<TemplateListRow[]> {
+  const data = await apiGet<{ templates?: TemplateListRow[] }>(`/quests/templates?generated=${generatedParam(filter)}`)
   return data.templates || []
 }
 
@@ -59,6 +61,8 @@ export interface RunJudgement { mind: string; avatar: string; state: string; rea
 /** A row of `GET /quests/runs` (`_run_row` in app/routes/quests.py); the labels are finished server strings. */
 export interface RunRow {
   id: string
+  template_id?: string
+  origin?: string
   title: string
   state: string
   current_step: number

@@ -14,8 +14,19 @@ export type Expr = {} | { type: string; params: Record<string, unknown> } | { al
 export interface EffectEntry { key: string; type: string; params: Record<string, unknown>; permanent: boolean }
 export interface RoleNote { role: string; text: string }
 export interface Step { id: string; text: string; hint: string; condition: Expr; on_done: EffectEntry[]; role_notes: RoleNote[] }
+export type TemplateFilter = 'library' | 'generated' | 'all'
+
+export function generatedParam(f: TemplateFilter): '0' | '1' | 'all' {
+  if (f === 'generated') return '1'
+  if (f === 'all') return 'all'
+  return '0'
+}
+
+export const ORIGIN_LABELS: Record<string, string> = { auto: 'Auto', story: 'Story', import: 'Imported' }
+
 export interface TemplateDraft {
-  id: string; revision: number; title: string; summary: string; gm_notes: string
+  id: string; revision: number; readonly origin: string; readonly kept: boolean
+  title: string; summary: string; gm_notes: string
   giver_role: string
   state: 'draft' | 'ready'; roles: Role[]; setup_effects: EffectEntry[]; steps: Step[]; rewards: EffectEntry[]
   start_condition: Expr
@@ -119,6 +130,8 @@ export function rowToDraft(row: unknown): TemplateDraft {
   return {
     id: str(r.id),
     revision: typeof r.revision === 'number' ? r.revision : 0,
+    origin: str(r.origin) || 'admin',
+    kept: r.kept !== false,
     title: str(r.title),
     summary: str(r.summary),
     gm_notes: str(r.gm_notes),
@@ -301,6 +314,11 @@ export function filterOptions<T>(options: T[], query: string, label: (o: T) => s
 /** True when the template editor's Save does something: a new template (no id yet) or unsaved edits. */
 export function canSave(draft: TemplateDraft | null, dirty: boolean): boolean {
   return !!draft && (!draft.id || dirty)
+}
+
+/** True only for a stored template draft whose `kept` flag is false. */
+export function canKeep(d: TemplateDraft | null): boolean {
+  return !!d && Boolean(d.id) && d.kept === false
 }
 
 /** The English text of each /quests route refusal `code` (app/routes/quests.py), translated by the caller. */

@@ -7643,6 +7643,10 @@
     "Checking the quest…": "Quest wird geprüft…",
     "Repairing the quest…": "Quest wird repariert…",
     "Quest generated": "Quest generiert",
-    "Quest generated with {n} issue(s)": "Quest mit {n} Problem(en) generiert"
+    "Quest generated with {n} issue(s)": "Quest mit {n} Problem(en) generiert",
+    "Show templates": "Vorlagen anzeigen",
+    "Not kept": "Nicht behalten",
+    "Save or discard your edits first": "Speichere oder verwirf zuerst deine Änderungen",
+    "Kept in the library": "In der Bibliothek behalten"
   }
 }

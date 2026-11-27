@@ -58,6 +58,12 @@
 //   becomes {}, room keeps both location_id and room_id (or partial {location_id}), non-objects and unknown kinds -> {};
 // - generateJobActive is true for status 'pending' and 'running', false for 'completed', 'failed', 'cancelled' and null;
 // - questErrorText maps code 'busy' to ERROR_CODE_TEXTS.busy.
+// Stage 3 (Task 5):
+// - rowToDraft reads origin ('admin' when missing/blank) and kept (false only when r.kept === false, else true);
+//   emptyDraft() gets origin 'admin' and kept true; draftToRow omits both origin and kept;
+// - generatedParam maps 'library' -> '0', 'generated' -> '1', 'all' -> 'all';
+// - canKeep is true only for a stored draft (non-empty id) with kept === false;
+// - ORIGIN_LABELS maps auto -> 'Auto', story -> 'Story', import -> 'Imported'.
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -81,8 +87,9 @@ function moduleUrl(file) {
   modules.set(key, url);
   return url;
 }
-const { rowToDraft, draftToRow, issuesAt, newStepId, rolesOfKinds, bindingFor, bindingsComplete, stepProgress,
-  placeholderList, moveItem, filterOptions, canSave, questErrorText, ERROR_CODE_TEXTS,
+const { rowToDraft, draftToRow, emptyDraft, issuesAt, newStepId, rolesOfKinds, bindingFor, bindingsComplete, stepProgress,
+  placeholderList, moveItem, filterOptions, canSave, canKeep, generatedParam, ORIGIN_LABELS,
+  questErrorText, ERROR_CODE_TEXTS,
   entryObjectKind, scopeAt, targetOptions, clientIssues, draftWarnings, newEffectKey,
   pickFromBinding, generateJobActive } = await import(moduleUrl(new URL('./questsModel.ts', import.meta.url)));
 
@@ -372,5 +379,34 @@ const bigRock = {"title": "The big rock", "summary": "{giver} lost something nea
 
   assert.equal(questErrorText({ code: 'busy', message: 'a quest is already being generated' }, (s) => s),
     ERROR_CODE_TEXTS.busy);
+}
+{
+  const unkeptNew = rowToDraft({ ...errand, origin: 'auto', kept: false });
+  assert.equal(unkeptNew.origin, 'auto');
+  assert.equal(unkeptNew.kept, false);
+  const unkeptBody = draftToRow(unkeptNew);
+  assert.equal('origin' in unkeptBody, false);
+  assert.equal('kept' in unkeptBody, false);
+
+  const plain = rowToDraft(errand);
+  assert.equal(plain.origin, 'admin');
+  assert.equal(plain.kept, true);
+  const empty = emptyDraft();
+  assert.equal(empty.origin, 'admin');
+  assert.equal(empty.kept, true);
+
+  assert.equal(generatedParam('library'), '0');
+  assert.equal(generatedParam('generated'), '1');
+  assert.equal(generatedParam('all'), 'all');
+
+  assert.equal(canKeep(null), false);
+  assert.equal(canKeep(empty), false);
+  assert.equal(canKeep(unkeptNew), false, 'new draft without id cannot be kept yet');
+  assert.equal(canKeep(rowToDraft({ ...errand, id: 'qt_1', origin: 'auto', kept: true })), false);
+  assert.equal(canKeep(rowToDraft({ ...errand, id: 'qt_1', origin: 'admin', kept: true })), false);
+  assert.equal(canKeep(rowToDraft({ ...errand, id: 'qt_1', origin: 'auto', kept: false })), true);
+  assert.equal(canKeep(rowToDraft({ ...errand, id: 'qt_2', origin: 'story', kept: false })), true);
+
+  assert.deepEqual(ORIGIN_LABELS, { auto: 'Auto', story: 'Story', import: 'Imported' });
 }
 console.log('questsModel: all checks passed');

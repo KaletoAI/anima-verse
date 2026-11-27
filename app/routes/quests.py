@@ -119,6 +119,8 @@ def _run_row(run: Dict[str, Any], lang: str) -> Dict[str, Any]:
         judgements = []
     return {
         "id": run.get("id"),
+        "template_id": run.get("template_id") or "",
+        "origin": str(snapshot.get("origin") or "admin"),
         "title": quest_engine.render_text(str(snapshot.get("title") or ""), run),
         "state": run.get("state"),
         "current_step": run.get("current_step"),
@@ -145,14 +147,20 @@ def get_catalog() -> Dict[str, Any]:
 
 # --- Templates ------------------------------------------------------------------------------------
 
+_GENERATED_FILTER = {"0": False, "1": True, "all": None}
+
+
 @router.get("/templates")
-def list_templates_route() -> Dict[str, List[Dict[str, Any]]]:
-    """Every template as a list row, newest first, with its count of not yet ended runs."""
+def list_templates_route(generated: str = "0") -> Dict[str, List[Dict[str, Any]]]:
+    """Templates as list rows, newest first, with their count of not yet ended runs.
+    `generated`: `0` (default) = library (hides unkept generated), `1` = unkept generated only, `all` = every template."""
+    if generated not in _GENERATED_FILTER:
+        raise _bad("generated is 0, 1 or all")
     rows = []
-    for t in quests.list_templates():
+    for t in quests.list_templates(generated=_GENERATED_FILTER[generated]):
         rows.append({
             "id": t["id"], "title": t.get("title") or "", "state": t.get("state"), "origin": t.get("origin"),
-            "revision": t.get("revision"), "updated_at": t.get("updated_at"),
+            "kept": bool(t.get("kept")), "revision": t.get("revision"), "updated_at": t.get("updated_at"),
             "open_runs": quests.count_runs(quests.RUN_OPEN_STATES, template_id=t["id"]),
         })
     return {"templates": rows}

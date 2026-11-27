@@ -96,6 +96,15 @@ WHAT FOLLOWS BY HAND (plan D12, D13, Task 6 brief)
       the first job complete.
     - Clean failure: structure and repair both answer prose without a fence -> job state "failed", ok False,
       template_id "", issues contain code "no_block", and template count before == after.
+ 13. Stage 3, Task 5 (generated filter on GET /quests/templates, Keep via PUT, origin/template_id on GET /quests/runs):
+    - An unkept auto template (`origin="auto", kept=False`) inserted in storage is hidden from default
+      GET /quests/templates (`?generated=0`), listed by `GET /quests/templates?generated=1` (with `origin="auto"`,
+      `kept=False`), and listed alongside library templates by `GET /quests/templates?generated=all`.
+    - `GET /quests/templates?generated=x` -> 400 `bad_request`; player `GET /quests/templates?generated=1` -> 403.
+    - `PUT /quests/templates/<id>` with `{"kept": True, "base_revision": 1}` -> 200 `kept=True`, `revision=2`;
+      default `GET /quests/templates` now lists it (`kept=True`), and `?generated=1` no longer lists it.
+    - `GET /quests/runs` rows carry `template_id` and `origin` from the frozen snapshot (`"admin"` for an admin
+      template run, `"auto"` for the auto template run).
 """
 import os
 import sys
@@ -278,7 +287,7 @@ def main() -> int:
         rows = {t["id"]: t for t in call("GET", "/quests/templates").json().get("templates", [])}
         check("open_runs", (rows.get(tid, {}).get("open_runs"), rows.get(eid, {}).get("open_runs")), (1, 0))
         check("list row keys", sorted(rows.get(tid, {})),
-              sorted(["id", "title", "state", "origin", "revision", "updated_at", "open_runs"]))
+              sorted(["id", "title", "state", "origin", "kept", "revision", "updated_at", "open_runs"]))
 
         print("[7] runs")
         r2 = call("POST", f"/quests/templates/{tid}/start", {"bindings": bindings}).json()
@@ -605,6 +614,56 @@ def main() -> int:
                   (fjob.get("state"), fjob.get("ok"), fjob.get("template_id"), "no_block" in issue_codes),
                   ("failed", False, "", True))
             check("no template created on failure", count_after, count_before)
+
+        print("[13] stage 3 task 5: generated filter, keep, and run origin")
+        from app.models import quests as _qstore
+
+        auto_tpl = _qstore.create_template(
+            title="Auto Hidden", origin="auto", kept=False,
+            **{k: v for k, v in ERRAND.items() if k != "title"},
+        )
+        auto_id = auto_tpl["id"]
+        def_rows = {t["id"]: t for t in call("GET", "/quests/templates").json().get("templates", [])}
+        check("default GET /quests/templates hides unkept auto", auto_id in def_rows, False)
+        check("library rows carry kept=True", all(r.get("kept") is True for r in def_rows.values()), True)
+        gen0_ids = {t["id"] for t in call("GET", "/quests/templates?generated=0").json().get("templates", [])}
+        check("generated=0 matches default", gen0_ids == set(def_rows), True)
+        gen1 = call("GET", "/quests/templates?generated=1").json().get("templates", [])
+        check("generated=1 lists only unkept auto with kept=False",
+              [(t["id"], t.get("origin"), t.get("kept")) for t in gen1],
+              [(auto_id, "auto", False)])
+        gen_all_ids = {t["id"] for t in call("GET", "/quests/templates?generated=all").json().get("templates", [])}
+        check("generated=all lists library + unkept auto", gen_all_ids == set(def_rows) | {auto_id}, True)
+        resp = call("GET", "/quests/templates?generated=x")
+        check("generated=x -> 400 bad_request", (resp.status_code, code(resp)), (400, "bad_request"))
+        check("player GET /quests/templates?generated=1 -> 403",
+              call("GET", "/quests/templates?generated=1", role="player").status_code, 403)
+
+        resp = call("PUT", f"/quests/templates/{auto_id}", {"kept": True, "base_revision": 1})
+        kept_body = resp.json() if resp.status_code == 200 else {}
+        check("PUT kept=True -> 200, kept True, rev 2",
+              (resp.status_code, kept_body.get("kept"), kept_body.get("revision"), kept_body.get("origin")),
+              (200, True, 2, "auto"))
+        after_keep = {t["id"]: t for t in call("GET", "/quests/templates").json().get("templates", [])}
+        check("kept auto now in default library list",
+              (auto_id in after_keep, after_keep.get(auto_id, {}).get("kept"),
+               after_keep.get(auto_id, {}).get("origin")),
+              (True, True, "auto"))
+        check("generated=1 empty after keep",
+              call("GET", "/quests/templates?generated=1").json().get("templates", []), [])
+
+        check("ready auto template",
+              call("PUT", f"/quests/templates/{auto_id}", {"state": "ready", "base_revision": 2}).status_code, 200)
+        auto_run = call("POST", f"/quests/templates/{auto_id}/start", {"bindings": bindings}).json()
+        runs_by_id = {r["id"]: r for r in call("GET", "/quests/runs").json().get("runs", [])}
+        check("admin run row carries template_id & origin='admin'",
+              (runs_by_id.get(lr["id"], {}).get("template_id"), runs_by_id.get(lr["id"], {}).get("origin")),
+              (lt["id"], "admin"))
+        check("auto run row carries template_id & origin='auto'",
+              (runs_by_id.get(auto_run.get("id"), {}).get("template_id"),
+               runs_by_id.get(auto_run.get("id"), {}).get("origin")),
+              (auto_id, "auto"))
+        call("POST", f"/quests/runs/{auto_run.get('id')}/cancel")
 
     quest_engine.drain()
     if FAILURES:

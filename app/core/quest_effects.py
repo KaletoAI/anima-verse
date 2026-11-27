@@ -25,6 +25,9 @@ the same entry twice:
         library entry it shows.
     (4) Untag permanent quest props — clear the ``quest_run`` sidecar tag on every live
         permanent ``prop`` object whose run has ended (D17), so it joins the prop library.
+    (5) Drop unkept generated templates — delete an unkept generated template and its ended
+        runs once cleanup and prop untagging are done and none of its runs is in the player's
+        chronicle window (stage 3, D7).
 
 BUILT-IN EFFECTS (:func:`builtin_effect_types`). Registered under owner ``"core"``:
 ``give_hint``, ``reveal_secret``, ``change_stat``, ``post_news``, ``narrate``, ``give_item``,
@@ -537,8 +540,73 @@ def _untag_permanent_props() -> None:
             logger.exception("quest effects: failed untagging permanent prop %s", pid)
 
 
+def _drop_generated_templates() -> int:
+    """Delete unkept generated templates whose runs have all ended, finished cleanup, and left
+    the ``CHRONICLE_SIZE`` ended-run window (stage 3, D7). Never raises."""
+    from app.core.quest_book import CHRONICLE_SIZE
+    from app.models import quests
+
+    try:
+        protected = {r["id"] for r in quests.list_chronicle(CHRONICLE_SIZE)}
+        waiting = {p.get("run_id") for p in quests.list_payouts(states=("pending",))}
+        templates = quests.list_templates(generated=True)
+    except Exception:  # noqa: BLE001
+        logger.exception("quest effects: generated template drop scan failed")
+        return 0
+
+    dropped = 0
+    for tpl in templates:
+        tpl_id = str(tpl.get("id") or "")
+        if not tpl_id:
+            continue
+        try:
+            runs = quests.list_runs(template_id=tpl_id)
+            if not runs:
+                continue
+            eligible = True
+            for r in runs:
+                rid = str(r.get("id") or "")
+                if (not rid
+                        or r.get("state") not in quests.RUN_ENDED_STATES
+                        or rid in protected
+                        or rid in waiting):
+                    eligible = False
+                    break
+                for obj in quests.list_objects(rid):
+                    status = obj.get("status")
+                    if not obj.get("permanent"):
+                        if status in ("live", "pending", "revert_pending"):
+                            eligible = False
+                            break
+                    elif obj.get("kind") == "prop" and status in ("live", "pending"):
+                        pid = str((obj.get("ref") or {}).get("prop_id") or "")
+                        if pid not in _untagged_props:
+                            eligible = False
+                            break
+                if not eligible:
+                    break
+            if not eligible:
+                continue
+            all_deleted = True
+            for r in runs:
+                if not quests.delete_run(r["id"]):
+                    all_deleted = False
+                    break
+            if not all_deleted:
+                continue
+            if quests.count_runs((), template_id=tpl_id) == 0:
+                if quests.delete_template(tpl_id):
+                    dropped += 1
+                    logger.info("quest effects: dropped unkept generated template %s (%d ended run(s))",
+                                tpl_id, len(runs))
+        except Exception:  # noqa: BLE001
+            logger.exception("quest effects: failed dropping generated template %s", tpl_id)
+    return dropped
+
+
 def pass_once() -> Dict[str, Any]:
-    """Run one serialized pass: (1) setup payouts, (2) step/reward payouts, (3) ended-run cleanup.
+    """Run one serialized pass: (1) setup payouts, (2) step/reward payouts, (3) ended-run cleanup,
+    (4) permanent prop untagging, (5) dropping unkept generated templates outside the chronicle.
 
     Callable synchronously from smokes without starting the worker thread. Never raises.
     """
@@ -546,6 +614,7 @@ def pass_once() -> Dict[str, Any]:
     opened: List[str] = []
     reverted = 0
     failed = 0
+    dropped = 0
 
     with _pass_lock:
         try:
@@ -593,10 +662,13 @@ def pass_once() -> Dict[str, Any]:
 
             # (4) Untag permanent quest props of ended runs so they join the library (D17).
             _untag_permanent_props()
+
+            # (5) Drop unkept generated templates whose runs have ended, cleaned up, and left the chronicle (D7).
+            dropped = _drop_generated_templates()
         except Exception:  # noqa: BLE001
             logger.exception("quest effects: pass_once failed")
 
-    if applied or opened or reverted or failed:
+    if applied or opened or reverted or failed or dropped:
         from app.core import quest_engine
         try:
             quest_engine._refresh_live()
@@ -607,7 +679,7 @@ def pass_once() -> Dict[str, Any]:
         except Exception:  # noqa: BLE001
             logger.exception("quest effects: _quests_changed failed")
 
-    return {"applied": applied, "opened": opened, "reverted": reverted, "failed": failed}
+    return {"applied": applied, "opened": opened, "reverted": reverted, "failed": failed, "dropped": dropped}
 
 
 def retry(run_id: str) -> bool:

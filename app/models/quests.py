@@ -43,6 +43,8 @@ from app.core.timeutils import game_time, parse_iso, utc_now_iso
 
 RUN_OPEN_STATES = ("preparing", "hidden", "open")
 RUN_ENDED_STATES = ("done", "failed", "cancelled", "broken")
+#: Origins of templates the LLM wrote without an admin ("unkept generated" = origin in GENERATED_ORIGINS and kept=0).
+GENERATED_ORIGINS = ("auto", "story")
 
 _TEMPLATE_JSON_FIELDS = {
     "roles": list, "steps": list, "start_condition": dict, "prerequisites": dict,
@@ -129,7 +131,8 @@ def create_template(*, title: str, summary: str = "", gm_notes: str = "",
                     prerequisites: dict | None = None,
                     setup_effects: list | None = None,
                     rewards: list | None = None, time_limit_s: int = 0,
-                    origin: str = "admin", state: str = "draft") -> dict:
+                    origin: str = "admin", state: str = "draft",
+                    kept: bool = True) -> dict:
     """Insert a new template at revision 1. An unknown origin/state is
     refused by the table's CHECK (sqlite3.IntegrityError)."""
     template_id = "qt_" + uuid.uuid4().hex[:12]
@@ -137,11 +140,11 @@ def create_template(*, title: str, summary: str = "", gm_notes: str = "",
     with keyed_lock("quest_template", template_id), transaction() as conn:
         conn.execute(
             "INSERT INTO quest_templates (id, title, summary, gm_notes, "
-            "giver_role, origin, state, roles, steps, start_condition, "
+            "giver_role, origin, state, kept, roles, steps, start_condition, "
             "prerequisites, setup_effects, rewards, time_limit_s, created_at, "
-            "updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (template_id, title or "", summary or "", gm_notes or "",
-             giver_role or "", origin, state,
+             giver_role or "", origin, state, 1 if kept else 0,
              _dump(_container(roles, list)), _dump(_container(steps, list)),
              _dump(_container(start_condition, dict)),
              _dump(_container(prerequisites, dict)),
@@ -157,8 +160,9 @@ def get_template(template_id: str) -> dict | None:
     return _template_dict(row)
 
 
-def list_templates(*, origin: str = "", state: str = "") -> list[dict]:
-    """Templates, newest first, optionally filtered by origin and state."""
+def list_templates(*, origin: str = "", state: str = "",
+                   generated: bool | None = None) -> list[dict]:
+    """Templates, newest first, optionally filtered by origin, state and unkept-generated status."""
     where, params = [], []
     if origin:
         where.append("origin=?")
@@ -166,6 +170,12 @@ def list_templates(*, origin: str = "", state: str = "") -> list[dict]:
     if state:
         where.append("state=?")
         params.append(state)
+    if generated is True:
+        where.append("origin IN (%s) AND kept=0" % ",".join("?" * len(GENERATED_ORIGINS)))
+        params.extend(GENERATED_ORIGINS)
+    elif generated is False:
+        where.append("NOT (origin IN (%s) AND kept=0)" % ",".join("?" * len(GENERATED_ORIGINS)))
+        params.extend(GENERATED_ORIGINS)
     sql = "SELECT * FROM quest_templates"
     if where:
         sql += " WHERE " + " AND ".join(where)
@@ -271,12 +281,19 @@ def get_run(run_id: str) -> dict | None:
     return _run_dict(row)
 
 
-def list_runs(*, states: tuple[str, ...] = (), limit: int = 0) -> list[dict]:
-    """Runs newest first, optionally only those in ``states``."""
-    sql, params = "SELECT * FROM quest_runs", []
+def list_runs(*, states: tuple[str, ...] = (), limit: int = 0,
+              template_id: str = "") -> list[dict]:
+    """Runs newest first, optionally only those in ``states`` and/or of ``template_id``."""
+    where, params = [], []
     if states:
-        sql += " WHERE state IN (%s)" % ",".join("?" * len(states))
+        where.append("state IN (%s)" % ",".join("?" * len(states)))
         params.extend(states)
+    if template_id:
+        where.append("template_id=?")
+        params.append(template_id)
+    sql = "SELECT * FROM quest_runs"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY created_at DESC, rowid DESC"
     if limit and int(limit) > 0:
         sql += " LIMIT ?"
@@ -296,8 +313,22 @@ def list_chronicle(limit: int) -> list[dict]:
     return [_run_dict(r) for r in rows]
 
 
-def count_runs(states: tuple[str, ...], *, template_id: str = "") -> int:
-    """How many runs are in ``states`` (all runs for an empty tuple)."""
+def count_runs(states: tuple[str, ...], *, template_id: str = "",
+               origin: str = "") -> int:
+    """How many runs are in ``states`` (all runs for an empty tuple), optionally
+    narrowed to ``template_id`` and/or live templates of ``origin``."""
+    if origin:
+        where, params = ["t.origin=?"], [origin]
+        if states:
+            where.append("quest_runs.state IN (%s)" % ",".join("?" * len(states)))
+            params.extend(states)
+        if template_id:
+            where.append("quest_runs.template_id=?")
+            params.append(template_id)
+        sql = ("SELECT COUNT(*) FROM quest_runs "
+               "JOIN quest_templates t ON t.id = quest_runs.template_id "
+               "WHERE " + " AND ".join(where))
+        return int(get_connection().execute(sql, params).fetchone()[0])
     where, params = [], []
     if states:
         where.append("state IN (%s)" % ",".join("?" * len(states)))
@@ -309,6 +340,28 @@ def count_runs(states: tuple[str, ...], *, template_id: str = "") -> int:
     if where:
         sql += " WHERE " + " AND ".join(where)
     return int(get_connection().execute(sql, params).fetchone()[0])
+
+
+def delete_run(run_id: str) -> bool:
+    """Delete an ended run and its objects, payouts and judgements.
+
+    An open run is never deleted: returns False without deleting anything
+    when ``run_id`` does not exist or its state is not in ``RUN_ENDED_STATES``.
+    """
+    if not run_id:
+        return False
+    with keyed_lock("quest_run", run_id), transaction() as conn:
+        row = conn.execute("SELECT state FROM quest_runs WHERE id=?", (run_id,)).fetchone()
+        if row is None or row[0] not in RUN_ENDED_STATES:
+            return False
+        conn.execute("DELETE FROM quest_run_objects WHERE run_id=?", (run_id,))
+        conn.execute("DELETE FROM quest_run_payouts WHERE run_id=?", (run_id,))
+        conn.execute("DELETE FROM quest_judgements WHERE run_id=?", (run_id,))
+        cur = conn.execute(
+            "DELETE FROM quest_runs WHERE id=? AND state IN (%s)"
+            % ",".join("?" * len(RUN_ENDED_STATES)),
+            (run_id, *RUN_ENDED_STATES))
+        return cur.rowcount > 0
 
 
 def open_run(run_id: str, *, started_game_ts: str, expires_at: str = "") -> bool:

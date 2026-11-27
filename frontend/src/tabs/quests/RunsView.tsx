@@ -4,7 +4,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { useToast } from '../../lib/Toast'
 import { cancelRun, fetchRuns, questError, retryRun } from './api'
 import type { RunRow } from './api'
-import { RUN_OPEN_STATES, RUN_STATES, questErrorText, stepProgress } from './questsModel'
+import { ORIGIN_LABELS, RUN_OPEN_STATES, RUN_STATES, questErrorText, stepProgress } from './questsModel'
 
 const POLL_INTERVAL_MS = 15_000
 const FILTER_KEY = 'ga-quests-runs-state'
@@ -198,6 +198,9 @@ export function RunsView() {
                       <button type="button" className="ga-btn ga-btn-sm" aria-expanded={isOpen}
                         onClick={() => toggle(run.id)}>{isOpen ? '▾' : '▸'}</button>{' '}
                       {run.title || run.id}
+                      {run.origin && run.origin !== 'admin' ? (
+                        <>{' '}<span className="ga-tag">{t(ORIGIN_LABELS[run.origin] || run.origin)}</span></>
+                      ) : null}
                       {run.issues.length ? <>{' '}<span className="ga-tag ga-tag-missing">{run.issues.length}</span></> : null}
                     </td>
                     <td><span className={stateClass(run.state)}>{t(STATE_LABELS[run.state] || run.state)}</span></td>

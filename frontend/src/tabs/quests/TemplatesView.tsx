@@ -15,8 +15,10 @@ import {
   updateTemplate,
 } from './api'
 import type { GenerateJob, TemplateListRow, TemplateRow } from './api'
-import { canSave, clientIssues, draftToRow, emptyDraft, generateJobActive, questErrorText, rowToDraft } from './questsModel'
-import type { Catalog, Issue, TemplateDraft } from './questsModel'
+import {
+  ORIGIN_LABELS, canKeep, canSave, clientIssues, draftToRow, emptyDraft, generateJobActive, questErrorText, rowToDraft,
+} from './questsModel'
+import type { Catalog, Issue, TemplateDraft, TemplateFilter } from './questsModel'
 
 const GENERATE_PHASE_TEXTS: Record<string, string> = {
   draft: 'Writing the draft…',
@@ -46,6 +48,7 @@ export function TemplatesView({ onGuard, onStarted }: {
   const { t } = useI18n()
   const { toast } = useToast()
   const [rows, setRows] = useState<TemplateListRow[] | null>(null)
+  const [filter, setFilter] = useState<TemplateFilter>('library')
   const [catalog, setCatalog] = useState<Catalog | null>(null)
   const { draft, setDraft, load: loadDraft, dirty } = useDraft<TemplateDraft>()
   const { guard, dialog: discardDialog } = useDiscardGuard(dirty)
@@ -71,12 +74,12 @@ export function TemplatesView({ onGuard, onStarted }: {
 
   const reload = useCallback(async () => {
     try {
-      setRows(await fetchTemplates())
+      setRows(await fetchTemplates(filter))
     } catch (e) {
       toast(t('Failed to load') + ': ' + (e as Error).message, 'error')
       setRows((prev) => prev || [])
     }
-  }, [t, toast])
+  }, [filter, t, toast])
 
   useEffect(() => { reload() }, [reload])
   useEffect(() => {
@@ -155,7 +158,9 @@ export function TemplatesView({ onGuard, onStarted }: {
 
   const copyTemplate = useCallback(() => {
     if (savingRef.current) return
-    setDraft((prev) => (prev ? { ...prev, id: '', revision: 0, state: 'draft', title: `${prev.title} (copy)`.trim() } : prev))
+    setDraft((prev) => (prev
+      ? { ...prev, id: '', revision: 0, state: 'draft', origin: 'admin', kept: true, title: `${prev.title} (copy)`.trim() }
+      : prev))
     setIssues([])
     setStale(false)
     setError('')
@@ -230,6 +235,25 @@ export function TemplatesView({ onGuard, onStarted }: {
     if (draft?.id) void open(draft.id)
   }, [draft, open])
 
+  const keep = useCallback(async () => {
+    if (!draft || !canKeep(draft) || dirty || savingRef.current) return
+    setSaving(true)
+    savingRef.current = true
+    setError('')
+    setStale(false)
+    try {
+      const saved = await updateTemplate(draft.id, { kept: true }, draft.revision)
+      show(saved)
+      toast(t('Kept in the library'))
+      await reload()
+    } catch (e) {
+      fail(e)
+    } finally {
+      setSaving(false)
+      savingRef.current = false
+    }
+  }, [dirty, draft, fail, reload, show, t, toast])
+
   const doDelete = useCallback(async () => {
     setPendingDelete(false)
     if (!draft?.id) return
@@ -259,10 +283,18 @@ export function TemplatesView({ onGuard, onStarted }: {
         <ListHeader title={t('Quest templates')} onNew={newTemplate} onCopy={copyTemplate}
           copyDisabled={!draft || !draft.id}
           extra={
-            <button type="button" className="ga-btn ga-btn-sm" disabled={generateJobActive(job)}
-              onClick={() => setGenerating(true)}>
-              ✨ {t('Generate with LLM')}
-            </button>
+            <>
+              <select className="ga-input" value={filter} aria-label={t('Show templates')}
+                onChange={(e) => setFilter(e.target.value as TemplateFilter)}>
+                <option value="library">{t('Library')}</option>
+                <option value="generated">{t('Generated')}</option>
+                <option value="all">{t('All')}</option>
+              </select>
+              <button type="button" className="ga-btn ga-btn-sm" disabled={generateJobActive(job)}
+                onClick={() => setGenerating(true)}>
+                ✨ {t('Generate with LLM')}
+              </button>
+            </>
           } />
         {job ? (
           generateJobActive(job) || job.state === 'done' ? (
@@ -301,6 +333,12 @@ export function TemplatesView({ onGuard, onStarted }: {
                       <span className="ga-list-row-sub">— {t('{n} open').replace('{n}', String(row.open_runs))}</span>
                     ) : null}
                   </span>
+                  {row.origin && row.origin !== 'admin' ? (
+                    <span className="ga-tag">{t(ORIGIN_LABELS[row.origin] || row.origin)}</span>
+                  ) : null}
+                  {row.kept === false ? (
+                    <span className="ga-tag ga-status-paused">{t('Not kept')}</span>
+                  ) : null}
                   <span className={`ga-tag${row.state === 'ready' ? ' ga-status-ok' : ''}`}>
                     {row.state === 'ready' ? t('Ready') : t('Draft')}
                   </span>
@@ -326,12 +364,22 @@ export function TemplatesView({ onGuard, onStarted }: {
               saveDisabled={!canSave(draft, dirty)}
               dirty={dirty}
               extra={
-                <button type="button" className="ga-btn ga-btn-sm"
-                  disabled={!draft.id || dirty || draft.state !== 'ready' || saving}
-                  title={draft.id && !dirty && draft.state === 'ready' ? undefined : t('Save the template as ready first')}
-                  onClick={() => setStarting(true)}>
-                  {t('Start run')}
-                </button>
+                <>
+                  {canKeep(draft) ? (
+                    <button type="button" className="ga-btn ga-btn-sm"
+                      disabled={dirty || saving}
+                      title={dirty ? t('Save or discard your edits first') : undefined}
+                      onClick={() => { void keep() }}>
+                      {t('Keep')}
+                    </button>
+                  ) : null}
+                  <button type="button" className="ga-btn ga-btn-sm"
+                    disabled={!draft.id || dirty || draft.state !== 'ready' || saving}
+                    title={draft.id && !dirty && draft.state === 'ready' ? undefined : t('Save the template as ready first')}
+                    onClick={() => setStarting(true)}>
+                    {t('Start run')}
+                  </button>
+                </>
               }
             />
             {error || (!stale && allIssues.length) ? (
