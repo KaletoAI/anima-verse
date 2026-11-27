@@ -1118,11 +1118,19 @@ def _derived_plan_width(*rings: Tuple[str, Any]) -> float:
     return 0.0
 
 
+_ACTIVITIES_REFUSAL = (
+    "'activities' is not a field — activities are free text: describe "
+    "what people do here in 'activity_hint' (the place's or a room's)"
+)
+
+
 def _check_location_fields(data: Dict[str, Any], what: str,
                            creating: bool = False) -> None:
     """Whitelist + type check of a location body (create data / update patch).
     Room ids: never twice in one list; on create never a reserved "__" id
     (ground and corridors belong to the server)."""
+    if "activities" in data:
+        raise ToolRefusal(_ACTIVITIES_REFUSAL)
     _only_keys(data, _LOC_KEYS, what)
     for key in _LOC_STR:
         _str(data, key)
@@ -1157,6 +1165,8 @@ def _check_location_fields(data: Dict[str, Any], what: str,
         for i, room in enumerate(rooms):
             if not isinstance(room, dict):
                 raise ToolRefusal(f"rooms[{i}] must be an object")
+            if "activities" in room:
+                raise ToolRefusal(f"rooms[{i}]: {_ACTIVITIES_REFUSAL}")
             _only_keys(room, _ROOM_KEYS, f"rooms[{i}]")
             try:
                 for key in _ROOM_STR:

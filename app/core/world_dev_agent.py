@@ -132,6 +132,11 @@ REPAIR_NOTE = ("note: the closing brackets of your call were wrong and were "
                "repaired — count { [ ] } carefully")
 UNCLOSED_NOTE = ("note: your tool call was not closed with </tool> — it ran "
                  "anyway; always end it with </tool>")
+CUT_OFF_LINE = ("error: your reply hit the model's output limit after {n} characters and "
+                "was cut off before </tool> — the call did not run. Make it smaller: split "
+                "the change into several calls (update_location: change one room per call "
+                "and send the other kept rooms as {{\"id\": …}} alone, they stay as they "
+                "are), shorter texts, fewer fields per call")
 
 
 def _excerpt(body: str, pos: int, radius: int = 20) -> str:
@@ -437,6 +442,7 @@ class _RunState:
     pricing: Dict[str, float] = field(default_factory=dict)
     #: the run totals at the start of the current turn (per-turn budgets)
     base: Dict[str, int] = field(default_factory=dict)
+    last_finish: Optional[str] = None
 
 
 class RunManager:
@@ -1045,6 +1051,7 @@ class RunManager:
         cut at its tool call never reaches, so it is not used at all — one
         measure for the whole budget. Each next chunk races the stop event."""
         from app.core.llm_cost import estimate_cost
+        st.last_finish = None
         messages = self._messages(st)
         reply, shown = "", 0
         task_id = await _chat_active(st.llm_instance)
@@ -1070,6 +1077,9 @@ class RunManager:
                         break
                     if st.stop:
                         raise _Stopped()
+                    finish = getattr(chunk, "finish_reason", None)
+                    if finish:
+                        st.last_finish = finish
                     if not getattr(chunk, "content", None):
                         continue
                     reply += chunk.content
@@ -1218,6 +1228,8 @@ class RunManager:
                         if isinstance(decoded, dict):
                             args = decoded
                             notes.append(UNCLOSED_NOTE)
+                if not isinstance(args, dict) and st.last_finish == "length":
+                    line = CUT_OFF_LINE.format(n=len(reply))
             else:
                 name, body = m.group(1), m.group(2).strip()
                 st.history.append({"role": "assistant", "content": reply})

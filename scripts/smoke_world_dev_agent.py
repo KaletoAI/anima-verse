@@ -9,10 +9,11 @@ world-DB import); no server, no real LLM: `RunManager.llm_factory` returns a
 FakeLLM that plays a script of replies, and the LLM-queue registration is
 replaced by two counters (every registration must be closed again).
 
-A reply is a string, an Exception (raised from astream = provider error), or
-a callable (run inside astream, returns the string — used for a foreign
-edit "while the model thinks"). The tool tag is the project's tag format:
-<tool name="X">{json}</tool>.
+A reply is a string, a ``(text, finish)`` tuple (streams ``text`` and then
+yields a terminal ``LLMChunk(content="", finish_reason=finish)``), an Exception
+(raised from astream = provider error), or a callable (run inside astream,
+returns the string — used for a foreign edit "while the model thinks"). The
+tool tag is the project's tag format: <tool name="X">{json}</tool>.
 
 WHAT IS CHECKED, and where every expected value comes from
 ----------------------------------------------------------
@@ -122,6 +123,17 @@ Fixture: place P "Demo Pond" (description "calm", room Shore).
 (r) unclosed tag: ['<tool name="world_overview">{}' (no close), world_overview
     {}, "Looked."] -> the first is refused with 'error: tool call not closed'
     and the run goes on -> awaiting_review, step kinds [refused, read].
+(r2) unclosed tag cut off at output limit: [('<tool name="world_overview">'
+    '{"x": "aaaa', 'length'), world_overview{}, "Looked."]. Reply length by
+    hand: '<tool name="world_overview">' is 12 + 14 + 2 = 28 characters,
+    '{"x": "aaaa' is 7 + 4 = 11 characters -> n = 39 characters. Because the
+    terminal chunk carries finish_reason='length' and no complete JSON object
+    could be decoded, step 0 is refused with CUT_OFF_LINE (starts
+    "error: your reply hit the model's output limit after 39 characters" and
+    names "one room per call"); awaiting_review, step kinds [refused, read].
+(r3) same 39-character incomplete reply WITHOUT finish_reason (plain string)
+    -> step 0 still starts with "error: tool call not closed";
+    awaiting_review, step kinds [refused, read].
 (s) the end-of-turn transition raises (wr.set_status patched to raise once
     for "awaiting_review"): [create "Demo S1", "ok"] -> the run does not stay
     running without a task: interrupted, not busy, note names the failure;
@@ -308,11 +320,16 @@ class FakeLLM:
             reply = reply()
         if isinstance(reply, BaseException):
             raise reply
+        finish = None
+        if isinstance(reply, tuple):
+            reply, finish = reply
         if reply == "BLOCK":
             await asyncio.Event().wait()
         half = len(reply) // 2
         yield LLMChunk(content=reply[:half])
         yield LLMChunk(content=reply[half:])
+        if finish is not None:
+            yield LLMChunk(content="", finish_reason=finish)
 
 
 FACTORY_CALLS = []  # (model, provider, max_tokens) of every resolve
@@ -787,6 +804,35 @@ async def main():
           [(s["kind"], s["line"]) for s in steps])
     check("(r) not-closed line", steps and (steps[0]["line"] or "").startswith(
         "error: tool call not closed"), steps and steps[0]["line"])
+    await rm.discard(run_id)
+
+    print("(r2) unclosed tool tag cut off at output limit (finish_reason='length')")
+    cut_reply = '<tool name="world_overview">{"x": "aaaa'
+    rm, _ = manager([(cut_reply, "length"), call("world_overview", "{}"), "Looked."])
+    run_id = await start(rm)
+    run = await settle(rm, run_id)
+    steps = wr.steps(run_id)
+    check("(r2) awaiting_review", run["status"] == "awaiting_review",
+          (run["status"], run["note"]))
+    check("(r2) refused + read", [s["kind"] for s in steps] == ["refused", "read"],
+          [(s["kind"], s["line"]) for s in steps])
+    line0 = (steps[0]["line"] or "") if steps else ""
+    check("(r2) cut-off line with char count and split hint",
+          line0.startswith("error: your reply hit the model's output limit after 39 characters")
+          and "one room per call" in line0, line0)
+    await rm.discard(run_id)
+
+    print("(r3) same incomplete reply without finish_reason")
+    rm, _ = manager([cut_reply, call("world_overview", "{}"), "Looked."])
+    run_id = await start(rm)
+    run = await settle(rm, run_id)
+    steps = wr.steps(run_id)
+    check("(r3) awaiting_review", run["status"] == "awaiting_review",
+          (run["status"], run["note"]))
+    check("(r3) refused + read", [s["kind"] for s in steps] == ["refused", "read"],
+          [(s["kind"], s["line"]) for s in steps])
+    line0 = (steps[0]["line"] or "") if steps else ""
+    check("(r3) not-closed line", line0.startswith("error: tool call not closed"), line0)
     await rm.discard(run_id)
 
     print("(s) the end-of-turn transition raises")
