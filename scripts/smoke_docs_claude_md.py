@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guard for CLAUDE.md: every path, flag, npm script and symbol it names exists.
+"""Guard for AGENTS.md (CLAUDE.md only imports it with @AGENTS.md): every path, flag, npm script and symbol it names exists.
 
 Usage:
     ./.venv/bin/python scripts/smoke_docs_claude_md.py
@@ -7,12 +7,13 @@ Usage:
 No server, no world DB, no imports of app code — a pure filesystem + text scan
 of the repository root.
 
-WHY. CLAUDE.md is the first thing every AI coding session in this repo reads.
+WHY. AGENTS.md is the first thing every AI coding session in this repo reads.
 A stale file path or a function name that moved does not produce a stack trace;
 it produces an agent that looks in the wrong place and then invents something.
 The cheap half of that is mechanical, so it is checked here.
 
-CLAUDE.md is GITIGNORED (it is local guidance, not repo content). When it is
+AGENTS.md is local guidance, not repo content (CLAUDE.md is in .gitignore, AGENTS.md
+in .git/info/exclude). When it is
 absent this check prints a note and exits 0 — a fresh clone must not fail.
 
 WHAT IS CHECKED (everything in `backticks`, plus the fenced command block)
@@ -55,7 +56,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DOC = ROOT / "CLAUDE.md"
+DOC = ROOT / "AGENTS.md"  # CLAUDE.md only imports it (@AGENTS.md)
 
 #: Directories a basename/symbol search never descends into.
 SKIP_DIRS = {".git", ".venv", "node_modules", "__pycache__", "migration_backup",
