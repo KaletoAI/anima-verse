@@ -46,4 +46,65 @@ public sealed class RoomEntryTests
         pending.SetResult(Answer()); Assert.False(await write);
         Assert.Null(channel.RequestedRoom);
     }
+
+    [Fact]
+    public async Task NotInLocationBlocksUntilSetLocationChanges()
+    {
+        double now = 0; int requests = 0;
+        var rooms = new List<ElevatorRoom> { new("a", 0, new(-3, 0)), new("b", 0, new(3, 0)) };
+        PositionAnswer NotInLocation()
+        {
+            using var doc = JsonDocument.Parse("{\"detail\":{\"reason\":\"not_in_location\",\"location_id\":\"\"}}");
+            return new(409, doc.RootElement.Clone());
+        }
+        using var channel = new RoomEntryChannel((_, _) =>
+        {
+            requests++;
+            return Task.FromResult(requests == 1 ? NotInLocation() : Answer(200));
+        }, () => now);
+
+        channel.SetLocation("loc-a");
+        channel.Walk("a", new P2(3, 0), rooms, 0);
+        now = 1500; channel.Walk("a", new(3, 0), rooms, 0);
+        await channel.Pending!;
+        Assert.Equal(1, requests);
+
+        // No resend after 5 s while confirmed location is unchanged (both Walk and EnterAsync refuse).
+        now = 6500; channel.Walk("a", new(3, 0), rooms, 0);
+        Assert.Equal(1, requests);
+        Assert.False(await channel.EnterAsync("b"));
+        Assert.Equal(1, requests);
+
+        // Resends after SetLocation reports a different location.
+        channel.SetLocation("loc-b");
+        now = 8000; channel.Walk("a", new(3, 0), rooms, 0);
+        await channel.Pending!;
+        Assert.Equal(2, requests);
+    }
+
+    [Fact]
+    public async Task OtherRefusalsStillRetryAfterFourSeconds()
+    {
+        double now = 0; int requests = 0;
+        PositionAnswer Locked()
+        {
+            using var doc = JsonDocument.Parse("{\"detail\":{\"reason\":\"locked\",\"message\":\"Locked\"}}");
+            return new(403, doc.RootElement.Clone());
+        }
+        using var channel = new RoomEntryChannel((_, _) =>
+        {
+            requests++;
+            return Task.FromResult(requests == 1 ? Locked() : Answer(200));
+        }, () => now);
+
+        channel.SetLocation("loc-a");
+        Assert.False(await channel.EnterAsync("b"));
+        Assert.Equal(1, requests);
+        now = 3999;
+        Assert.False(await channel.EnterAsync("b"));
+        Assert.Equal(1, requests);
+        now = 4000;
+        Assert.True(await channel.EnterAsync("b"));
+        Assert.Equal(2, requests);
+    }
 }

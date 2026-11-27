@@ -291,7 +291,7 @@ public partial class Main
                 FlyTo = point => { if (_camera is { } cam) cam.FlyTo(point, cam.Control.TargetDist); }
             };
             if (_hud is { } overlay)
-                _avatarRooms = new AvatarRoomsController(_figures, _builder, _playerSteering, _source!, overlay)
+                _avatarRooms = new AvatarRoomsController(_figures, _builder, _playerSteering, _source!, overlay, () => _avatarPosition?.LocationId ?? "")
                 {
                     Log = Log,
                     Toast = EmbodyToast,

@@ -205,3 +205,58 @@
  * signed area +12, and 4×4 minus the 2×2 notch is 12 as well. ✓
  */
 ```
+
+## Fence, gate and door entry semantics ([26], [27])
+
+The plot outline is never an entry offer and never a wall. Boundary openings
+are GATES in a FENCE (`fenced: true`); unfenced places offer entry only at
+outside level-0 DOORS (`doors[]`), otherwise nothing.
+
+### [26] `entryOfferNear` with fenced gates and unfenced outside doors
+
+Building `house` at `(100, 100)`, yaw 0:
+- hall door: centre `(98, 103)`, outward normal `(0, 1)`, width `1.2`, room `"hall"`, level `0` -> inward `(-0, -1) = (0, -1)`.
+- kitchen door: centre `(105, 100)`, outward normal `(1, 0)`, width `0.9`, room `"kitchen"`, level `0` -> inward `(-1, 0)`.
+
+Unfenced (`fenced: false`, `gates: []`):
+- avatar `(98, 105)`:
+  - hall door: `hypot(98 - 98, 103 - 105) = hypot(0, -2) = 2 <= 3` -> offered, `point (98, 103)`, `edge null`, `dist 2`, `inward (0, -1)`.
+  - kitchen door: `hypot(105 - 98, 100 - 105) = hypot(7, -5) = sqrt(74) ≈ 8.6023 > 3`.
+- avatar `(98, 106.5)`:
+  - hall door: `hypot(0, -3.5) = 3.5 > 3`; kitchen door: `hypot(7, -6.5) > 3` -> `null`.
+- avatar `(106.5, 100.5)`:
+  - hall door: `hypot(-8.5, 2.5) = sqrt(78.5) > 3`.
+  - kitchen door: `hypot(105 - 106.5, 100 - 100.5) = hypot(-1.5, -0.5) = sqrt(2.25 + 0.25) = sqrt(2.5) = 1.5811388300841898 <= 3` -> offered, `point (105, 100)`, `edge null`, `dist 1.5811388300841898`, `inward (-1, 0)`.
+
+Fenced (`fenced: true`, gate `edge 0` at `(100, 94)` inward `(0, 1)`, same two doors):
+- avatar `(98, 105)`: fenced places check gates only (doors ignored); distance to gate `(100, 94)` is `hypot(2, -11) = sqrt(125) ≈ 11.1803 > 3` -> `null`.
+- avatar `(100, 92)`: distance to gate `(100, 94)` is `hypot(0, 2) = 2 <= 3` -> offered, `point (100, 94)`, `edge 0`, `dist 2`, `inward (0, 1)`.
+
+Unfenced places with no doors (`fenced: false`, `gates: []`, `doors: []`) offer nothing (`null`) at any position (the former polygon rim fallback is removed).
+
+### [27] `atDoor` and `atGate`
+
+Tolerance: `along_pad_m = 0.3`, `across_m = 1.5`, `gate_m = 1.5`.
+
+For a door `(cx, cz)`, outward unit normal `(out_x, out_z)`, width `w`:
+- `d = (x - cx, z - cz)`
+- `across = d.x * out_x + d.z * out_z`
+- `along  = d.x * out_z - d.z * out_x`
+- `atDoor <=> |along| <= w / 2 + along_pad_m` AND `|across| <= across_m`.
+
+Hand checks:
+- hall door `(98, 103)`, `out (0, 1)`, `w = 1.2` (`w/2 + 0.3 = 0.9`):
+  - `(98, 102.6)`: `d = (0, -0.4)` -> `across = -0.4` (`|-0.4| <= 1.5`), `along = 0` (`|0| <= 0.9`) -> `true`.
+  - `(99.2, 102.6)`: `d = (1.2, -0.4)` -> `across = -0.4`, `along = 1.2 * 1 - (-0.4) * 0 = 1.2 > 0.9` -> `false`.
+- kitchen door `(105, 100)`, `out (1, 0)`, `w = 0.9` (`w/2 + 0.3 = 0.75`):
+  - `(104.6, 100)`: `d = (-0.4, 0)` -> `across = -0.4` (`<= 1.5`), `along = 0` (`<= 0.75`) -> `true`.
+  - `(105.8, 100)`: `d = (0.8, 0)` -> `across = 0.8` (`<= 1.5`), `along = 0` (`<= 0.75`) -> `true`.
+  - `(105.6, 102.4)`: `d = (0.6, 2.4)` -> `across = 0.6`, `along = 0.6 * 0 - 2.4 * 1 = -2.4` (`|-2.4| = 2.4 > 0.75`) -> `false`.
+- hall door turned 90° (building yaw 90°: door `(103, 102)`, `out (1, 0)`, `w = 1.2`, `w/2 + 0.3 = 0.9`):
+  - `(103.4, 102.5)`: `d = (0.4, 0.5)` -> `across = 0.4 * 1 + 0.5 * 0 = 0.4` (`<= 1.5`), `along = 0.4 * 0 - 0.5 * 1 = -0.5` (`|-0.5| = 0.5 <= 0.9`) -> `true`.
+
+For a gate `(gx, gz)`: `atGate <=> hypot(x - gx, z - gz) <= gate_m`.
+- gate `(300, 80)`, `gate_m = 1.5`:
+  - `(300, 81.4)`: `hypot(0, 1.4) = 1.4 <= 1.5` -> `true`.
+  - `(310, 81)`: `hypot(10, 1) = sqrt(101) ≈ 10.049876 > 1.5` -> `false`.
+  - `(300, 79)`: `hypot(0, -1) = 1.0 <= 1.5` -> `true`.

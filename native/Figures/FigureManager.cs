@@ -273,6 +273,8 @@ public partial class FigureManager : Node3D
 
     /// <summary>The latest polled <c>/play/worldmap</c> payload (null before the first poll) — the bench anchor's snapshot.</summary>
     public JsonElement? LatestMap { get; private set; }
+    /// <summary>Parsed entry snapshot of the latest applied worldmap payload.</summary>
+    public Embody.EntryWorld? LatestEntry { get; private set; }
 
     /// <summary>The last poll failed (the HUD's <c>connection: 'lost'</c>); false after the next good one.</summary>
     public bool LastPollFailed { get; private set; }
@@ -314,6 +316,7 @@ public partial class FigureManager : Node3D
     /// </summary>
     public Task Apply(JsonElement root)
     {
+        LatestEntry = Embody.EntryWorld.Parse(root);
         Stats.Polls++;
         _mapAppliedClock = _clock;
         _ageAtAppliedS = _source.ReceiptOf(root) is { } receipt

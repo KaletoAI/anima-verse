@@ -41,7 +41,8 @@ public sealed partial class WorldBuilder
         return true;
     }
 
-    private readonly Dictionary<(string Id, int Level), (LocationSlot Slot, ScenePayload Scene, TileFrame Frame, List<WallSegment> Segments)> _avatarWalls = new();
+    private readonly Dictionary<(string Id, int Level), (LocationSlot Slot, ScenePayload Scene, TileFrame Frame, List<WallSegment> Full, List<WallSegment> Inner)> _avatarWalls = new();
+    private readonly Dictionary<string, (LocationInfo Loc, P2[] Ring, PolygonExtent Bounds)> _boundaryRings = new(StringComparer.Ordinal);
 
     public LocationSlot? FootprintAt(double x, double z) => TileAt(x,z)?.Slot;
 
@@ -59,38 +60,47 @@ public sealed partial class WorldBuilder
         return room is not null && tile.Stands.RoomCenters.TryGetValue(room,out var centre) && centre.Y<=camera.Y ? centre.Y : terrain;
     }
 
-    /// <summary>Task 49: worldmap openings remain authoritative even when a scene has no authored walls.</summary>
-    private static IEnumerable<P2> OpeningsAt(JsonElement? map, string id)
-    {
-        if (map is not { } root) yield break;
-        foreach (var l in Json.Arr(root,"locations"))
-        {
-            if (Json.Str(l,"id") != id) continue;
-            foreach (var o in Json.Arr(l,"openings"))
-                if (o.TryGetProperty("at_world", out var a) && a.ValueKind == JsonValueKind.Array && a.GetArrayLength() >= 2)
-                    yield return new(a[0].GetDouble(), a[1].GetDouble());
-        }
-    }
-
-    /// <summary>Task 49: terrain, foreign footprint and uphill gates; refused-disc memory belongs to the caller.</summary>
-    public bool PlayerBlocked(LocationSlot? mine, double x, double z, P2? from, JsonElement? map)
+    /// <summary>
+    /// Terrain, fenced-plot gate rules and uphill gates; refused-disc memory belongs to the caller.
+    /// Rule (a): entering a foreign fenced place away from its gates is blocked (both steps and click targets).
+    /// Rule (b): leaving the avatar's own fenced place away from its gates is blocked for steps (when <paramref name="from"/>
+    /// lies on <paramref name="mine"/>), never for target checks (<paramref name="from"/> is null).
+    /// </summary>
+    public bool PlayerBlocked(LocationSlot? mine, double x, double z, P2? from, EntryWorld entry)
     {
         var there = TileAt(x,z);
         if (Walk.TerrainBlocks(Ground?.Catalog.PassableAt(x,z) ?? true, there is not null)) return true;
-        if (there is { } foreign && foreign.Slot != mine && OpeningsAt(map,foreign.Slot.Loc.Id).Any()) return true;
+        var tol = entry.Tolerance;
+        bool AtAnyGate(string id, double px, double pz)
+        {
+            foreach (var g in entry.Gates(id))
+                if (EntryRules.AtGate(g.AtWorld, px, pz, tol)) return true;
+            return false;
+        }
+        bool AtAnyDoor(string id, double px, double pz)
+        {
+            foreach (var d in entry.Doors(id))
+                if (EntryRules.AtDoor(d, px, pz, tol)) return true;
+            return false;
+        }
+        if (there is { } foreign && foreign.Slot != mine && entry.Fenced(foreign.Slot.Loc.Id)
+            && !AtAnyGate(foreign.Slot.Loc.Id, x, z))
+            return true;
         if (from is not { } f) return false;
         var here = TileAt(f.X,f.Z);
+        if (mine is not null && here?.Slot == mine && entry.Fenced(mine.Loc.Id) && there?.Slot != mine
+            && !AtAnyGate(mine.Loc.Id, x, z))
+            return true;
         double Stand(double xx, double zz, (LocationSlot Slot, P2 Local)? tile)
         {
             double bed = GateBedAt(xx,zz,tile);
             return PropWaterAt(xx,zz,tile) is { } water ? Math.Max(bed,water.Y) : bed;
         }
         double dh = Stand(x,z,there) - Stand(f.X,f.Z,here);
-        double maxStep = map is { } m ? Json.NumOrNull(m,"max_step_height_m") ?? .4 : .4;
-        double maxSlope = map is { } n ? Json.NumOrNull(n,"max_slope_deg") ?? 40 : 40;
-        if (!Walk.SlopeBlocks(dh,double.Hypot(x-f.X,z-f.Z),maxStep,maxSlope)) return false;
-        bool NearOpening(LocationSlot? slot) => slot is not null && OpeningsAt(map,slot.Loc.Id).Any(o =>
-            double.Hypot(o.X-x,o.Z-z) <= 1.5 || double.Hypot(o.X-f.X,o.Z-f.Z) <= 1.5);
+        if (!Walk.SlopeBlocks(dh,double.Hypot(x-f.X,z-f.Z),entry.MaxStepM,entry.MaxSlopeDeg)) return false;
+        bool NearOpening(LocationSlot? slot) => slot is not null
+            && (AtAnyGate(slot.Loc.Id, x, z) || AtAnyGate(slot.Loc.Id, f.X, f.Z)
+                || AtAnyDoor(slot.Loc.Id, x, z) || AtAnyDoor(slot.Loc.Id, f.X, f.Z));
         return !NearOpening(there?.Slot) && (here?.Slot == there?.Slot || !NearOpening(here?.Slot));
     }
 
@@ -107,28 +117,113 @@ public sealed partial class WorldBuilder
         return FigureGroundY(x,z);
     }
 
+    private (List<WallSegment> Full, List<WallSegment> Inner) LevelWalls(LocationSlot tile, ScenePayload scene, int level)
+    {
+        var key = (tile.Loc.Id, level);
+        var frame = tile.Stands.Frame;
+        if (!_avatarWalls.TryGetValue(key, out var cache) || cache.Slot != tile || cache.Scene != scene || cache.Frame != frame)
+        {
+            var localSegs = Collide.WallSegments(scene, level);
+            var full = new List<WallSegment>(localSegs.Count);
+            P2[]? ring = tile.Loc.Boundary is { Length: >= 3 } b ? BoundaryRing(tile, b).Ring : null;
+            double hullTol = 0.3 * (double.IsFinite(scene.K) && scene.K > 0 ? scene.K : 1);
+            bool OnHull(double lx, double lz) => SceneView.NearestRimPoint(lx, lz, ring) is { } r && r.Dist <= hullTol;
+            var inner = ring is null ? full : new List<WallSegment>(localSegs.Count);
+            foreach (var s in localSegs)
+            {
+                var a = SceneView.TileToWorld(frame, s.Ax, s.Az);
+                var bPt = SceneView.TileToWorld(frame, s.Bx, s.Bz);
+                var worldSeg = new WallSegment(a.X, a.Z, bPt.X, bPt.Z);
+                full.Add(worldSeg);
+                if (ring is not null && !(OnHull(s.Ax, s.Az) && OnHull(s.Bx, s.Bz) && OnHull((s.Ax + s.Bx) * 0.5, (s.Az + s.Bz) * 0.5)))
+                    inner.Add(worldSeg);
+            }
+            cache = (tile, scene, frame, full, inner);
+            _avatarWalls[key] = cache;
+        }
+        return (cache.Full, cache.Inner);
+    }
+
+    private (P2[] Ring, PolygonExtent Bounds) BoundaryRing(LocationSlot slot, (double X, double Z)[] boundary)
+    {
+        if (_boundaryRings.TryGetValue(slot.Loc.Id, out var cached) && ReferenceEquals(cached.Loc, slot.Loc))
+            return (cached.Ring, cached.Bounds);
+        var ring = new P2[boundary.Length];
+        double minX = double.PositiveInfinity, minZ = double.PositiveInfinity;
+        double maxX = double.NegativeInfinity, maxZ = double.NegativeInfinity;
+        for (int i = 0; i < boundary.Length; i++)
+        {
+            double x = boundary[i].X, z = boundary[i].Z;
+            ring[i] = new P2(x, z);
+            if (x < minX) minX = x; if (x > maxX) maxX = x;
+            if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+        }
+        var bounds = new PolygonExtent(minX, minZ, maxX, maxZ);
+        _boundaryRings[slot.Loc.Id] = (slot.Loc, ring, bounds);
+        return (ring, bounds);
+    }
+
     /// <summary>
-    /// Task 49: cache per location/storey, invalidate on remount or frame changes. Transform BOTH local endpoints
-    /// after wallSegments applies doorway ease; a rotated tile cannot be represented by adding its origin.
+    /// Cache per location/storey, invalidate on remount or frame changes. Transform both local endpoints after
+    /// wallSegments applies doorway ease. For an unfenced building with no outside doors (no-trap rule), hull
+    /// segments on the footprint boundary are dropped so the avatar is never trapped inside, while partition walls stay.
     /// Unknown avatar room/storey or closed interior supplies no invisible collision.
     /// </summary>
-    public (IReadOnlyList<WallSegment> Segments, double Radius)? PlayerWalls(LocationSlot? tile, string room)
+    public (IReadOnlyList<WallSegment> Segments, double Radius)? PlayerWalls(LocationSlot? tile, string room, EntryWorld entry)
     {
         if (tile?.IsBuilding != true || tile.Fade.Interior?.Visible != true || tile.Scene is not { } scene
             || !tile.Stands.RoomLevels.TryGetValue(room,out int level)) return null;
-        var key = (tile.Loc.Id,level);
-        var frame = tile.Stands.Frame;
-        if (!_avatarWalls.TryGetValue(key,out var cache) || cache.Slot != tile || cache.Scene != scene || cache.Frame != frame)
+        var (full, inner) = LevelWalls(tile, scene, level);
+        bool noTrap = !entry.Fenced(tile.Loc.Id) && entry.Doors(tile.Loc.Id).Count == 0;
+        var segments = noTrap ? inner : full;
+        return segments.Count == 0 ? null : (segments, Collide.BodyRadius(scene.K));
+    }
+
+    /// <summary>
+    /// Level-0 building walls for every building slot whose footprint (x, z) touches within body radius + step lead.
+    /// Independent of interior visibility and avatar room, except skipping the avatar's own slot when on another storey,
+    /// and skipping unfenced buildings with no outside doors (no-trap rule; a location unknown to <paramref name="entry"/>
+    /// counts as unfenced with no doors and is skipped).
+    /// </summary>
+    public (IReadOnlyList<WallSegment> Segments, double Radius)? OutsideWalls(
+        LocationSlot? here, string room, double x, double z, EntryWorld entry, double lead = PlayerSteering.MinLead)
+    {
+        List<WallSegment>? single = null;
+        List<WallSegment>? combined = null;
+        double maxRadius = 0;
+        double stepLead = Math.Max(0, lead);
+        foreach (var slot in _slots.Values)
         {
-            var segments = Collide.WallSegments(scene,level).Select(s =>
+            if (!slot.IsBuilding || slot.Scene is not { } scene || !GodotObject.IsInstanceValid(slot.Group)
+                || slot.Loc.Boundary is not { Length: >= 3 } boundary) continue;
+            if (!entry.Fenced(slot.Loc.Id) && entry.Doors(slot.Loc.Id).Count == 0) continue;
+            if (slot == here && room.Length > 0 && slot.Stands.RoomLevels.TryGetValue(room, out int roomLevel) && roomLevel != 0)
+                continue;
+            double radius = Collide.BodyRadius(scene.K);
+            double reach = radius + stepLead;
+            var local = SceneView.WorldToTile(slot.Stands.Frame, x, z);
+            var (ring, bounds) = BoundaryRing(slot, boundary);
+            if (local.X < bounds.MinX - reach || local.X > bounds.MaxX + reach
+                || local.Z < bounds.MinZ - reach || local.Z > bounds.MaxZ + reach)
+                continue;
+            if (SceneView.PolygonDistance(local.X, local.Z, ring) > reach)
+                continue;
+            var segs = LevelWalls(slot, scene, 0).Full;
+            if (segs.Count == 0) continue;
+            if (single is null && combined is null)
             {
-                var a = SceneView.TileToWorld(frame,s.Ax,s.Az);
-                var b = SceneView.TileToWorld(frame,s.Bx,s.Bz);
-                return new WallSegment(a.X,a.Z,b.X,b.Z);
-            }).ToList();
-            cache = (tile,scene,frame,segments); _avatarWalls[key] = cache;
+                single = segs;
+                maxRadius = radius;
+            }
+            else
+            {
+                if (combined is null) { combined = new List<WallSegment>(single!.Count + segs.Count); combined.AddRange(single); single = null; }
+                combined.AddRange(segs);
+                maxRadius = Math.Max(maxRadius, radius);
+            }
         }
-        return cache.Segments.Count == 0 ? null : (cache.Segments,Collide.BodyRadius(scene.K));
+        var result = combined ?? single;
+        return result is null ? null : (result, maxRadius);
     }
 
     private readonly ReadinessState _playerReadiness = new();

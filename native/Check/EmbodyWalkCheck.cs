@@ -56,6 +56,7 @@ public static class EmbodyWalkCheck
             world.AddChild(manager);
             await manager.InitAsync();
             using var doc = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(fixtures, "embody", "worldmap.json")));
+            var hallEntry = EntryWorld.Parse(doc.RootElement);
             await manager.Apply(doc.RootElement);
             await manager.EnsurePool();
             var fig = manager.Figures["fixture-avatar"];
@@ -128,9 +129,10 @@ public static class EmbodyWalkCheck
                steering.Route is null && manager.WalkTarget is not { Visible: true } && fig.Position.Z > -3.7 && fig.Position.Z < -3.5);
             steering.CancelRoute();
             // The straight walk keeps its 20-frame stall: outside every footprint (no navigation) behind the hall, the click
-            // on its far side (-3, 8) walks into the hall's footprint, which is foreign with an authored opening → blocked;
-            // the first lead (-3, -3.95) is already inside it, so every frame's target is the start (zero progress).
-            At(-3,-4.1f); steering.RoomId = "";
+            // on its far side (-3, 8) is held by the hall's north wall (z = -4), which now collides from outside (body
+            // radius 0.25 keeps the centre at z = -4.25); every frame's target is the start (zero progress). The fence rule
+            // itself is covered by the fenced-hall assertions below.
+            At(-3,-4.25f); steering.RoomId = "";
             // Object actions retain their approach planner, route and marker.
             Is("W6 object approach behind building accepted", steering.WalkTo(new(-3,8)) && steering.WalkOrderId is null);
             Is("W6 marker visible", manager.WalkTarget is { Visible: true });
@@ -184,14 +186,14 @@ public static class EmbodyWalkCheck
             Is("upper-floor object approach plans goal", steering.WalkTo(new(-2.01,0)));
             Near("upper-floor object approach X",steering.Route!.Value.X,-2.01);
             Near("upper room floor",builder.PlayerFloorY(hall,"r-up",-3,1),3.03);
-            Is("unknown room has no walls",builder.PlayerWalls(hall,"unknown") is null);
+            Is("unknown room has no walls",builder.PlayerWalls(hall,"unknown",hallEntry) is null);
             hall.Fade.Snap(0);
-            Is("closed interior has no invisible walls",builder.PlayerWalls(hall,"r-a") is null);
+            Is("closed interior has no invisible walls",builder.PlayerWalls(hall,"r-a",hallEntry) is null);
             hall.Fade.Snap(1);
-            var unrotated=builder.PlayerWalls(hall,"r-a")!.Value;
+            var unrotated=builder.PlayerWalls(hall,"r-a",hallEntry)!.Value;
             var savedFrame=hall.Stands.Frame;
             hall.Stands.Frame=new(new Vec3(40,2,20),Math.PI/2);
-            var rotated=builder.PlayerWalls(hall,"r-a")!.Value;
+            var rotated=builder.PlayerWalls(hall,"r-a",hallEntry)!.Value;
             var first=unrotated.Segments[0];
             var a=AnimaNative.Scene.SceneView.TileToWorld(hall.Stands.Frame,first.Ax,first.Az);
             var b=AnimaNative.Scene.SceneView.TileToWorld(hall.Stands.Frame,first.Bx,first.Bz);
@@ -200,7 +202,7 @@ public static class EmbodyWalkCheck
             Near("rotated wall B X",rotated.Segments[0].Bx,b.X);
             Near("rotated wall B Z",rotated.Segments[0].Bz,b.Z);
             hall.Stands.Frame=savedFrame;
-            Is("wall cache invalidates frame",builder.PlayerWalls(hall,"r-a")!.Value.Segments[0]==first);
+            Is("wall cache invalidates frame",builder.PlayerWalls(hall,"r-a",hallEntry)!.Value.Segments[0]==first);
             At(-3,1); steering.RoomId="r-a";
             Frame(w);
             steering.MovementLocked=true;
@@ -319,6 +321,60 @@ public static class EmbodyWalkCheck
             Near("travel root shift",fig.Position.DistanceTo(beforeTravel),.4);
             Is("travel shifts goal equally",((fig.Target-goalBeforeTravel)-(fig.Position-beforeTravel)).Length()<1e-5);
             Is("travel is taken once",manager.TakePlayerTravel(fig.CharacterName) is null);
+
+            // Fenced plot gate rules (a), unfenced building outside walls + door gap (b), upstairs skip (c).
+            Is("fenced hall blocks outside non-gate",builder.PlayerBlocked(null,0,0,null,hallEntry));
+            Is("fenced hall allows outside at gate",!builder.PlayerBlocked(null,3,3.6,new P2(3,4.5),hallEntry));
+            Is("own fenced place: a click target outside is not refused",!builder.PlayerBlocked(hall,-3,-8,null,hallEntry));
+            Is("fenced hall blocks leaving outside gate",builder.PlayerBlocked(hall,0,4.5,new P2(0,3.6),hallEntry));
+            Is("fenced hall allows leaving at gate",!builder.PlayerBlocked(hall,3,4.5,new P2(3,3.6),hallEntry));
+
+            var unfencedNode=JsonNode.Parse(doc.RootElement.GetRawText())!;
+            unfencedNode["locations"]![0]!["openings"]=new JsonArray();
+            unfencedNode["locations"]![0]!["fenced"]=false;
+            using var unfencedDoc=JsonDocument.Parse(unfencedNode.ToJsonString());
+            var unfencedEntry=EntryWorld.Parse(unfencedDoc.RootElement);
+            await manager.Apply(unfencedDoc.RootElement);
+            Is("unfenced hall plot not blocked by PlayerBlocked",!builder.PlayerBlocked(null,0,0,null,unfencedEntry));
+            fig.Transitions=Array.Empty<ClipTransition>();
+            if (fig.Bridging) fig.CancelBridge();
+            var aKey=new HashSet<string> { "a" };
+            At(7,0); steering.RoomId="";
+            for (int i=0; i<60; i++)
+            {
+                Frame(aKey);
+                Is("unfenced east outside wall holds frame "+i,fig.Position.X>=6+Collide.BodyRadiusM-1e-4);
+            }
+            Is("unfenced east outside wall approached",fig.Position.X<6.4);
+            At(3,5); steering.RoomId="";
+            for (int i=0; i<40; i++) Frame(w);
+            Is("unfenced outside door gap passes north",fig.Position.Z<3.6);
+            Is("upstairs room skips ground-floor outside walls",builder.OutsideWalls(hall,"r-up",-3,1,unfencedEntry) is null);
+
+            // No-trap rule: unfenced building with no outside doors skips outside walls and drops hull walls inside.
+            var noTrapNode=JsonNode.Parse(unfencedDoc.RootElement.GetRawText())!;
+            noTrapNode["locations"]![0]!["doors"]=new JsonArray();
+            using var noTrapDoc=JsonDocument.Parse(noTrapNode.ToJsonString());
+            var noTrapEntry=EntryWorld.Parse(noTrapDoc.RootElement);
+            await manager.Apply(noTrapDoc.RootElement);
+            Is("no-trap hall skips outside walls",builder.OutsideWalls(null,"",7,0,noTrapEntry) is null);
+            At(7,0); steering.RoomId="";
+            for (int i=0; i<30; i++) Frame(aKey);
+            Is("no-trap hall passes east wall line west",fig.Position.X<6);
+            hall.Fade.Snap(1);
+            var doorWalls=builder.PlayerWalls(hall,"r-a",unfencedEntry);
+            var noTrapWalls=builder.PlayerWalls(hall,"r-a",noTrapEntry);
+            Is("no-trap hall keeps partition walls and drops hull",doorWalls is { } dw && noTrapWalls is { } nw && nw.Segments.Count>0 && nw.Segments.Count<dw.Segments.Count);
+            var hallRing=Array.ConvertAll(hall.Loc.Boundary!,p=>new P2(p.X,p.Z));
+            foreach (var seg in noTrapWalls!.Value.Segments)
+            {
+                double da=AnimaNative.Scene.SceneView.NearestRimPoint(seg.Ax,seg.Az,hallRing)!.Value.Dist;
+                double db=AnimaNative.Scene.SceneView.NearestRimPoint(seg.Bx,seg.Bz,hallRing)!.Value.Dist;
+                double dm=AnimaNative.Scene.SceneView.NearestRimPoint((seg.Ax+seg.Bx)*0.5,(seg.Az+seg.Bz)*0.5,hallRing)!.Value.Dist;
+                Is("no-trap remaining segment does not lie on boundary",Math.Max(dm,Math.Max(da,db))>0.3);
+            }
+            await manager.Apply(doc.RootElement);
+
             steering.SetActive(false);
             return $"walking={count} W1-W7=ok local_poll=held stall=20";
         }

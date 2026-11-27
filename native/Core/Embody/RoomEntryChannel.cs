@@ -22,6 +22,9 @@ public sealed class RoomEntryChannel(Func<string,CancellationToken,Task<Position
     private CancellationTokenSource? _flight;
     private double _requestedAt;
     private int _generation;
+    private string _location="";
+    private string? _blockedLocation;
+    private bool BlockedAtLocation => _blockedLocation is not null && _blockedLocation==_location;
     public string? RequestedRoom { get; private set; }
     public bool InFlight => _flight is not null;
     public Task<bool>? Pending { get; private set; }
@@ -29,11 +32,20 @@ public sealed class RoomEntryChannel(Func<string,CancellationToken,Task<Position
     public bool Rejected(string room) => _rejected.GetValueOrDefault(room)>clock();
     public void Idle() => _walk=RoomWalk.IdleRoomWalk();
 
+    /// <summary>Track the server-confirmed location; a new location clears a 409 not_in_location block.</summary>
+    public void SetLocation(string confirmedLocationId)
+    {
+        string loc = confirmedLocationId ?? "";
+        if (_location==loc) return;
+        _location=loc;
+        if (_blockedLocation is not null && _blockedLocation!=loc) _blockedLocation=null;
+    }
+
     /// <summary>The last room candidate must survive quitting during the normal 1.5 s walking hold.</summary>
     public async Task FlushOnShutdownAsync()
     {
         if (Pending is { } pending) await pending;
-        if (_walk.Candidate is { } room && room != RequestedRoom && !Rejected(room))
+        if (_walk.Candidate is { } room && room != RequestedRoom && !BlockedAtLocation && !Rejected(room))
             await EnterAsync(room);
     }
 
@@ -44,7 +56,7 @@ public sealed class RoomEntryChannel(Func<string,CancellationToken,Task<Position
         var before=_walk;
         var result=RoomWalk.NearestRoomSwitch(current,pos,rooms,level,before,clock(),HoldSeconds);
         if (result.Next is not { } next || next==current) { _walk=result.State; return; }
-        bool gated=InFlight || next==RequestedRoom || Rejected(next);
+        bool gated=InFlight || BlockedAtLocation || next==RequestedRoom || Rejected(next);
         _walk=gated ? before : result.State;
         if (!gated) Pending=EnterAsync(next);
     }
@@ -52,15 +64,21 @@ public sealed class RoomEntryChannel(Func<string,CancellationToken,Task<Position
     /// <summary>Only rides announce player-authored refusal text; walking stays silent and awaits the poll.</summary>
     public async Task<bool> EnterAsync(string room, bool announce=false)
     {
-        if (InFlight || Rejected(room)) return false;
+        if (InFlight || BlockedAtLocation || Rejected(room)) return false;
         var deadline=new CancellationTokenSource(TimeoutMs);
         _flight=deadline; int generation=_generation;
         RequestedRoom=room; _requestedAt=clock();
+        bool notInLocation=false;
         try
         {
             var answer=await send(room,deadline.Token).WaitAsync(deadline.Token);
             if (generation!=_generation) return false;
             if (answer.Status is >=200 and <300) return true;
+            if (answer.Status==409 && answer.Reason=="not_in_location")
+            {
+                notInLocation=true;
+                _blockedLocation=_location;
+            }
             if (announce && answer.Reason.Length>0 && answer.Message.Length>0) Toast?.Invoke(answer.Message);
         }
         catch (Exception) when (generation==_generation) { /* Timeout/network refusal shares the cooldown. */ }
@@ -70,14 +88,18 @@ public sealed class RoomEntryChannel(Func<string,CancellationToken,Task<Position
             if (_flight==deadline) _flight=null;
             deadline.Dispose();
         }
-        if (generation==_generation) { _rejected[room]=clock()+RejectMs; RequestedRoom=null; }
+        if (generation==_generation)
+        {
+            if (!notInLocation) _rejected[room]=clock()+RejectMs;
+            RequestedRoom=null;
+        }
         return false;
     }
 
     public void Reset()
     {
         _generation++; _flight?.Cancel(); _flight=null;
-        Idle(); RequestedRoom=null; _rejected.Clear();
+        Idle(); RequestedRoom=null; _rejected.Clear(); _blockedLocation=null;
     }
     public void Dispose() => Reset();
 }

@@ -27,6 +27,7 @@
           4
         ]
       ],
+      "fenced": true,
       "openings": [
         {
           "edge": 2,
@@ -37,8 +38,18 @@
           "inward": [
             0,
             -1
-          ],
-          "room": "r-b"
+          ]
+        }
+      ],
+      "doors": [
+        {
+          "x": 3,
+          "z": 4,
+          "out_x": 0,
+          "out_z": 1,
+          "width_m": 1.2,
+          "room": "r-b",
+          "level": 0
         }
       ]
     },
@@ -67,7 +78,9 @@
           4
         ]
       ],
-      "openings": []
+      "fenced": false,
+      "openings": [],
+      "doors": []
     },
     {
       "id": "loc-locked",
@@ -94,6 +107,7 @@
           4
         ]
       ],
+      "fenced": true,
       "openings": [
         {
           "edge": 2,
@@ -104,10 +118,10 @@
           "inward": [
             0,
             -1
-          ],
-          "room": "locked-room"
+          ]
         }
-      ]
+      ],
+      "doors": []
     }
   ],
   "world_props": [],
@@ -122,6 +136,11 @@
   "height_sig": "embody-step-1",
   "fogged": false,
   "max_step_height_m": 0.4,
+  "door_tolerance": {
+    "along_pad_m": 0.3,
+    "across_m": 1.5
+  },
+  "gate_tolerance_m": 1.5,
   "max_slope_deg": 40,
   "characters": [
     {

@@ -2087,9 +2087,11 @@ eroded edges 0.35 from a wall line):
   the south one, outer point (3, 3.65) (`NavOutsideDoors`): the order's goal is exactly that point (review E3 Task 10, I-2);
   there the straight walk takes the rest (`Route` (−3, −8), no order player), straight back across the hall, where its gates
   hold it at the north wall's eroded edge (z −3.65, wall line −4, edge 0.35) until the 20-frame stall ends it (route and marker
-  gone, z within −3.7…−3.5; it never passes the wall). The straight walk's 20-frame stall is also checked where no navigation applies: from (−3, −4.1), outside every footprint,
-  the click (−3, 8) on the far side walks into the hall's footprint (foreign, with an authored opening → `PlayerBlocked`); the
-  first lead (−3, −3.95) is already inside it, so every target is the start: frame 19 keeps the route, frame 20 drops it and the marker.
+  gone, z within −3.7…−3.5; it never passes the wall). The straight walk's 20-frame stall is also checked where no navigation applies: from (−3, −4.25), outside every footprint,
+  the click (−3, 8) lies on the far side; the hall's north wall (wall line z = −4) now collides from outside too, and with
+  body radius `Collide.BodyRadiusM` = 0.25 the centre is held at z = −4 − 0.25 = −4.25, i.e. exactly the start, so every
+  frame's clamped target is the start (zero progress < `ClickMove.StallStepM` 0.01): frame 19 keeps the route, frame 20 drops
+  it and the marker. (Starting at −4.1 would be pushed out 0.15 m in frame 1, which counts as progress.)
 - **W "upper-floor object approach"** (−2.01, 0) at y 3.01 in r-up: on the loft mesh → case 1 → `Route` = the click, X −2.01 unchanged.
 - **R5** `UseVertical` on the stairs → `WalkTo` the foot (0, −2), which lies in the party wall (x −0.1…0.1): eroded edges
   x −0.35 (r-a) and 0.35 (r-b), both 0.35 away — case 3 goal (±0.35, −2) ± 0.02 (measured (−0.352, −2), the tie's r-a side).

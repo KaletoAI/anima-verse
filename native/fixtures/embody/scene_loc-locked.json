@@ -63,6 +63,20 @@
   "doorways": [],
   "models": [],
   "corridors": [],
-  "boundary_openings": [],
+  "boundary_openings": [
+    {
+      "edge": 2,
+      "at_world": [
+        0,
+        4
+      ],
+      "width_m": 1.2,
+      "type": "gate",
+      "inward": [
+        0,
+        -1
+      ]
+    }
+  ],
   "problems": []
 }

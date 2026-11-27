@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json;
+using AnimaNative.Embody;
+using AnimaNative.Scatter;
 
 namespace AnimaNative.World;
 
@@ -239,6 +241,12 @@ public sealed record LocationInfo(string Id, string Name, double? PosX, double? 
     /// (tiles.ts <c>groundRooms</c>); empty when the row names none. Never the reserved id: that stays the server's.
     /// </summary>
     public IReadOnlySet<string> GroundRooms { get; init; } = new HashSet<string>();
+    /// <summary>True when the plot has boundary gates and may only be crossed through them.</summary>
+    public bool Fenced { get; init; }
+    /// <summary>Boundary gates in world metres (<c>openings[]</c>).</summary>
+    public IReadOnlyList<EntryOpening> Gates { get; init; } = Array.Empty<EntryOpening>();
+    /// <summary>Outside doors on level 0 in world metres (<c>doors[]</c>).</summary>
+    public IReadOnlyList<EntryDoor> Doors { get; init; } = Array.Empty<EntryDoor>();
 
     public static List<LocationInfo> ParseList(JsonElement root)
         => Json.Arr(root, "locations")
@@ -277,6 +285,34 @@ public sealed record LocationInfo(string Id, string Name, double? PosX, double? 
         return ground;
     }
 
+    private static List<EntryOpening> GatesOf(JsonElement l)
+    {
+        var gates = new List<EntryOpening>();
+        foreach (var o in Json.Arr(l, "openings"))
+        {
+            if (o.ValueKind != JsonValueKind.Object) continue;
+            var at = Json.Vec(o, "at_world");
+            var inward = Json.Vec(o, "inward");
+            if (at.Length < 2 || inward.Length < 2) continue;
+            gates.Add(new EntryOpening((int)Json.Num(o, "edge"), new P2(at[0], at[1]), new P2(inward[0], inward[1])));
+        }
+        return gates;
+    }
+
+    private static List<EntryDoor> DoorsOf(JsonElement l)
+    {
+        var doors = new List<EntryDoor>();
+        foreach (var d in Json.Arr(l, "doors"))
+        {
+            if (d.ValueKind != JsonValueKind.Object) continue;
+            doors.Add(new EntryDoor(
+                Json.Num(d, "x"), Json.Num(d, "z"),
+                Json.Num(d, "out_x"), Json.Num(d, "out_z"),
+                Json.Num(d, "width_m"), Json.Str(d, "room"), (int)Json.Num(d, "level")));
+        }
+        return doors;
+    }
+
     public static LocationInfo Parse(JsonElement l)
     {
         l.TryGetProperty("map3d", out var m3);
@@ -295,6 +331,9 @@ public sealed record LocationInfo(string Id, string Name, double? PosX, double? 
             Terrain = Json.Str(l, "terrain"),
             Rooms = RoomNames(l),
             GroundRooms = GroundRoomsOf(l),
+            Fenced = Json.Bool(l, "fenced"),
+            Gates = GatesOf(l),
+            Doors = DoorsOf(l),
         };
     }
 }
