@@ -70,7 +70,7 @@ check("[K1] starting values", all(d[k] == v for k, v in want.items()), {k: d[k] 
 check("[K1] length_m is no trouser field", tr(length_m=0.9)["length_m"] == 0.5)
 check("[K1] the dialog fields", gt.KIND_FIELDS["trousers"] == ("kind", "fabric", "opacity", "rise", "trouser_length",
                                                                 "leg_shape", "seat", "fit", "trouser_waist", "fly",
-                                                                "hem", "texture", "sleeve_print"))
+                                                                "hem", "texture", "sleeve_print", "back_job"))
 check("[K1] measured in rest / walk / sit / kneel, no shape groups",
       gt.measured_poses(tr()) == ("rest", "walk", "sit", "kneel") and gt.shape_groups(tr()) == [])
 

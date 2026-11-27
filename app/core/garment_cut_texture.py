@@ -335,6 +335,15 @@ def is_plain_back(detail_back) -> bool:
         return False
 
 
+def back_forced_of(item_id: str) -> bool:
+    """Whether the piece's ``back_job`` param (``garment_template.BACK_JOBS``) is "render": the back job runs although
+    the back view measures plain (``is_plain_back``) — the user's call in the Texture tab ("Render back job…"). Part of
+    the atlas key (``csig``), so the plain record and the rendered one both stay on disk."""
+    from app.core import garment_template as gt
+    from app.models.inventory import get_item
+    return str((gt.params_of(get_item(item_id)) or {}).get("back_job") or "auto") == "render"
+
+
 def prompt_variant(side: str = "front", decorated: bool = False) -> str:
     """The ``PROMPT_FILES`` key of a job: "back", "front_decorated" or "front_plain"."""
     if side == "back":
@@ -965,15 +974,20 @@ def unzoom(image: np.ndarray, grown: np.ndarray, frame: dict, size: int) -> tupl
     return out, g
 
 
-def csig(islands_sha: str, item_sha: str, back_sha: str = "", prompt_sha: str | None = None) -> str:
+def csig(islands_sha: str, item_sha: str, back_sha: str = "", prompt_sha: str | None = None,
+         back_forced: bool = False) -> str:
     """The cut atlas key: the cut's islands, the item image, the back view the back job read ("" for a pattern
     without a back panel, or before the view exists), the prompt pin of the piece's kind (``PROMPT_KEYS`` via
-    ``prompt_sha_of``; None = a piece without parameters, a top's files) and the post-processing version — NOT ``tsig`` (it carries the piece-only views' sha for the
-    projection, which the atlas does not depend on)."""
+    ``prompt_sha_of``; None = a piece without parameters, a top's files), the post-processing version and — only when
+    set — the forced back job (``back_forced_of``: a back rendered over a plain back view is another atlas than the
+    front's fabric; unset adds nothing, so every key made before the flag stays) — NOT ``tsig`` (it carries the
+    piece-only views' sha for the projection, which the atlas does not depend on)."""
     if prompt_sha is None:
         prompt_sha = prompt_sha_of("")
-    raw = "|".join([str(islands_sha), str(item_sha), str(back_sha or ""), str(prompt_sha),
-                    str(cut_texture_post.POST_VERSION)])
+    fields = [str(islands_sha), str(item_sha), str(back_sha or ""), str(prompt_sha), str(cut_texture_post.POST_VERSION)]
+    if back_forced:
+        fields.append("back_job:render")
+    raw = "|".join(fields)
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
 
 
@@ -1117,11 +1131,12 @@ def back_detail(character_name: str, item_id: str) -> float | None:
 
 
 def back_plain(character_name: str, item_id: str) -> bool | None:
-    """Whether the piece's back is filled plain (``is_plain_back`` of ``back_detail``): None while there is no back
-    view to measure (the flow makes it first, the counts then assume the back job)."""
+    """Whether the piece's back is filled plain (``is_plain_back`` of ``back_detail``, unless the piece forces its
+    back job, ``back_forced_of``): None while there is no back view to measure (the flow makes it first, the counts
+    then assume the back job)."""
     if back_view(character_name, item_id) is None:
         return None
-    return is_plain_back(back_detail(character_name, item_id))
+    return is_plain_back(back_detail(character_name, item_id)) and not back_forced_of(item_id)
 
 
 def has_back(islands: dict) -> bool:
@@ -1186,7 +1201,8 @@ def csig_for(character_name: str, item_id: str, islands_sha: str, islands: dict 
     if has_back_panel is None:
         has_back_panel = has_back(islands or {})
     kind = item_kind(item_id) if kind is None else kind
-    return csig(islands_sha, isha, back_sha(character_name, item_id) if has_back_panel else "", prompt_sha_of(kind))
+    return csig(islands_sha, isha, back_sha(character_name, item_id) if has_back_panel else "", prompt_sha_of(kind),
+                back_forced=bool(has_back_panel and back_forced_of(item_id)))
 
 
 def atlas_path(character_name: str, item_id: str, sig: str) -> Path:
@@ -1566,7 +1582,10 @@ def reused_jobs(character_name: str, item_id: str, sig: str, parts, *, only: str
     if missing:
         for other, rec in predecessors(character_name, item_id, sig):
             ostem = _stem(character_name, item_id, other)
+            cross = predecessor_fit(rec, sig) == "cross"
             for job in list(missing):
+                if cross and job != "front":
+                    continue
                 entry = (rec.get("jobs") or {}).get(job) or {}
                 raw = _file(ostem, f".raw_{job}.png")
                 if entry.get("state") == "ready" and raw.is_file():
@@ -1577,12 +1596,28 @@ def reused_jobs(character_name: str, item_id: str, sig: str, parts, *, only: str
     return out
 
 
+def predecessor_fit(rec: dict, sig: str) -> str | None:
+    """How a record's answers fit csig ``sig`` under the current post-processing: "same" — its islands, item picture,
+    back view, prompt and forced back job give ``sig``; "cross" — the same with the OTHER forced back job
+    (``back_forced_of``): its FRONT answer is the same request, its back is not (a plain back has no back answer, a
+    forced one belongs to the other atlas); None otherwise."""
+    fields = (str(rec.get("islands_sha") or ""), str(rec.get("item_sha") or ""), str(rec.get("back_sha") or ""),
+              str(rec.get("prompt_sha")))
+    forced = bool(rec.get("back_forced"))
+    if csig(*fields, back_forced=forced) == sig:
+        return "same"
+    if fields[2] and csig(*fields, back_forced=not forced) == sig:
+        return "cross"
+    return None
+
+
 def predecessors(character_name: str, item_id: str, sig: str) -> list[tuple[str, dict]]:
     """The item's records whose answers fit csig ``sig`` although their own csig differs: made under another
     ``cut_texture_post.POST_VERSION`` from the SAME islands, item picture, back view and prompt (their record's
-    ``islands_sha`` / ``item_sha`` / ``back_sha`` / ``prompt_sha`` give ``sig`` under the current version). Newest
-    first: ``[(csig, record)]``. Key isolation (2026-11-25): a post-processing version is no reason to render an
-    answer again."""
+    ``islands_sha`` / ``item_sha`` / ``back_sha`` / ``prompt_sha`` give ``sig`` under the current version), or with the
+    other forced back job (``predecessor_fit`` "cross": ``reused_jobs`` takes only its front answer). Newest first:
+    ``[(csig, record)]``. Key isolation (2026-11-25): a post-processing version is no reason to render an answer
+    again; neither is forcing the back job (the front answer stays)."""
     folder = cut_dir(character_name)
     if not folder.is_dir():
         return []
@@ -1593,10 +1628,10 @@ def predecessors(character_name: str, item_id: str, sig: str) -> list[tuple[str,
         if other == sig or not _CSIG_RE.fullmatch(other):
             continue
         rec = read_record(character_name, item_id, other)
-        if not rec or rec.get("post_version") == cut_texture_post.POST_VERSION or not rec.get("prompt_sha"):
+        if not rec or not rec.get("prompt_sha"):
             continue
-        if csig(str(rec.get("islands_sha") or ""), str(rec.get("item_sha") or ""), str(rec.get("back_sha") or ""),
-                str(rec.get("prompt_sha"))) == sig:
+        fit = predecessor_fit(rec, sig)
+        if fit == "cross" or (fit == "same" and rec.get("post_version") != cut_texture_post.POST_VERSION):
             out.append((other, rec))
     return sorted(out, key=lambda x: str(x[1].get("created_at") or ""), reverse=True)
 
@@ -2324,13 +2359,16 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                     "only": only or "", "sleeve_print": sleeve_print_of(item_id),
                     "trim_style": trim_style_of(item_id)}
     record["held"] = held_trims(kind, record["sleeve_print"])
+    # the user's forced back job (``back_forced_of``): part of the key, the back job runs over a plain back view
+    forced = "back" in parts and back_forced_of(item_id)
+    record["back_forced"] = bool(forced)
     sig = csig(pattern["islands_sha"], record["item_sha"], "", psha)
     try:
         if "back" in parts:
             _set_progress(key, "back_view")
             record["back_view"] = _ensure_back_view(character_name, item_id)
             record["back_sha"] = back_sha(character_name, item_id)
-        sig = csig(pattern["islands_sha"], record["item_sha"], record["back_sha"], psha)
+        sig = csig(pattern["islands_sha"], record["item_sha"], record["back_sha"], psha, back_forced=forced)
     except Exception as e:  # noqa: BLE001 — the flow's failure is the record
         logger.warning("Cut texture %s %s: back view: %s", character_name, item_id, e)
         record.update({"csig": sig, "state": "failed", "reason": _failure_reason(e), "created_at": utc_now_iso()})
@@ -2339,10 +2377,11 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
     record["csig"] = sig
     stem = _stem(character_name, item_id, sig)
     previous = read_record(character_name, item_id, sig)
-    # a plain back view: the back is the front's fabric (``fill_plain_back``) — no back job, whatever ``only`` says
-    plain = "back" in parts and is_plain_back(back_detail(character_name, item_id))
+    # a plain back view: the back is the front's fabric (``fill_plain_back``) — no back job, whatever ``only`` says,
+    # unless the piece forces it (``back_forced_of``)
+    plain = "back" in parts and not forced and is_plain_back(back_detail(character_name, item_id))
     record["back_plain"] = {"plain": bool(plain), "detail": back_detail(character_name, item_id) if "back" in parts
-                            else None, "limit": PLAIN_BACK_DETAIL}
+                            else None, "limit": PLAIN_BACK_DETAIL, "forced": bool(forced)}
     reuse = reused_jobs(character_name, item_id, sig, parts, only=only)
     todo = [j for j in parts if j not in reuse and not (plain and j == "back")]
     stale = [_file(stem, ".atlas.png")] + [_file(stem, f".raw_{j}.png") for j in todo] \
@@ -2558,8 +2597,10 @@ def recompose(character_name: str, item_id: str, *, accept: str | None = None, a
     refs = references(character_name, item_id, "back" in parts)
     record["fabric"] = {"item": refs["colour"], "prefill": list(refs["prefill"]) if refs["prefill"] else None,
                         "detail": refs["detail"]}
-    plain = "back" in parts and is_plain_back(refs["detail"].get("back"))
-    record["back_plain"] = {"plain": bool(plain), "detail": refs["detail"].get("back"), "limit": PLAIN_BACK_DETAIL}
+    forced = "back" in parts and back_forced_of(item_id)     # part of ``sig``: the record was made the same way
+    plain = "back" in parts and not forced and is_plain_back(refs["detail"].get("back"))
+    record["back_plain"] = {"plain": bool(plain), "detail": refs["detail"].get("back"), "limit": PLAIN_BACK_DETAIL,
+                            "forced": bool(forced)}
     results = {}
     for job in parts:
         if plain and job == "back":
@@ -2617,6 +2658,28 @@ def set_sleeve_print(character_name: str, item_id: str, value: str, *, run=None)
     again = any(u["state"] == "ready" and u["raw"] for u in usable.values())
     started = bool(again and start_recompose(character_name, item_id, run=run))
     return {"changed": changed, "recompose": started}
+
+
+def set_back_job(character_name: str, item_id: str, value: str, *, render: bool = False, run=None) -> dict:
+    """Store the piece's ``back_job`` ("auto" / "render", ``garment_template.BACK_JOBS``; ``TEXTURE_ONLY``: no drape,
+    part of the atlas key ``csig``) and, with ``render``, start the flow's back job right away (``start`` with
+    ``only="back"``: the front answer of the other key is re-used, ``predecessor_fit`` "cross"). The setting is stored
+    before ``start`` checks: a refused start (media off, no route, busy) leaves it set and says why — Run all makes
+    it then. ``{"changed": bool, "started": bool}``."""
+    from app.core import garment_template as gt
+    from app.models.inventory import get_item
+    if value not in gt.BACK_JOBS:
+        raise ValueError(f"back_job must be one of {', '.join(gt.BACK_JOBS)}")
+    item = get_item(item_id)
+    params = gt.params_of(item)
+    if not params:
+        raise NotReady("The piece has no template parameters yet")
+    changed = str(params.get("back_job") or "auto") != value
+    if changed:
+        source = ((item or {}).get("outfit_piece") or {}).get("template", {}).get("source") or "user"
+        gt.set_params(item_id, {**(gt.stored_of(item) or params), "back_job": value}, source=source)  # plan E6
+    started = bool(render and start(character_name, item_id, run=run, only="back"))
+    return {"changed": changed, "started": started}
 
 
 def apply(character_name: str) -> bool:
@@ -3105,8 +3168,10 @@ def dialog_state(character_name: str, item_id: str) -> dict:
       every job while the button would be refused (a flow runs, another hub-job flow of the piece, no cut);
     - ``sleeve_print`` — the piece's sleeve option, ``has_sleeves`` whether the pattern has sleeves to choose for,
       ``option_stale`` whether the ready atlas was composed with the other option (``cut_info`` "option");
-    - ``back_detail`` / ``back_plain`` / ``plain_back_limit`` — the back view's detail, whether it is plain (the back
-      is then the front's fabric, no back job; None without a back view or a back panel) and the threshold."""
+    - ``back_detail`` / ``back_plain`` / ``plain_back_limit`` — the back view's detail, whether the back is filled
+      plain (the back is then the front's fabric, no back job; None without a back view or a back panel) and the
+      threshold; ``back_measured_plain`` — whether the detail alone calls it plain, ``back_forced`` — the piece
+      renders its back job anyway (``back_forced_of``, "Render back job…")."""
     from app.core import garment_template as gt
     from app.core import piece_jobs
     from app.imagegen import routing as _routing
@@ -3154,11 +3219,16 @@ def dialog_state(character_name: str, item_id: str) -> dict:
     for entry in answers.values():
         entry["can_use"] = bool(entry["can_use"] and not use_off)
     sleeve_print = str(params.get("sleeve_print") or "plain")
+    forced = back_forced_of(item_id)
     if has_back(islands):
-        out.update({"back_detail": back_detail(character_name, item_id),
-                    "back_plain": back_plain(character_name, item_id), "plain_back_limit": PLAIN_BACK_DETAIL})
+        detail = back_detail(character_name, item_id)
+        measured = None if back_view(character_name, item_id) is None else is_plain_back(detail)
+        out.update({"back_detail": detail, "back_plain": bool(measured) and not forced if measured is not None
+                    else None, "back_measured_plain": measured, "back_forced": forced,
+                    "plain_back_limit": PLAIN_BACK_DETAIL})
     else:
-        out.update({"back_detail": None, "back_plain": None, "plain_back_limit": PLAIN_BACK_DETAIL})
+        out.update({"back_detail": None, "back_plain": None, "back_measured_plain": None, "back_forced": forced,
+                    "plain_back_limit": PLAIN_BACK_DETAIL})
     out.update({"answers": answers, "sleeve_print": sleeve_print,
                 # the option's pieces: a top's sleeves, a fitted piece's small pieces (``TRIM_PARTS``); ``trim``
                 # says which the dialog names

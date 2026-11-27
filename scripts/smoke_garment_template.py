@@ -228,7 +228,9 @@ check("[1] defaults, no error", e == [] and p == {"kind": "skirt", "cups": "none
                                                   # plan 2026-11-20-template-cut-uv-texture: the texture source
                                                   "texture": "projection",
                                                   # user test 2026-11-21: the sleeves of the texture from cut
-                                                  "sleeve_print": "plain"},
+                                                  "sleeve_print": "plain",
+                                                  # 2026-11-27: the forced back job of the texture from cut
+                                                  "back_job": "auto"},
       str((p, e)))
 p, e = gt.validate_params({"length_m": 2.0, "kind": "cape"})
 check("[1] length clamped to 1.2 and reported", p["length_m"] == 1.2 and any("length_m" in x for x in e))

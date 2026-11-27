@@ -360,6 +360,9 @@ export interface TemplateParams {
   /** User test 2026-11-21: the sleeves of the texture from cut — "plain" (the front panel's fabric, default) or
    *  "picture" (the model's answer). Set in the Texture tab (`…/cut/sleeves`), never a field of the Cut tab. */
   sleeve_print?: string
+  /** The back job of the texture from cut — "auto" (a plain back view gets the front panel's fabric) or "render"
+   *  (always a back job; part of the atlas key). Set in the Texture tab (`…/cut/back-job`), never a field of the Cut tab. */
+  back_job?: string
   /** Plan group B (B10): what closes a top's / dress's / jacket's front — painted by code along the cut's marks
    *  ("none" / "buttons" / "zip" / "lacing"); `buttons` 0 = automatic. Both TEXTURE_ONLY: a switch re-assembles. */
   placket?: string
@@ -638,7 +641,7 @@ export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
   band_m: 'Elastic band height', band_drop_m: 'Band below the shoulder line', lacing: 'Lacing',
   lace_depth_m: 'Lacing depth',
   trouser_length: 'Leg length', leg_shape: 'Leg shape', seat: 'Seat (above the crotch)', trouser_waist: 'Waist finish', fly: 'Fly (painted)',
-  hem: 'Hem', texture: 'Texture', sleeve_print: 'Sleeves of the texture',
+  hem: 'Hem', texture: 'Texture', sleeve_print: 'Sleeves of the texture', back_job: 'Back job of the texture',
   placket: 'Placket (painted)', buttons: 'Buttons (0 = automatic)',
   cups: 'Cups in the top',
 }

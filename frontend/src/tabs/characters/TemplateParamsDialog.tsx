@@ -155,7 +155,7 @@ const ORDER: (keyof TemplateParams)[] = ['kind', 'cups', 'fabric', 'opacity', 'l
   'tights_style', 'feet', 'garters', 'trouser_length', 'leg_shape', 'seat', 'trouser_waist', 'fly', 'hem', 'placket', 'buttons',
   'texture']
 /** `garment_template.TEXTURE_ONLY`: a save that changes only these re-assembles, it never re-drapes. */
-const TEXTURE_ONLY_FIELDS: (keyof TemplateParams)[] = ['texture', 'sleeve_print', 'placket', 'buttons', 'fly']
+const TEXTURE_ONLY_FIELDS: (keyof TemplateParams)[] = ['texture', 'sleeve_print', 'back_job', 'placket', 'buttons', 'fly']
 /** `garment_template.neck_piece`: a covered top is cut by the neck-ring rules only with a collar or a placket — a
  *  placket switched on or off there is a new cut (its key gains or loses "neck"), not a re-assembly. */
 const neckCut = (p: TemplateParams | undefined | null): boolean => !!p && p.kind === 'top' && p.shoulders === 'covered'
@@ -264,8 +264,10 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
           material: p.material, views: p.views } : p))
         // a texture the server switched (the cut flow selects "From cut") reaches an unchanged draft too
         // …and so does the sleeve option the Texture tab sets (its own control, never a field here)
-        setDraft((dr) => (dr && p.params && (dr.texture !== p.params.texture || dr.sleeve_print !== p.params.sleeve_print)
-          ? { ...dr, texture: p.params.texture, sleeve_print: p.params.sleeve_print } : dr))
+        // …and the back-job option ("Render back job…" there)
+        setDraft((dr) => (dr && p.params && (dr.texture !== p.params.texture || dr.sleeve_print !== p.params.sleeve_print
+          || dr.back_job !== p.params.back_job)
+          ? { ...dr, texture: p.params.texture, sleeve_print: p.params.sleeve_print, back_job: p.params.back_job } : dr))
       })
       .catch(() => { /* the last known progress stays */ })
   }, [path])

@@ -182,7 +182,8 @@ else:
     for name in CASES:
         check(f"[P6] {name}: keyed_params as at {OLD}", new[name]["keyed"] == old[name]["keyed"],
               (new[name]["keyed"], old[name]["keyed"]))
-        active = {k: v for k, v in new[name]["active"].items() if k != "cups"}
+        # ``back_job`` (2026-11-27, the forced back job of the texture from cut) came after the base commit
+        active = {k: v for k, v in new[name]["active"].items() if k not in ("cups", "back_job")}
         check(f"[P6] {name}: active set less cups as at {OLD}", active == old[name]["active"],
               {k: (active.get(k), old[name]["active"].get(k)) for k in set(active) | set(old[name]["active"])
                if active.get(k) != old[name]["active"].get(k)})

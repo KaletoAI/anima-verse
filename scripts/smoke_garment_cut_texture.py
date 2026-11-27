@@ -894,7 +894,7 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     check("[9.1] a jacket takes cut too (group B phase C: every kind is cut into pattern pieces)",
           gt.validate_params({"kind": "jacket", "texture": "cut"})[0].get("texture") == "cut")
     check("[9.1] an unknown value is an error", gt.validate_params({"kind": "top", "texture": "paint"})[1] != [])
-    check("[9.1] texture is TEXTURE_ONLY", gt.TEXTURE_ONLY == ("fly", "texture", "sleeve_print", "placket", "buttons"), gt.TEXTURE_ONLY)
+    check("[9.1] texture is TEXTURE_ONLY", gt.TEXTURE_ONLY == ("fly", "texture", "sleeve_print", "back_job", "placket", "buttons"), gt.TEXTURE_ONLY)
     k_proj = gt.tsig(p_proj, base_sha="b", texture_sha="t", lower=[])
     k_cut = gt.tsig(p_cut, base_sha="b", texture_sha="t", lower=[])
     check("[9.1] switching texture leaves tsig unchanged", k_proj == k_cut, (k_proj, k_cut))

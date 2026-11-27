@@ -239,8 +239,9 @@ for k, v in want.items():
     check(f"[8] _texture_key {k} -> {v}", keys[k] == v, keys[k])
 check("[8] cut_sig is one value for all four", len(cut_sigs) == 1, cut_sigs)
 import inspect  # noqa: E402
+# the only flag beside the four shas is the forced back job (``back_forced``, 2026-11-27) — no template params
 check("[8] csig takes no params", list(inspect.signature(gct.csig).parameters) ==
-      ["islands_sha", "item_sha", "back_sha", "prompt_sha"])
+      ["islands_sha", "item_sha", "back_sha", "prompt_sha", "back_forced"])
 
 # [9]
 out4, info4 = post.draw_placket(atlas, {"front": isl}, marks, kind="jacket", style="lacing", buttons=0, px_per_cm=10)

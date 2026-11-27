@@ -83,7 +83,8 @@ body actions):
 * ``GET  /characters/{c}/figure/template/{item_id}/cut`` — the dialog's Texture tab
   (``garment_cut_texture.dialog_state`` + picture URLs; starts the piece's cut on the CPU when it is missing):
   ``{running, step, error, csig, record, can_generate, blocked_reason, pattern_reason, cutting, cut_at, current, plan, texture, applied, upscale, has_back, islands_sha, files, urls, pattern_url, answers,
-  sleeve_print, has_sleeves, trim ("sleeves" / "pieces"), option_stale}``.
+  sleeve_print, has_sleeves, trim ("sleeves" / "pieces"), option_stale, back_detail, back_plain, back_measured_plain,
+  back_forced, plain_back_limit}``.
 * ``POST /characters/{c}/figure/template/{item_id}/cut/generate {only?}`` — the cut flow in the background (the back
   view when missing, the front job, the back job, the atlas applied; ``only`` "front" / "back" redoes one job) and
   the texture set to "cut"; 409 media off / already running / another hub-job flow of the piece (``piece_jobs``),
@@ -92,6 +93,8 @@ body actions):
   a rejected one, is accepted and the atlas composed on the CPU (0 image jobs); 400 without an answer, 409 running.
 * ``POST /characters/{c}/figure/template/{item_id}/cut/sleeves {sleeve_print}`` — the sleeve option of the texture
   ("plain" / "picture"), a made atlas composed again on the CPU; 400 unknown value.
+* ``POST /characters/{c}/figure/template/{item_id}/cut/back-job {back_job, render?}`` — the back-job option
+  ("auto" / "render": a back job also over a plain back view; part of the atlas key), ``render`` starts the back job.
 * ``GET  /characters/{c}/figure/template/{item_id}/cut/<kind>.png[?v=<csig>]`` — the record's pictures (``kind``
   one of ``garment_cut_texture.CUT_FILES``); 404 when missing.
 * ``GET  /characters/{c}/figure/template/{item_id}/pattern.png`` — the debug pattern sheet of the current cut
@@ -1270,6 +1273,36 @@ def set_template_cut_sleeves(character_name: str, item_id: str, body: TemplateCu
     except gct.Busy as e:
         raise HTTPException(status_code=409, detail=str(e))
     return {**_template_cut_payload(character_name, item_id), "recompose": result["recompose"]}
+
+
+class TemplateCutBackJobRequest(BaseModel):
+    #: ``garment_template.BACK_JOBS``: "auto" (a plain back view gets the front's fabric) / "render" (always a back job).
+    back_job: str
+    #: Start the back job right away ("Render back job…"): the front answer is kept.
+    render: bool = False
+
+
+@router.post("/{character_name}/figure/template/{item_id}/cut/back-job")
+def set_template_cut_back_job(character_name: str, item_id: str, body: TemplateCutBackJobRequest,
+                              _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The Texture tab's back-job option: stores the piece's ``back_job`` (part of the atlas key, no drape —
+    ``garment_cut_texture.set_back_job``) and, with ``render``, starts the back job (``only="back"``). The setting is
+    stored before the start is checked: media off -> 409, an empty chain -> 503, no cut / unknown value -> 400,
+    another flow of the piece -> 409, as ``/cut/generate``. Answers the box's payload plus ``started``."""
+    from app.core import garment_cut_texture as gct
+    from app.imagegen.routing import NoRouteError
+    _template_item(character_name, item_id)
+    try:
+        result = gct.set_back_job(character_name, item_id, body.back_job, render=body.render)
+    except NoRouteError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except (gct.NotReady, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except gct.Busy as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    if body.render and not result["started"]:
+        raise HTTPException(status_code=409, detail="The texture from cut is being made already")
+    return {**_template_cut_payload(character_name, item_id), "started": result["started"]}
 
 
 @router.get("/{character_name}/figure/template/{item_id}/cut/{kind}.png")

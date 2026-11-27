@@ -408,6 +408,11 @@ TEXTURE_SOURCES = ("projection", "cut")
 #: ``garment_cut_texture.TRIM_PARTS``): plain = the main panels' fabric patch, picture = the answer, for an item whose
 #: picture shows a trim on them.
 SLEEVE_PRINTS = ("plain", "picture")
+#: Whether the texture from cut renders a BACK job (``garment_cut_texture.back_forced``): "auto" (default) — only when
+#: the back view is not plain (``garment_cut_texture.PLAIN_BACK_DETAIL``; a plain back gets the front panel's fabric);
+#: "render" — always, also for a back view measured plain (the user's call: back pockets, a small print, a yoke the
+#: measure reads as plain). Part of the cut atlas key (``garment_cut_texture.csig``), never of the drape key.
+BACK_JOBS = ("auto", "render")
 #: The kinds cut into pattern pieces (``islands.json``, the texture from cut): a top (since
 #: step 3b also a strapless one, cut by ``wrap``), since step 3a every fitted kind, since step 3b a skirt, since step
 #: 3c / 3d (plan group B, phases C and D) a jacket and a dress — every kind. The builder knows no other UV since B17
@@ -417,7 +422,7 @@ PATTERN_KINDS = ("top", "briefs", "bra", "gloves", "tights", "trousers", "skirt"
 #: step 3c / 3d (plan group B, phases C and D) the jacket and the dress.
 PANEL_KINDS = ("skirt", "jacket", "dress")
 #: The fields that change neither the drape nor the material (painted by the picture): never in ``tsig``.
-TEXTURE_ONLY = ("fly", "texture", "sleeve_print", "placket", "buttons")
+TEXTURE_ONLY = ("fly", "texture", "sleeve_print", "back_job", "placket", "buttons")
 #: Fabric presets of the cloth run (Blender cloth settings). Stiff = holds a
 #: shape (denim, wool), medium = cotton, flowing = silk / chiffon / jersey.
 FABRICS: Dict[str, Dict[str, float]] = {
@@ -528,26 +533,28 @@ PARAM_SPEC: Dict[str, Tuple[str, Any, Any]] = {
     "texture": ("choice", TEXTURE_SOURCES, "projection"),
     # the sleeves of the texture from cut (``SLEEVE_PRINTS``): a CPU re-compose of the atlas, never a re-drape
     "sleeve_print": ("choice", SLEEVE_PRINTS, "plain"),
+    # the back job of the texture from cut (``BACK_JOBS``): part of the atlas key, never a re-drape
+    "back_job": ("choice", BACK_JOBS, "auto"),
 }
 #: The fields that mean something per kind (the dialog shows these; ``validate_params`` resets the others to their
 #: defaults so a stale field never changes the drape key).
 KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
     "skirt": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m", "waistband",
-              "texture", "sleeve_print"),
+              "texture", "sleeve_print", "back_job"),
     "trousers": ("kind", "fabric", "opacity", "rise", "trouser_length", "leg_shape", "seat", "fit", "trouser_waist",
-                 "fly", "hem", "texture", "sleeve_print"),
+                 "fly", "hem", "texture", "sleeve_print", "back_job"),
     "dress": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m", "shoulders", "sleeves",
               "sleeve_fit", "fit", "neckline", "neck_depth_m", *OFF_SHOULDER_FIELDS, "collar", "placket", "buttons",
-              "texture", "sleeve_print"),
+              "texture", "sleeve_print", "back_job"),
     "top": ("kind", "cups", "fabric", "opacity", "length_m", "shoulders", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m",
-            *OFF_SHOULDER_FIELDS, "collar", "placket", "buttons", "texture", "sleeve_print"),
+            *OFF_SHOULDER_FIELDS, "collar", "placket", "buttons", "texture", "sleeve_print", "back_job"),
     "jacket": ("kind", "fabric", "opacity", "length_m", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m", "front",
-               "collar", "placket", "buttons", "texture", "sleeve_print"),
+               "collar", "placket", "buttons", "texture", "sleeve_print", "back_job"),
     "briefs": ("kind", "fabric", "opacity", "rise", "leg_cut", "back_coverage", "side_width_m", "gusset_m",
-               "waistband", "leg_length_m", "fit", "sides", "string_width_m", "texture", "sleeve_print"),
+               "waistband", "leg_length_m", "fit", "sides", "string_width_m", "texture", "sleeve_print", "back_job"),
     "bra": ("kind", "fabric", "opacity", "cup_style", "cup_coverage", "push_up", "underband_m", "center_gore", "closure",
-            "straps", "texture", "sleeve_print"),
-    "gloves": ("kind", "fabric", "opacity", "fingers", "length", "cuff", "fit", "texture", "sleeve_print"),
+            "straps", "texture", "sleeve_print", "back_job"),
+    "gloves": ("kind", "fabric", "opacity", "fingers", "length", "cuff", "fit", "texture", "sleeve_print", "back_job"),
     "tights": ("kind", "fabric", "opacity", "tights_style", "feet", "waistband", "garters", "texture", "sleeve_print"),
 }
 
@@ -555,7 +562,7 @@ KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
 #: so no shoulders, neckline or sleeves. A top STORES these and its own ``KIND_FIELDS`` both (``stored_params``); only
 #: the set of ``fields_of`` is active (``validate_params``).
 TOP_CUPS_FIELDS = ("kind", "cups", "fabric", "opacity", "length_m", "cup_style", "cup_coverage", "push_up",
-                   "center_gore", "closure", "straps", "texture", "sleeve_print")
+                   "center_gore", "closure", "straps", "texture", "sleeve_print", "back_job")
 
 
 def cupped_top(params: Optional[Dict[str, Any]]) -> bool:

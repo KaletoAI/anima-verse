@@ -146,7 +146,7 @@ strapless top are cut by `wrap` (section 1b).
 `garment_template_cut.sig_of` is the one rule for the cut and for the drape's record.
 
 Not in it: the views and the item picture (the drape key's texture part), `opacity`, `texture`, `sleeve_print`,
-`fly`, the drape's frames / quality / poses / shape groups.
+`back_job`, `fly`, the drape's frames / quality / poses / shape groups.
 
 Files under `templates/cut/`: `{item}_{cut_sig}.islands.json` (the builder's bytes), `.cut.json` (the record: state,
 metrics, `wall_s`) and `.pattern.png` (the debug sheet). The cut starts when the parameters are saved
@@ -707,8 +707,8 @@ centre piece (gore), straps and closure, and the same nine pattern pieces (`cup_
 the hip, whatever the length: the hem is held at the waist at the lowest, `body_regions`).
 
 - **Fields.** A cupped top shows the fields of `TOP_CUPS_FIELDS`: `kind`, `cups`, `fabric`, `opacity`, `length_m`,
-  `cup_style`, `cup_coverage`, `push_up`, `center_gore`, `closure`, `straps`, `texture`, `sleeve_print` (the dialog
-  reads `kind_fields["top:cups"]`). There is no `underband_m`; the length sets the band.
+  `cup_style`, `cup_coverage`, `push_up`, `center_gore`, `closure`, `straps`, `texture`, `sleeve_print`, `back_job`
+  (the dialog reads `kind_fields["top:cups"]`). There is no `underband_m`; the length sets the band.
 - **Band to the hem.** `fitted_spec` measures the hem from the shoulder line like any top and holds it between the
   waist and the thin back band under the underbust line:
   `hem_y = min(max(origin - length_m, waist_y), under - BACK_STRAP_M)`, `band = max(BACK_STRAP_M, under - hem_y)`.
@@ -932,6 +932,17 @@ hold, so:
   Build's cost note and the figure row count 0 back jobs; Redo back is not offered. A DECORATED back keeps its job,
   its detail gate from the back view's own detail (`references` → `detail.back`). A missing back view is made first
   and the counts assume the back job until it is measured.
+- **Forcing the back job** (2026-11-27: back pockets on jeans, a yoke or a small print can measure plain). The
+  template param **`back_job`** (`"auto"` default / `"render"`, `garment_template.BACK_JOBS`, `TEXTURE_ONLY`; set in
+  the Texture tab by "Render back job…" through `POST …/cut/back-job`) makes the back job run over a plain back view
+  (`back_forced_of`; `back_plain` is then False, the dialog's `back_measured_plain` still True). It is part of the
+  atlas key: `csig` appends `|back_job:render` only when forced, so every unforced key stays the key it was, and the
+  plain record and the rendered one both stay on disk — switching back ("Use the front fabric for the back") brings the
+  plain atlas back with 0 jobs. The front answer is the same request under both keys: `predecessor_fit` "cross" lets
+  `reused_jobs` take a record of the other flag's FRONT answer (never its back), so forcing renders the back job alone.
+  The record keeps `back_forced` and `back_plain.forced`. Without a back job the dialog's back template and back answer
+  thumbnails say "No back job — plain back"; the back view (`back_ref`, Picture 2) is written whenever there is a back
+  panel.
 
 `POST_VERSION` 11 and the reworded prompts (`PROMPT_SHA`) make every older cut atlas stale.
 
@@ -1092,6 +1103,7 @@ or one without a recorded `cut_sig`, which no Build re-drapes for the cut).
 | `POST /characters/{c}/figure/template/{item_id}/cut/generate` | start the flow, body `{"only": "" / "front" / "back"}` (409 media off or another flow of the piece runs, 400 not cut / no picture, 503 no route — all before a thread starts) |
 | `POST /characters/{c}/figure/template/{item_id}/cut/use` | "Use this answer", body `{"job": "front" / "back"}`: the stored answer (also a rejected one) accepted and composed on the CPU, 0 image jobs (400 no answer / not cut, 409 a flow of the piece runs) |
 | `POST /characters/{c}/figure/template/{item_id}/cut/sleeves` | the sleeve option, body `{"sleeve_print": "plain" / "picture"}`: stored (no drape), a made atlas composed again on the CPU (400 unknown value) |
+| `POST /characters/{c}/figure/template/{item_id}/cut/back-job` | the back-job option, body `{"back_job": "auto" / "render", "render": bool}`: stored (part of the atlas key, no drape); `render` starts the back job (`only="back"`, the front answer kept); errors as `/cut/generate` |
 | `GET /characters/{c}/figure/template/{item_id}/cut/{kind}.png` | `kind` = `template_front` / `item` / `raw_front` / `template_back` / `back_ref` / `raw_back` / `atlas` of the current (or the `v=`-named) csig |
 | `GET /characters/{c}/figure/template/{item_id}/pattern.png` | the DEBUG pattern sheet of the current cut (pastel islands, names, cm sizes, grain arrows, seam letters, cap height, px/cm), written by the cut-only run as `templates/cut/{item}_{cut_sig}.pattern.png` (rendered when missing); 404 while not cut or a grid kind. Never sent to a model. |
 

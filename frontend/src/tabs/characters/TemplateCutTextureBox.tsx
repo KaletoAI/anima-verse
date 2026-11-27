@@ -122,6 +122,11 @@ export interface TemplateCutState {
   back_detail?: number | null
   back_plain?: boolean | null
   plain_back_limit?: number
+  /** Whether the detail alone calls the back plain (null without a back view) — `back_plain` is false while forced. */
+  back_measured_plain?: boolean | null
+  /** The piece renders its back job although the back view measures plain ("Render back job…", `back_job` "render";
+   *  part of the atlas key, so the plain atlas and the rendered one both stay). */
+  back_forced?: boolean
 }
 
 const THUMB = 104
@@ -293,6 +298,8 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
   const [error, setError] = useState('')
   /** The job whose REJECTED answer waits for the in-app confirmation of "Use this answer". */
   const [confirm, setConfirm] = useState<'' | 'front' | 'back'>('')
+  /** "Render back job…" waits for its in-app confirmation (it spends an image job and is kept for the piece). */
+  const [confirmBack, setConfirmBack] = useState(false)
   const wasRunning = useRef(false)
   const reload = useCallback(() => {
     return apiGet<TemplateCutState>(`${path}/cut`).then(setState).catch((e) => setError((e as Error).message))
@@ -346,6 +353,23 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
       onChanged()
     } catch (e) {
       setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  /** The back-job option: "render" (with `render`, the back job starts at once) or back to "auto" (0 image jobs: the
+   *  plain atlas of the other key comes back when it was made). */
+  const setBackJob = async (value: 'auto' | 'render', render: boolean) => {
+    setBusy(true)
+    setError('')
+    setConfirmBack(false)
+    try {
+      setState(await apiPost<TemplateCutState>(`${path}/cut/back-job`, { back_job: value, render }))
+      if (render) toast(t('Back job started'), 'success')
+      onChanged()
+    } catch (e) {
+      setError((e as Error).message)
+      void reload()           // the option is stored before the start is checked
     } finally {
       setBusy(false)
     }
@@ -431,11 +455,47 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
                   : t('Ready — Picture 2 of the back job (Views tab)')} />
           ) : null}
           {state.has_back && state.back_plain ? (
-            <StepLine testid="back" label={t('Back panel')}
-              light={step === 'post' ? 'blue' : jobs.back?.state === 'ready' ? 'green' : 'grey'}
-              text={t('Plain back view (detail {d} ≤ {l}) — the front panel’s fabric, like the sleeves (0 image jobs)')
-                .replace('{d}', (state.back_detail ?? 0).toFixed(2)).replace('{l}', (state.plain_back_limit ?? 0).toFixed(2))}
-              tip={t('A plain back is never painted by the model: it invented collars, plackets and folds there')} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }} data-cut-back-plain="">
+              <StepLine testid="back" label={t('Back panel')}
+                light={step === 'post' ? 'blue' : jobs.back?.state === 'ready' ? 'green' : 'grey'}
+                text={t('Back is plain — filled from the front fabric (detail {d} ≤ {l}), no back job')
+                  .replace('{d}', (state.back_detail ?? 0).toFixed(2)).replace('{l}', (state.plain_back_limit ?? 0).toFixed(2))}
+                tip={t('A plain back is never painted by the model: it invented collars, plackets and folds there. Pockets, a yoke or a small print can still measure plain — then render the back job.')} />
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', paddingLeft: 16 }}>
+                <button type="button" className="ga-btn ga-btn-sm" disabled={off} data-cut-force-back=""
+                  title={offTip || t('Renders a back job from the back view although it measures plain; kept for this piece')}
+                  onClick={() => setConfirmBack(true)}>
+                  {`${t('Render back job…')} — ${t('{n} image job').replace('{n}', '1')}`}
+                </button>
+              </div>
+              {confirmBack ? (
+                <div role="alertdialog" aria-label={t('Render back job')} data-cut-confirm="force-back"
+                  style={{ marginLeft: 16, padding: '6px 8px', border: '1px solid var(--warning, #d29922)', borderRadius: 4,
+                    display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
+                  <span style={{ flex: '1 1 220px' }}>
+                    {t('The back view measures plain. Render a back job from it anyway? This piece keeps rendering its back job; the front answer is kept.')}
+                  </span>
+                  <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" onClick={() => { void setBackJob('render', true) }}>
+                    {t('Render back job')}
+                  </button>
+                  <button type="button" className="ga-btn ga-btn-sm" onClick={() => setConfirmBack(false)}>{t('Cancel')}</button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {state.has_back && state.back_forced && state.back_measured_plain ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }} data-cut-back-forced="">
+              <StepLine testid="back_forced" label={t('Back panel')} light="green"
+                text={t('Back job forced — the back view measures plain (detail {d} ≤ {l})')
+                  .replace('{d}', (state.back_detail ?? 0).toFixed(2)).replace('{l}', (state.plain_back_limit ?? 0).toFixed(2))} />
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', paddingLeft: 16 }}>
+                <button type="button" className="ga-btn ga-btn-sm" disabled={busy || running} data-cut-unforce-back=""
+                  title={t('The back gets the front panel’s fabric again; an atlas made that way before comes back')}
+                  onClick={() => { void setBackJob('auto', false) }}>
+                  {t('Use the front fabric for the back')}
+                </button>
+              </div>
+            </div>
           ) : null}
           {(['front', 'back'] as const).filter((job) => job === 'front' || (state.has_back && !state.back_plain)).map((job) => {
             const j = jobs[job]
@@ -547,9 +607,11 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
         <Thumb src={u.atlas || ''} label={t('Atlas')} />
         {state.has_back ? (
           <>
-            <Thumb src={u.template_back || ''} label={t('Back template')} />
+            <Thumb src={u.template_back || ''} label={t('Back template')}
+              empty={state.back_plain ? t('No back job — plain back') : undefined} />
             <Thumb src={u.back_ref || ''} label={t('Back view')} tip={t('Picture 2 of the back job')} />
-            <Thumb src={u.raw_back || ''} label={t('Back answer')} />
+            <Thumb src={u.raw_back || ''} label={t('Back answer')}
+              empty={state.back_plain ? t('No back job — plain back') : undefined} />
           </>
         ) : null}
       </div>
