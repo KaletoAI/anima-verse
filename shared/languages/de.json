@@ -7598,6 +7598,25 @@
     "Storage surface": "Ablagefläche",
     "Surface height (m)": "Ablagehöhe (m)",
     "Prop height {h} m": "Prop-Höhe {h} m",
-    "A table top is about 0.75 m; a person is 1.70 m": "Eine Tischplatte liegt bei etwa 0,75 m; eine Person ist 1,70 m groß"
+    "A table top is about 0.75 m; a person is 1.70 m": "Eine Tischplatte liegt bei etwa 0,75 m; eine Person ist 1,70 m groß",
+    "Item editor": "Item-Editor",
+    "World placement": "Welt-Platzierung",
+    "Placeable in the world": "In der Welt platzierbar",
+    "Size — longest edge (m)": "Größe — längste Kante (m)",
+    "Default 0.25 m. A key is about 0.08 m, a book 0.25 m, a chair 0.9 m, a person 1.70 m.": "Standard 0,25 m. Ein Schlüssel ist ca. 0,08 m, ein Buch 0,25 m, ein Stuhl 0,9 m, eine Person 1,70 m.",
+    "Generating mesh…": "Mesh wird erzeugt…",
+    "Mesh generation failed": "Mesh-Erzeugung fehlgeschlagen",
+    "Copied from {id}": "Kopiert von {id}",
+    "Generate mesh": "Mesh erzeugen",
+    "Generate the item image first": "Zuerst das Item-Bild erzeugen",
+    "Use mesh of another item": "Mesh eines anderen Items verwenden",
+    "Delete mesh": "Mesh löschen",
+    "Delete mesh?": "Mesh löschen?",
+    "Mesh queued": "Mesh in Warteschlange",
+    "Mesh copied": "Mesh kopiert",
+    "Mesh deleted": "Mesh gelöscht",
+    "Checking available meshes…": "Verfügbare Meshes werden geprüft…",
+    "No other items with a mesh found.": "Keine anderen Items mit Mesh gefunden.",
+    "Longest edge in the world: {size} m (mesh bbox: {x} × {y} × {z})": "Längste Kante in der Welt: {size} m (Mesh-BBox: {x} × {y} × {z})"
   }
 }

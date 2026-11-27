@@ -15,6 +15,7 @@ import { FilterChipRow } from '../../components/FilterChipRow'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
 import { useEnlarge } from '../../components/ZoomButton'
 import { ItemForm } from './ItemForm'
+import { ItemMeshTab } from './ItemMeshTab'
 import { takeItemsSelection } from './itemsModel'
 import {
   CATEGORIES,
@@ -102,6 +103,7 @@ export function ItemsTab() {
   const [outfitTypeOptions, setOutfitTypeOptions] = useState<string[]>([])
   const [conditionOptions, setConditionOptions] = useState<ConditionOption[]>([])
   const [genDialogOpen, setGenDialogOpen] = useState(false)
+  const [editorTab, setEditorTab] = useState<'details' | 'mesh'>('details')
 
   const loadOwnership = useCallback(async () => {
     try {
@@ -196,6 +198,7 @@ export function ItemsTab() {
   const newItem = useCallback(() => guard(() => {
     loadDraft({ ...EMPTY_DRAFT })
     setOwners([])
+    setEditorTab('details')
   }), [guard, loadDraft])
 
   const editItem = useCallback(
@@ -211,6 +214,7 @@ export function ItemsTab() {
       prev ? { ...prev, id: '', name: `${prev.name} (copy)`.trim(), isNew: true } : prev,
     )
     setOwners([])
+    setEditorTab('details')
   }, [setDraft])
 
   const update = useCallback(<K extends keyof DraftItem>(key: K, value: DraftItem[K]) => {
@@ -603,17 +607,48 @@ export function ItemsTab() {
 
       <section className="ga-items-form-col">
         {draft ? (
-          <ItemForm
-            draft={draft}
-            items={items || []}
-            outfitTypeOptions={outfitTypeOptions}
-            conditionOptions={conditionOptions}
-            onUpdate={update}
-            onUpdateExtra={updateExtra}
-            onToggleListItem={toggleListItem}
-            dirty={dirty}
-            onReload={() => { void reloadOpen() }}
-          />
+          <>
+            {!draft.isNew ? (
+              <nav className="ga-subtabs" role="tablist" aria-label={t('Item editor')} style={{ margin: '0 0 10px' }}>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={editorTab === 'details'}
+                  className={`ga-btn ga-btn-sm${editorTab === 'details' ? ' ga-btn-primary' : ''}`}
+                  onClick={() => setEditorTab('details')}
+                >
+                  {t('Details')}
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={editorTab === 'mesh'}
+                  className={`ga-btn ga-btn-sm${editorTab === 'mesh' ? ' ga-btn-primary' : ''}`}
+                  onClick={() => setEditorTab('mesh')}
+                >
+                  {t('Mesh')}
+                </button>
+              </nav>
+            ) : null}
+            {!draft.isNew && editorTab === 'mesh' && items.find((it) => it.id === draft.id) ? (
+              <ItemMeshTab
+                item={items.find((it) => it.id === draft.id)!}
+                onSaved={() => { void reloadOpen() }}
+              />
+            ) : (
+              <ItemForm
+                draft={draft}
+                items={items || []}
+                outfitTypeOptions={outfitTypeOptions}
+                conditionOptions={conditionOptions}
+                onUpdate={update}
+                onUpdateExtra={updateExtra}
+                onToggleListItem={toggleListItem}
+                dirty={dirty}
+                onReload={() => { void reloadOpen() }}
+              />
+            )}
+          </>
         ) : (
           <div className="ga-placeholder">{t('Click an item or create a new one.')}</div>
         )}
