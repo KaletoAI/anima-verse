@@ -230,6 +230,7 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
     "face_retexture": {**_mesh("Face retexture", "Character face texture correction", "none"),
                        "category": "face_retexture", "requires_chain": False},
     "mesh_object": _mesh("3D mesh — object", "Prop mesh", "none"),
+    "mesh_item": _mesh("3D mesh — item", "Item mesh for world placement", "none"),
     "mesh_building": _mesh("3D mesh — building", "Building/room mesh", "none"),
     "mesh_garment": _mesh("3D mesh — garment", "Garment meshes (clothing pieces)", "none"),
     # Footwear (plan 2026-11-10-footwear-rigid-shoes): one rigid shoe per item,

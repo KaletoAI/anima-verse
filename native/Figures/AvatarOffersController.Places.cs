@@ -95,6 +95,7 @@ public sealed partial class AvatarOffersController
     }
     public bool Pick(Vec3 origin,Vec3 direction,Vector2 viewport)
     {
+        if(TryPickConfirmedItem(origin,direction,viewport)) return true;
         if(PickPropAction?.Invoke(origin,direction,viewport)==true) return true;
         if(!CanUse) return false;
         if(Places.Hit(origin,direction) is not { } hit || RoomOffer(hit.Id) is not { } offer) return false;
@@ -102,14 +103,17 @@ public sealed partial class AvatarOffersController
         _hud.SetState("placeMenu",new JsonObject { ["x"]=(double)css.X,["y"]=(double)css.Y,["offer"]=offer.DeepClone() });
         return true;
     }
-    private void ClearHover() { HasPropHover=false; Places.ClearHover(); }
+    private void ClearHover() { ClearItemHover(); HasPropHover=false; Places.ClearHover(); }
     public bool HasPropHover { get; private set; }
-    public bool HasHover=>HasPropHover || Places.HasHover;
+    public bool HasHover=>HasItemHover || HasPropHover || Places.HasHover;
     public bool Hover(Vec3 origin,Vec3 direction)
     {
-        if(_hud.Ui.MenuOpen || _hud.Ui.OverlayOpen || _hud.SceneOwned("placeMenu") is not null)
+        if(AnyMenuOrOverlayOpen)
         { ClearHover(); return false; }
         var prop=HitSemanticProp(origin,direction);
+        double? propDist=prop is { } p ? (p.Point-new Vector3((float)origin.X,(float)origin.Y,(float)origin.Z)).Length() : null;
+        if(TryHoverConfirmedItem(origin,direction,propDist)) return true;
+        ClearItemHover();
         HasPropHover=prop is not null;
         if(prop is { } semantic) {
             Places.ClearHover();

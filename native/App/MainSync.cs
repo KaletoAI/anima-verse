@@ -28,6 +28,8 @@ public partial class Main : Node3D
     private IDisposable? _clipSubscription;
     /// <summary>Plan E3 Task 5: the push topic <c>orders</c> → <c>GET /play/orders?since=</c> → the NPC order players.</summary>
     private IDisposable? _ordersSubscription;
+    /// <summary>Task 10: the push topic <c>self</c> → conditional <c>GET /play/locations/{id}/items</c> refetch.</summary>
+    private IDisposable? _selfSubscription;
 
     private void StartSync()
     {
@@ -47,6 +49,7 @@ public partial class Main : Node3D
                 e => Log($"[clips] reload failed: {e.Message}"));
             _clipSubscription = hub.OnTopics(new[] { "clips" }, _clipReload.Push);
             _ordersSubscription = hub.OnTopics(new[] { "orders" }, () => _ = figures?.PullOrdersAsync());
+            _selfSubscription = hub.OnTopics(new[] { "self" }, () => _avatarOffers?.NotifyItemsChanged());
             bool wasConnected = false;
             int seenGen = 0;
             hub.OnState(() =>
@@ -90,6 +93,8 @@ public partial class Main : Node3D
         _clipSubscription = null;
         _ordersSubscription?.Dispose();
         _ordersSubscription = null;
+        _selfSubscription?.Dispose();
+        _selfSubscription = null;
         _clipReload?.Dispose();
         _clipReload = null;
         _builder?.StopResidency();

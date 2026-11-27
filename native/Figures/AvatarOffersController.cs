@@ -58,7 +58,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
     public Task? PendingEntry { get; private set; }
     public bool HasLockedEntry => _entry is not null && _entryReason is not null;
     public PlaceTargets Places { get; }
-    public string? NearestOffer => Offers.NearestOffer(Distance("talkTarget"),Distance("elevator"),Distance("stairs"),Distance("enterOffer"));
+    public string? NearestOffer => Offers.NearestOffer(Distance("talkTarget"),Distance("elevator"),Distance("stairs"),Distance("enterOffer"),NearestItemOfferDistance);
     private double? Distance(string field) => _hud.SceneOwned(field)?["dist"]?.GetValue<double>();
     private static string Text(JsonElement row,string field) => row.TryGetProperty(field,out var v) && v.ValueKind==JsonValueKind.String ? v.GetString()! : "";
     private static JsonElement? Self(JsonElement map)
@@ -88,6 +88,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
                 && args[2] is JsonValue partner && partner.TryGetValue<string>(out var name)) _figures.PairFacing(p, i, name);
         };
         AttachProps();
+        AttachItems();
     }
     private void EntryAction(JsonArray _) => PendingEntry=EnterAsync();
     private void PoseAction(JsonArray args)
@@ -98,6 +99,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
     private void CloseMenu(JsonArray _) => _hud.SetState("placeMenu",null);
     private void Dropped(LocationSlot slot)
     {
+        OnItemSlotDropped(slot);
         if(slot==_placeTile) { ClearPlaces(); _seatKey=""; }
         if(slot.Loc.Id==_entry?.LocId) { _generation++; ReleaseEntry(); _entry=null; _hud.SetState("enterOffer",null); }
     }
@@ -106,12 +108,13 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
     {
         if(_active==active) return;
         _active=active; _generation++; _nextOffers=0; _seatKey="";
-        if(!active) { ReleaseEntry(); _entry=null; _entryReason=null; _hud.SetState("talkTarget",null); _hud.SetState("enterOffer",null); ClearPlaces(); }
+        if(!active) { DeactivateItems(); ReleaseEntry(); _entry=null; _entryReason=null; _hud.SetState("talkTarget",null); _hud.SetState("enterOffer",null); ClearPlaces(); }
         else if(Map is { } map)
         {
             _seatMap=map.Clone(); _seatMapAt=MapReceiptTime(map);
             ReconcilePlace(map,_seatMapAt);
             PendingPlaces=RefreshPlacesAsync();
+            PendingItems=RefreshItemsAsync();
             if(PropActions is not null) PendingPropAction=ObservePropAsync(()=>RefreshSemanticOffersAsync());
             UpdateOffers();
         }
@@ -125,13 +128,14 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
         ClearHover();
         _seatMap=map.Clone(); _seatMapAt=polledAt;
         ReconcilePlace(map,polledAt);
+        SyncItemsWhere();
         if(_active) { PendingPlaces=RefreshPlacesAsync(); if(PropActions is not null) _=RefreshSemanticOffersAsync(false); }
     }
     public void Tick()
     {
         if (Suspended) return;
         TickProps();
-        if(_hud.Ui.MenuOpen || _hud.Ui.OverlayOpen || _hud.SceneOwned("placeMenu") is not null) ClearHover();
+        if(_hud.Ui.MenuOpen || _hud.Ui.OverlayOpen || _hud.SceneOwned("placeMenu") is not null || _hud.SceneOwned("itemMenu") is not null) ClearHover();
         if(!_active || _disposed) return;
         // Rebuilds also follow tier swaps, re-lifts, and streamed room mounts without another server poll.
         RebuildPlaces();
@@ -181,6 +185,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
     {
         var state=new JsonObject();
         foreach(var name in new[]{"talkTarget","stairs","elevator","enterOffer","elevatorOpen"}) state[name]=_hud.SceneOwned(name)?.DeepClone();
+        if(NearestItemOfferDistance is double itemDist) state["itemOffer"]=new JsonObject { ["dist"]=itemDist };
         var command=SceneKeys.Interact(state,HasLockedEntry);
         if(command is null) return;
         if(command.Ui) _hud.SendUi(command.Name);
@@ -218,7 +223,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
     public void Dispose()
     {
         if(_disposed) return;
-        SetActive(false); DetachProps(); _disposed=true; _lifetime.Cancel();
+        SetActive(false); DetachItems(); DetachProps(); _disposed=true; _lifetime.Cancel();
         _position.RoomChanged-=RefreshRoomOffers;
         _figures.PositionMapApplied-=MapApplied; _world.Dropped-=Dropped; _steering.StandUp=null; _hud.LockedEntry=null;
         _hud.Handlers.Remove("enterLocation"); _hud.Handlers.Remove("pickRoomPose"); _hud.Handlers.Remove("closePlaceMenu");

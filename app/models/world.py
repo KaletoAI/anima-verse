@@ -599,6 +599,15 @@ def _upsert_locations(locations: List[Dict[str, Any]], *, sync_world: bool) -> b
         return False
     with world_write_lock:
         try:
+            from app.core.item_placement import repair_anchors
+            for loc in rows:
+                try:
+                    repair_anchors(loc)
+                except Exception as e:  # noqa: BLE001 — anchor repair must never block a world write
+                    logger.warning("item anchor repair failed for %s: %s", loc.get("id"), e)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("item anchor repair import failed: %s", e)
+        try:
             with transaction() as conn:
                 _write_location_rows(conn, rows, utc_now_iso())
         except Exception as e:

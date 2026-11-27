@@ -92,6 +92,8 @@ export interface Item {
   has_image?: boolean
   image?: string
   image_meta?: { backend?: string; backend_type?: string; model?: string }
+  world_placeable?: boolean
+  world_size_m?: number | null
   _shared?: boolean
   // Spell / magic / tracker / evidence fields. The spell-section editor
   // (rendered for category=spell) reads/writes them via `extras`; for

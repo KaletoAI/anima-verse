@@ -19,6 +19,8 @@ public partial class HudOverlay
             ["imageId"]=id,["imageUrl"]=url,["view"]=System.Text.Json.JsonSerializer.SerializeToNode(view) });
     /// <summary>Later entry wiring can explain a locked neighbour even when it publishes no visible offer.</summary>
     public Func<bool>? LockedEntry { get; set; }
+    /// <summary>Nearest room-item distance in the confirmed room (joins F's nearestOffer pool without adding a HUD wire field).</summary>
+    public Func<double?>? ItemOfferDistance { get; set; }
 
     /// <summary>
     /// One keydown from _Input; public for the offline check. Escape cancels pending control even while
@@ -44,6 +46,8 @@ public partial class HudOverlay
         var state = new JsonObject();
         foreach (var field in new[] { "mode", "selected", "talkTarget", "stairs", "elevator", "elevatorOpen", "enterOffer" })
             state[field] = _state.Get(field)?.DeepClone();
+        if (ItemOfferDistance?.Invoke() is double itemDist)
+            state["itemOffer"] = new JsonObject { ["dist"] = itemDist };
         var command = SceneKeys.Interact(state, LockedEntry?.Invoke() == true);
         if (command is { Ui: true }) SendUi(command.Name);
         else if (command?.Name == "elevatorOpen") SetState(command.Name, command.Argument);

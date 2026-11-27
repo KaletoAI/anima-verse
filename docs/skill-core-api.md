@@ -205,6 +205,24 @@ entry without an icon dropped. Answer `[]` for a character the badge does not
 concern — this runs on every 3-second poll for every character, so keep it to
 profile reads (no DB query per call).
 
+## World item actions — capability `item.actions` ✅
+
+Extra actions offered in the world-item click menu alongside the core actions
+(`look`, `take`, `read`). The core names no package (R1); a package contributes
+with `register_provider("item.actions", fn, owner="<package id>", multiple=True)`.
+The provider is called as `fn(viewer, item, placement) -> list[dict]` where each
+entry carries `{"id": str, "label": str}` and an optional callable `"run"` key
+(alternatively, the provider function may expose a callable `run` attribute).
+Provider errors are logged and skipped; ids that collide with core actions
+(`look`, `take`, `read`) or an earlier provider are dropped with a warning.
+
+When a player executes a package action via `POST /play/room-item/action`,
+`app.core.item_actions.run_action(viewer, item, placement, action_id, location_id, room_id)`
+invokes the runner with `(viewer, item_id, location_id, room_id)` and expects a
+result `dict` (merged into `{"ok": True, **result}`).
+`app.core.item_actions.actions_for(viewer, item, placement, lang="de")` strips
+`"run"` before returning public `{"id", "label", "source"}` dicts.
+
 ## Clip contact relations — capability `clip_contact_target_defaults` ✅
 
 Ruling A139. A pair/group clip says which place's attached part aims at which
@@ -546,7 +564,7 @@ Public item placement helpers (stable):
 | Function | Contract |
 |---|---|
 | `add_item(name, ..., item_id="", owner="", pages_source="", portable=True, extra_fields=None) -> dict` | Create a world item. `document` is a valid category. Reading fields persist in meta; `extra_fields` accepts localized `name_<lang>` and `description_<lang>` fields only. `update_item` accepts those fields and `owner`, `pages_source`, `portable`. Nonportable items fail pickup with translated `That cannot be taken`. |
-| `add_item_to_room(location_id, room_id, item_id, quantity=1, hidden=False, discovery_difficulty=0, note="") -> bool` | Place an item in a room; difficulty is clamped to 0–999. Uses the world write lock. |
+| `add_item_to_room(location_id, room_id, item_id, quantity=1, hidden=False, discovery_difficulty=0, note="", anchor=None) -> bool` | Place an item in a room; difficulty is clamped to 0–999. Uses the world write lock. |
 | `find_item_location(item_id, exclude_character="") -> dict \| None` | Search inventories first (excluding the named holder), then room placements. Returns `{kind: "character", character}` or `{kind: "room", location_id, room_id}`, or None. |
 
 ## Item reading — `app.core.item_reading` ✅
@@ -1369,6 +1387,7 @@ Capabilities, die der Core heute abfragt:
 | `play.say_intercept` | `routes/play.py` `play_say`, after the addressees are filtered and before spell detection. Contributors (`register_provider(..., owner="<package id>", multiple=True)`) are called in registration order, off the event loop, with the keywords `avatar`, `content`, `volume`, `addressees` (the reachable ones), `location_id`, `room_id`; answer `None` to pass or `{"consumed": True, "result": {...}}` to take the message. The first consuming contributor wins: no utterance is recorded, no spell detection and no room reaction runs, the route answers `{"ok": true, "intercepted": <result>}`. A raising contributor is logged and skipped; image-only messages are not offered | Every message is spoken into the room as usual |
 | `character_panel:<package id>` | `app.core.character_panels` for the admin routes `/characters/{name}/panels/{package}` and the skill listing (`panel_package`); see "Character panels" below | No panel on the Skills tab, the routes answer 404 |
 | `quest.types` | `app.core.quest_catalog.types(*, strict=False)` — every quest condition, prerequisite and effect type (`multiple=True`, one contributor per owner answering a LIST of `QuestType`; register through `quest_catalog.register`, see "Quest catalog" above) | Only the core's built-in types (owner `core`); a run using a removed package's type turns `broken` once the type is missing at two consecutive ticks |
+| `item.actions` | `app.core.item_actions.actions_for(viewer, item, placement, lang="de")` and `app.core.item_actions.run_action(viewer, item, placement, action_id, location_id, room_id)` — extra actions for a world-placed item (`register_provider(..., owner="<package id>", multiple=True)`); see "World item actions" above | Only the core actions (`look`, `take`, `read`) |
 | `romantic_compatibility` | `models/relationship.are_romantically_compatible` | immer kompatibel |
 | `romantic_attraction` | `stat_influence` invokes the registered callback with observer and subject names, returning a bool for that exact directed pair | Unavailable: attraction-dependent Influence rules do not match. This is NOT symmetric compatibility and does not inherit its default `True`. Only the observer's preferences/block list determine direction; subject profile/config supplies appearance |
 | `romantic_interests_help` | `/admin/settings` | der Hilfe-Button fehlt |

@@ -323,6 +323,7 @@ public sealed partial class WorldBuilder
         bool seats = slot.Places.Relift(frame, moved ? step.Delta : 0, Height.GroundAt);
         // reliftScene's tail: the room floors, stands, surfaces and ROOM markers re-derived, the corridors on the ground.
         DeriveStands(slot);
+        slot.Items?.Relift();
         return (moved, relifted, seats);
     }
 

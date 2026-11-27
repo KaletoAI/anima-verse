@@ -15,10 +15,11 @@ public static class SceneKeys
     {
         double? Dist(string field) => state[field] is JsonObject o && o["dist"] is JsonValue v
             && v.GetValueKind() == JsonValueKind.Number ? v.Deserialize<double>() : null;
-        var kind = Offers.NearestOffer(Dist("talkTarget"), Dist("elevator"), Dist("stairs"), Dist("enterOffer"));
+        var kind = Offers.NearestOffer(Dist("talkTarget"), Dist("elevator"), Dist("stairs"), Dist("enterOffer"), Dist("itemOffer"));
         if (kind == "talk") return new("openChat", Ui: true);
         if (kind == "stairs") return new("rideStairs");
         if (kind == "enter") return new("enterLocation");
+        if (kind == "item") return new("openNearestItemMenu");
         if (kind == "elevator" && state["elevator"] is JsonObject lift)
         {
             if (lift["levels"] is JsonArray levels && lift["current"] is JsonValue current && current.TryGetValue<int>(out var at))

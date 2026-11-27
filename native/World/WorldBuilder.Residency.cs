@@ -188,6 +188,8 @@ public sealed partial class WorldBuilder
             slot.Fade.Collect(slot.Group);
             slot.Storeys.Apply(slot.LevelFilter, slot.Fade.Fade, slot.Openable, slot.Fade);
             RefreshVerify(slot, _residencyStats);
+            slot.Items ??= new ItemsLayer { Name = "Items" };
+            slot.Items.Mount(slot, _models, LoadPictureAsync);
             slot.Ring = Ring.Near; slot.Ready = true; slot.MeshVersion++;
             RequestNavBake(slot);   // the first moment the slot is near (decision 5 / review B1)
             ResidencyChanged?.Invoke(id, Ring.Near); Ready?.Invoke(slot);
@@ -329,6 +331,12 @@ public sealed partial class WorldBuilder
     {
         slot.Generation++; slot.Ready = false; slot.Ring = Ring.Far;
         ReleaseNav(slot);
+        if (slot.Items is { } items)
+        {
+            items.Unmount();
+            if (GodotObject.IsInstanceValid(items)) items.Free();
+            slot.Items = null;
+        }
         slot.Storeys.DropDoorMarks();
         if (slot.Scene is { } scene)
             foreach (var rec in slot.Placements.Where(r => !r.IsBuilding && !LocationView.IsOutdoor(scene, r.Spec.RoomId)).ToArray())
@@ -346,6 +354,12 @@ public sealed partial class WorldBuilder
     {
         slot.Generation++; slot.Ready = false;
         ReleaseNav(slot);
+        if (slot.Items is { } items)
+        {
+            items.Unmount();
+            if (GodotObject.IsInstanceValid(items)) items.Free();
+            slot.Items = null;
+        }
         foreach (var rec in slot.Placements) ReleasePlacement(rec);
         slot.Placements.Clear();
         if (GodotObject.IsInstanceValid(slot.Group))

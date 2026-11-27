@@ -1,14 +1,18 @@
 import { Field } from '@anima/player-ui'
 import { CATEGORY_DATALIST_ID, MOUNT_KINDS } from './propTypes'
-import { GENERAL_TARGET } from './pendingFields'
+import { draftValue, GENERAL_TARGET } from './pendingFields'
 import type { PropWorkspace } from './usePropWorkspace'
 
 export function PropOverview({ workspace }: { workspace: PropWorkspace }) {
   const { t, nameNow, queueGeneral, categoryNow, tagsNow, swayNow,
     mountSuggested, mountNow, prop, shownVariant, queueVariant, variant,
-    shownHasMesh, actions } = workspace
+    shownHasMesh, actions, shownDims, buf } = workspace
   const mountKnown = MOUNT_KINDS.some((mount) => mount.kind === mountNow)
-  const mountInDraft = 'mount' in (workspace.buf.get(GENERAL_TARGET) || {})
+  const mountInDraft = 'mount' in (buf.get(GENERAL_TARGET) || {})
+  const surfaceNow = draftValue<{ height_m: number } | null>(
+    buf, GENERAL_TARGET, 'surface', prop.surface ?? null)
+  const hasSurface = surfaceNow !== null
+  const variantHeight = shownDims.height_m
   const bindings = workspace.derivedBindings[shownVariant?.uid || ''] || []
   const places = new Set(bindings.flatMap(binding => binding.marker_ids)).size
   return <div className="ga-form prop-area-content">
@@ -56,6 +60,33 @@ export function PropOverview({ workspace }: { workspace: PropWorkspace }) {
           }} />
       </Field>
       </div>
+    </section>
+    <section className="prop-inspector-group">
+      <h3>{t('Storage surface')}</h3>
+      <label className="ga-form-row">
+        <input type="checkbox" checked={hasSurface} onChange={(event) => {
+          if (!event.target.checked) {
+            queueGeneral({ surface: null })
+          } else {
+            const start = Math.round(Math.max(0.01, Math.min(10, variantHeight || 0.75)) * 1000) / 1000
+            queueGeneral({ surface: { height_m: start } })
+          }
+        }} />
+        {t('Storage surface')}
+      </label>
+      {surfaceNow && <div className="prop-overview-short-fields">
+        <Field label={t('Surface height (m)')}
+          hint={`${t('Prop height {h} m').replace('{h}', variantHeight.toFixed(2))} · ${t('A table top is about 0.75 m; a person is 1.70 m')}`}>
+          <input aria-label={t('Surface height (m)')} className="ga-input" type="number" min={0.01} max={10} step={0.01}
+            value={surfaceNow.height_m}
+            onChange={(event) => {
+              const value = event.currentTarget.valueAsNumber
+              if (Number.isFinite(value) && value > 0) {
+                queueGeneral({ surface: { height_m: Math.min(10, Math.round(value * 1000) / 1000) } })
+              }
+            }} />
+        </Field>
+      </div>}
     </section>
     <section className="prop-inspector-group prop-overview-status">
       <h3>{t('Model & actions')}</h3>

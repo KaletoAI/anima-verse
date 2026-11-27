@@ -1878,6 +1878,36 @@ def play_location_scene(location_id: str, request: Request):
                                           "Cache-Control": "no-cache"})
 
 
+@router.get("/play/locations/{location_id}/items")
+def play_location_items(location_id: str, request: Request, user=Depends(get_current_user)):
+    """Per-viewer world-placeable items lying at ``location_id`` (pure read).
+
+    Returns only placeable entries with a stored anchor that are visible to the
+    active avatar via ``placement_seen_by`` (never writes discovery rows).
+    """
+    from fastapi.responses import Response
+    from app.core.http_files import etag_matches
+    from app.core.item_world import build_items_payload, items_etag
+    from app.models.account import get_active_character
+    from app.models.character import get_character_language
+    from app.models.world import get_location_by_id
+
+    loc = get_location_by_id(location_id)
+    if not loc:
+        raise HTTPException(status_code=404, detail="Location not found")
+    viewer = (get_active_character() or "").strip()
+    lang = (get_character_language(viewer) or "de") if viewer else "de"
+    etag = f'"{items_etag(loc, viewer, lang)}"'
+    if etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers={"ETag": etag,
+                                                  "Cache-Control": "no-cache"})
+    payload = build_items_payload(loc, viewer, lang)
+    resp = _json_off_loop(payload)
+    resp.headers["ETag"] = etag
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 @router.post("/play/scene-preview")
 async def play_scene_preview(request: Request, _=Depends(require_admin)):
     """The same payload for an UNSAVED location draft (contract § B3) — the
@@ -3782,6 +3812,140 @@ def play_item_detail(item_id: str, user=Depends(get_current_user)):
         "effects": item.get("effects") or {},
         "image_url": (f"/inventory/items/{item_id}/image" if item.get("image") else ""),
     }
+
+
+def _find_visible_room_item(avatar: str, item_id: str):
+    """Find ``item_id`` visibly lying in ``avatar``'s current room, else 404."""
+    from app.models.character import (
+        get_character_current_location,
+        get_character_current_room,
+    )
+    from app.models.inventory import get_item, get_room_items, placement_seen_by
+
+    loc_id = get_character_current_location(avatar) or ""
+    room_id = get_character_current_room(avatar) or ""
+    if not loc_id:
+        raise HTTPException(status_code=404, detail="Item not here")
+    entries = get_room_items(loc_id, room_id)
+    entry = next(
+        (
+            e for e in entries
+            if isinstance(e, dict)
+            and str(e.get("item_id") or "") == item_id
+            and placement_seen_by(avatar, loc_id, room_id, e)
+        ),
+        None,
+    )
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Item not here")
+    item = get_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not here")
+    return loc_id, room_id, entry, item
+
+
+@router.get("/play/room-item/{item_id}")
+async def play_room_item_detail(item_id: str, user=Depends(get_current_user)):
+    """Look at an item visibly lying in the avatar's current room."""
+    import asyncio
+    return await asyncio.to_thread(_play_room_item_detail_sync, user, item_id)
+
+
+def _play_room_item_detail_sync(user, item_id: str):
+    """Blocking body of ``play_room_item_detail`` — runs in the threadpool."""
+    from urllib.parse import quote
+    from app.core.i18n import localized
+    from app.models.character import get_character_language
+
+    avatar = _require_avatar()
+    iid = str(item_id or "").strip()
+    if not iid:
+        raise HTTPException(status_code=400, detail="item_id required")
+    _, _, entry, item = _find_visible_room_item(avatar, iid)
+    lang = get_character_language(avatar) or "de"
+    quoted_id = quote(iid, safe="")
+    return {
+        "item_id": iid,
+        "name": localized(item, "name", lang) or iid,
+        "description": (localized(item, "description", lang) or "").strip(),
+        "image_url": f"/inventory/items/{quoted_id}/image" if item.get("image") else None,
+        "quantity": int(entry.get("quantity", 1) or 1),
+    }
+
+
+@router.post("/play/room-item/action")
+async def play_room_item_action(request: Request, user=Depends(get_current_user)):
+    """Run a package-contributed action on an item in the avatar's current room."""
+    import asyncio
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    return await asyncio.to_thread(_play_room_item_action_sync, user, body)
+
+
+def _play_room_item_action_sync(user, body: Any):
+    """Blocking body of ``play_room_item_action`` — runs in the threadpool."""
+    from app.core.item_actions import run_action
+
+    avatar = _require_avatar()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    item_id = str(body.get("item_id") or "").strip()
+    action_id = str(body.get("action_id") or "").strip()
+    if not item_id or not action_id:
+        raise HTTPException(status_code=400, detail="item_id and action_id required")
+    loc_id, room_id, entry, item = _find_visible_room_item(avatar, item_id)
+    try:
+        result = run_action(avatar, item, entry, action_id, loc_id, room_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Use the core route")
+    except LookupError:
+        raise HTTPException(status_code=400, detail="Unknown action")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "Action failed")
+    return {"ok": True, **result}
+
+
+@router.post("/play/room-item/approach")
+async def play_room_item_approach(request: Request, user=Depends(get_current_user)):
+    """Compute a standing point next to an anchored item in the avatar's room."""
+    import asyncio
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    return await asyncio.to_thread(_play_room_item_approach_sync, user, body)
+
+
+def _play_room_item_approach_sync(user, body: Any):
+    """Blocking body of ``play_room_item_approach`` — runs in the threadpool."""
+    from app.core.i18n import t
+    from app.core.item_actions import approach_point
+    from app.models.character import get_character_language
+    from app.models.inventory import item_world_size
+    from app.models.world import get_location_by_id
+
+    avatar = _require_avatar()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    item_id = str(body.get("item_id") or "").strip()
+    if not item_id:
+        raise HTTPException(status_code=400, detail="item_id required")
+    loc_id, room_id, entry, item = _find_visible_room_item(avatar, item_id)
+    anchor = entry.get("anchor")
+    if (
+        not isinstance(anchor, dict)
+        or not isinstance(anchor.get("at"), (list, tuple))
+        or len(anchor.get("at")) < 2
+    ):
+        raise HTTPException(status_code=409, detail="Item has no place")
+    location = get_location_by_id(loc_id)
+    point = approach_point(location, room_id, item_id, anchor, item_world_size(item)) if location else None
+    if point is None:
+        lang = get_character_language(avatar) or "de"
+        raise HTTPException(status_code=409, detail=t("No free spot next to the item", lang))
+    return {"point": point, "room_id": room_id}
 
 
 def _build_gallery_payload(character: str) -> dict:

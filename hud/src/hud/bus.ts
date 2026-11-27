@@ -42,6 +42,7 @@ export interface HudGameState {
   info: InfoPanelData | null;
   openView: string | null;
   placeMenu: { x: number; y: number; offer: PlaceOffer } | null;
+  itemMenu: { x: number; y: number; item: { item_id: string; name: string; quantity: number; actions: { id: string; label: string; source?: string }[] } } | null;
   mode: GameMode;
   /** selected figure (worldmap snapshot, refreshed on every poll) or null */
   selected: { char: MapCharacter; isAvatar: boolean } | null;
@@ -127,6 +128,8 @@ export interface HudGameActions {
                     consent?: PropActionConsent, members?: string[]) => void | Promise<void>;
   pickRoomPose?: (placeId: string, poseKey: string) => void | Promise<void>;
   closePlaceMenu?: () => void;
+  pickItemAction?: (itemId: string, actionId: string) => void;
+  closeItemMenu?: () => void;
   respondPropAction?: (executionId: string, accept: boolean) => void | Promise<void>;
   cancelPropAction?: (executionId: string) => void | Promise<void>;
   /** Internal awaited host barrier, not an invokable HUD game command. */
@@ -202,6 +205,7 @@ export interface HudGameActions {
 export interface HudUiActions {
   openChat?: () => void;
   openScreenshotPhoto?: (shot: ScreenshotPhoto) => void;
+  openItemReader?: (itemId: string) => void;
   /** show a short message to the player (Hud.tsx wires the package toast) —
    *  the vanilla side renders no text of its own (E3-T3). ``translate`` marks
    *  an ENGLISH source string that still needs the HUD's i18n (a finding of
@@ -219,7 +223,7 @@ export interface HudUiActions {
 }
 
 const state: HudGameState = {
-  propActionSnapshot: null, clientCache: null, clock: '', connection: 'ok', info: null, openView: null, placeMenu: null,
+  propActionSnapshot: null, clientCache: null, clock: '', connection: 'ok', info: null, openView: null, placeMenu: null, itemMenu: null,
   mode: 'overview', selected: null, talkTarget: null,
   movementLocked: false, partyLeader: '', groundRoomId: '', floorRoomIds: {},
   lockedRooms: {}, lockedLocations: {}, lockedLoc: '',

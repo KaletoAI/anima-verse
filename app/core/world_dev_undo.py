@@ -1506,7 +1506,14 @@ def _undo_restore_room_items(entry: Dict[str, Any], inv: Dict[str, Any]) -> List
     def visible(value: Any) -> bool:
         return (isinstance(value, list)
                 and any(isinstance(e, dict) and not e.get("hidden") for e in value))
-    sync_topics.room_items_changed(lid, rid, visible(now), visible(before))
+    from app.models.inventory import get_item
+    placeable_id = ""
+    for iid in sorted(_item_ids(now) | _item_ids(before)):
+        it = get_item(iid)
+        if it and it.get("world_placeable"):
+            placeable_id = iid
+            break
+    sync_topics.room_items_changed(lid, rid, visible(now), visible(before), item_id=placeable_id)
     return []
 
 

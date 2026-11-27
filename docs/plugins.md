@@ -1273,6 +1273,19 @@ auf demselben Möbel nicht erneut gefragt; ein Paket kann das mit dem Provider-H
 `prop_action.consent_carries(old_definition, new_definition) -> bool` verhindern
 (z. B. der Schritt in eine intime Aktion; Referenz: `docs/skill-core-api.md`).
 
+### Welt-Item-Aktionen (Paket-Aktionen)
+
+Ein Paket kann platzierten Welt-Items eigene Menü-Aktionen neben den Kernaktionen
+(`look`, `take`, `read`) hinzufügen: `on_load` registriert mit
+`hooks.register_provider("item.actions", fn, owner="<paket-id>", multiple=True)`
+einen Provider `fn(viewer, item, placement) -> list[{"id", "label", "run"?}]`
+(Referenz: `docs/skill-core-api.md`). Beim Ausführen über
+`POST /play/room-item/action` ruft der Core den Runner — den `"run"`-Eintrag oder
+das `run`-Attribut der Provider-Funktion — mit `(viewer, item_id, location_id, room_id)`
+auf und erwartet ein Ergebnis-Dict. Fehler einzelner Provider werden geloggt und
+isoliert; IDs dürfen nicht mit den Kern-IDs (`look`, `take`, `read`) oder bereits
+vergebenen IDs kollidieren (Kollisionen werden mit einer Warnung verworfen).
+
 ## Skill-Klasse
 
 ```python

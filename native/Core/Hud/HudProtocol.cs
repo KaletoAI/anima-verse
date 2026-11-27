@@ -86,19 +86,20 @@ public static class HudProtocol
     // Task 79: renderScale is an additive graphics field with an auto fallback, on the existing action.
     // Task 87: additive scene -> HUD text, enabled only by a new page's textInput flag; older pages keep CEF keys.
     // Task 93: additive screenshot-photo ui name, with the existing ui message shape.
+    // Tasks 9/10 (items-in-world): additive itemMenu field, pickItemAction/closeItemMenu game actions, and openItemReader ui action.
     public const int Version = 4;
 
     /// <summary><c>gameNames</c> of bridge.ts — actions HUD → scene.</summary>
     public static readonly string[] GameActions =
     {
-        "avatarChanging", "pairFacing", "infoAction", "closeInfo", "closeOpenView", "pickPropAction", "pickRoomPose", "closePlaceMenu", "respondPropAction",
+        "avatarChanging", "pairFacing", "infoAction", "closeInfo", "closeOpenView", "pickPropAction", "pickRoomPose", "closePlaceMenu", "pickItemAction", "closeItemMenu", "respondPropAction",
         "cancelPropAction", "clearSelection", "setVolumes", "speak", "stopSpeech",
         "markResume", "zoomTo", "sayBubble", "enterEmbodied", "takeControl", "exitEmbodied", "rideElevator", "rideStairs",
         "enterLocation", "backToTitle", "setShowAll", "applyAudioPrefs", "applyScatterPrefs", "applyGraphicsPrefs", "clearClientCache", "setChatBox",
     };
 
     /// <summary><c>uiNames</c> of bridge.ts — actions scene → HUD.</summary>
-    public static readonly string[] UiActions = { "openChat", "openScreenshotPhoto", "toast", "propReason", "toggleMenu", "closeMenu" };
+    public static readonly string[] UiActions = { "openChat", "openScreenshotPhoto", "openItemReader", "toast", "propReason", "toggleMenu", "closeMenu" };
 
     /// <summary><c>HUD_OWNED_FIELDS</c> of bus.ts — the HUD writes these game-state fields, the scene only reads them.</summary>
     public static readonly string[] HudOwnedFields =
@@ -107,7 +108,7 @@ public static class HudProtocol
     /// <summary>The scene-owned <c>HudGameState</c> fields (bus.ts, every field that is not HUD-owned).</summary>
     public static readonly string[] SceneFields =
     {
-        "clock", "connection", "info", "openView", "placeMenu", "mode", "selected", "talkTarget",
+        "clock", "connection", "info", "openView", "placeMenu", "itemMenu", "mode", "selected", "talkTarget",
         "elevator", "elevatorOpen", "stairs", "enterOffer", "clientCache", "propActionSnapshot",
     };
 
