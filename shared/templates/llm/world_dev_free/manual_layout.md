@@ -110,15 +110,15 @@ opening.
 
 Each entry is an object in a list (a single gate is a list of one): `edge` = index into
 `map3d.boundary` (edge `i` runs from point `i` to point `i+1`), `at` `0`…`1`, `width_m` from 0.5 m
-up to the plot's width, optional `room` (where one arrives: a room id, or the name of a room of the
-place or of this plan). Sending the list replaces the stored one; leave it out to keep what is there.
+up to the plot's width. Where one arrives follows from where one stands (the plot's ground or an open
+room there). Sending the list replaces the stored one; leave it out to keep what is there.
 
 Fenced-yard example:
 
 ```json
 {
   "rooms": [{"id": "r_yard", "x": -6, "y": -6, "w": 12, "d": 12, "open": true}],
-  "boundary_openings": [{"edge": 2, "at": 0.5, "width_m": 3, "room": "r_yard"}]
+  "boundary_openings": [{"edge": 2, "at": 0.5, "width_m": 3}]
 }
 ```
 
@@ -137,7 +137,7 @@ Fenced-yard example:
 
 ### `entry_room`, `storey_height_m`
 
-- `entry_room` — the room one enters and leaves the place through (an id, or the `name` of a
+- `entry_room` — the arrival room for travel, teleport and scheduler (an id, or the `name` of a
   room this plan creates). Pick one that touches the outside — a hallway, taproom, yard.
 - `storey_height_m` — the height of one storey in metres, 2.6…4.5 (absent = 3).
 

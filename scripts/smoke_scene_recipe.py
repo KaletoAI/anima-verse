@@ -4582,7 +4582,7 @@ def test_boundary_openings() -> None:
     check("edge 1/at 0.3 → at_world [5, −2], inward [−1, 0]",
           bo and bo[0]["at_world"] == [5.0, -2.0]
           and bo[0]["inward"] == [-1.0, 0.0]
-          and bo[0].get("room_id") == "room-road", str(bo and bo[0]))
+          and "room_id" not in bo[0], str(bo and bo[0]))
     # Edge 0 runs (−5,−5) → (5,−5); at 0.5 is (0, −5), direction (10, 0),
     # normal (0, 1) — the probe (0, −5 + 0.001) is inside.
     check("edge 0/at 0.5 → at_world [0, −5], inward [0, 1]",
@@ -4643,6 +4643,60 @@ def test_boundary_openings() -> None:
           [list(p) for p in entry_pts]
           == [op["at_world"] for op in lo], f"{entry_pts} vs "
           f"{[op['at_world'] for op in lo]}")
+
+    # gate_blocked_by_building: fires when a gate sits on a walled room's wall,
+    # does NOT fire when the gate sits on open ground.
+    blocked_loc = {
+        "id": "gate-block",
+        "map3d": {
+            "boundary": [[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]],
+            "plan_width_m": 10.0,
+            "boundary_openings": [{"edge": 0, "at": 0.5, "width_m": 2.0}],
+        },
+        "rooms": [
+            {"id": "r_wall", "name": "Walled", "layout": {
+                "x": -3.0, "y": -5.0, "w": 6.0, "d": 4.0, "level": 0}},
+        ],
+    }
+    blocked_kinds = [p["kind"] for p in scene_recipe.compose_scene(
+        blocked_loc, plan_width_m=10.0)["problems"]]
+    check("gate_blocked_by_building fires for a gate on a walled room's wall",
+          "gate_blocked_by_building" in blocked_kinds, str(blocked_kinds))
+
+    open_gate_loc = {
+        "id": "gate-open",
+        "map3d": {
+            "boundary": [[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]],
+            "plan_width_m": 10.0,
+            "boundary_openings": [{"edge": 2, "at": 0.5, "width_m": 2.0}],
+        },
+        "rooms": [
+            {"id": "r_wall", "name": "Walled", "layout": {
+                "x": -3.0, "y": -5.0, "w": 6.0, "d": 4.0, "level": 0}},
+        ],
+    }
+    open_kinds = [p["kind"] for p in scene_recipe.compose_scene(
+        open_gate_loc, plan_width_m=10.0)["problems"]]
+    check("gate_blocked_by_building does NOT fire for a gate on open ground",
+          "gate_blocked_by_building" not in open_kinds, str(open_kinds))
+
+    no_walls_gate_loc = {
+        "id": "gate-nowalls",
+        "map3d": {
+            "boundary": [[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]],
+            "plan_width_m": 10.0,
+            "boundary_openings": [{"edge": 0, "at": 0.5, "width_m": 2.0}],
+        },
+        "rooms": [
+            {"id": "r_open", "name": "OpenZone", "layout": {
+                "x": -3.0, "y": -5.0, "w": 6.0, "d": 4.0, "level": 0,
+                "no_walls": True}},
+        ],
+    }
+    nowalls_kinds = [p["kind"] for p in scene_recipe.compose_scene(
+        no_walls_gate_loc, plan_width_m=10.0)["problems"]]
+    check("gate_blocked_by_building does NOT fire for a gate on a no_walls room",
+          "gate_blocked_by_building" not in nowalls_kinds, str(nowalls_kinds))
 
 
 # ── The drawn boundary (contract v6 "Gebiete") ──────────────────────────

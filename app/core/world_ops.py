@@ -210,7 +210,7 @@ def locations_rev() -> str:
 
 def _enrich_locations(locations: List[Dict[str, Any]]) -> None:
     """Add shared boundary and surface hints without character or gallery IO."""
-    from app.core.boundary_entry import has_entrance
+    from app.core.boundary_entry import fenced
     from app.core.surface_textures import library_kinds, resolve_terrain_kind
     from app.core.world_geometry import polygon_self_intersects
     known_kinds = library_kinds()
@@ -224,11 +224,8 @@ def _enrich_locations(locations: List[Dict[str, Any]]) -> None:
         _m3 = loc.get("map3d")
         if isinstance(_m3, dict) and polygon_self_intersects(_m3.get("boundary")):
             loc["boundary_problems"] = ["boundary_self_intersection"]
-        # A HINT for the editor, not a reachability verdict: openings channel
-        # entry (with them, they are the only ways in — decision 2026-08-04),
-        # and WITHOUT any the boundary is free (E4 task 5). The rule lives in
-        # ONE function; the editor only displays what it says.
-        loc["has_entrance"] = has_entrance(loc)
+        # True when the plot carries authored fence gates (boundary_openings).
+        loc["fenced"] = fenced(loc)
         # The ground outside, resolved (plan-grundflaeche.md § 5): '' means
         # the terrain names no library entry — the renderers keep their
         # procedural ground for it and the editor marks the miss.
@@ -524,24 +521,35 @@ class LocationBlock(NamedTuple):
     name_by_id: Dict[str, str]
     world_bounds: Optional[Dict[str, float]]
     areas: List[Dict[str, Any]]
+    entry_geo: Dict[str, Dict[str, Any]]
 
 
 # ONE block per process: (key, LocationBlock). The lock guards only reading
 # and publishing the slot, never the build.
 _loc_block_lock = threading.Lock()
 _loc_block_cache: Optional[Tuple[tuple, LocationBlock]] = None
+# Entry-geometry cache per (storage dir, location id) -> (scene key, geo),
+# keyed on scene_recipe.scene_etag so unrelated world writes never recompose
+# unchanged buildings and never touch scene_recipe._scene_cache.
+_entry_geo_lock = threading.Lock()
+_entry_geo_cache: Dict[Tuple[str, str], Tuple[str, Dict[str, Any]]] = {}
 # Test hook (smoke race): runs after a build and before its publication.
 _before_publish: Optional[Callable[[], None]] = None
 
 
 def _build_location_block() -> LocationBlock:
     """Read every location and every painted area and build the block."""
-    from app.core.boundary_entry import opening_world_frames
+    from app.core.boundary_entry import (entry_geometry, fenced,
+                                         opening_world_frames)
+    from app.core.paths import get_storage_dir
     from app.core.world_geometry import effective_boundary, local_to_world
     from app.models.terrain import list_areas
 
     rows: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
     name_by_id: Dict[str, str] = {}
+    entry_geo: Dict[str, Dict[str, Any]] = {}
+    storage_key = str(get_storage_dir())
+    live_layout_lids: set = set()
     # Map extent in metres over ALL placed locations AND all painted terrain
     # areas — computed BEFORE the fog filter, so the map keeps its extent no
     # matter how much of it is still dark. A location with a drawn boundary
@@ -586,6 +594,29 @@ def _build_location_block() -> LocationBlock:
         # square is synthesized for a location that has none: it is then a
         # bare pin, and `boundary: null` is exactly that statement.
         _width = polygon_plan_width_m(_bd[3]) if _bd is not None else None
+        _has_layout = any(
+            isinstance(r, dict) and r.get("layout")
+            for r in (loc.get("rooms") or [])
+        )
+        if _has_layout:
+            live_layout_lids.add(lid)
+            try:
+                _etag = scene_recipe.scene_etag(loc, lid)
+                with _entry_geo_lock:
+                    _cached_geo = _entry_geo_cache.get((storage_key, lid))
+                if _cached_geo is not None and _cached_geo[0] == _etag:
+                    _geo = _cached_geo[1]
+                else:
+                    _scene, _scene_key = scene_recipe.compose_uncached(loc, lid)
+                    _geo = entry_geometry(loc, _scene)
+                    with _entry_geo_lock:
+                        _entry_geo_cache[(storage_key, lid)] = (_scene_key, _geo)
+            except Exception as e:
+                logger.debug("entry_geometry failed for %s: %s", lid, e)
+                _geo = {"doors": [], "rooms": [], "contour": []}
+        else:
+            _geo = {"doors": [], "rooms": [], "contour": []}
+        entry_geo[lid] = _geo
         entry = {
             "id": lid,
             "name": loc.get("name") or "",
@@ -594,14 +625,22 @@ def _build_location_block() -> LocationBlock:
             "yaw_deg": float(loc.get("yaw_deg") or 0.0),
             "plan_width_m": _width,
             "boundary": [[x, z] for x, z in _bd[3]] if _bd is not None else None,
-            # The authored pass-throughs, COMPUTED (§ A1.3, § B1 Nr. 13): edge
-            # index, world point, world inward normal and the room link. The
-            # geometry is not re-derived here — ``opening_world_frames`` is the
-            # very function the entry gate of ``POST /play/pos`` measures with,
-            # so the offer a client renders and the crossing the server accepts
-            # cannot drift. Empty list = this location has no authored way in,
-            # which IS the free-boundary statement (E4 task 5).
+            # Authored fence gates in world metres (edge, at_world, inward).
             "openings": opening_world_frames(loc),
+            "fenced": fenced(loc),
+            # Level-0 outside building doors in world metres.
+            "doors": [
+                {
+                    "x": d["at_world"][0],
+                    "z": d["at_world"][1],
+                    "out_x": d["outward"][0],
+                    "out_z": d["outward"][1],
+                    "width_m": d["width_m"],
+                    "room": d["room"],
+                    "level": d["level"],
+                }
+                for d in _geo["doors"]
+            ],
         }
         map3d = loc.get("map3d")
         if isinstance(map3d, dict) and map3d:
@@ -640,6 +679,12 @@ def _build_location_block() -> LocationBlock:
                                                    _lay_rooms)[:10]
         rows.append((loc, entry))
 
+    with _entry_geo_lock:
+        stale_keys = [k for k in _entry_geo_cache
+                      if k[0] == storage_key and k[1] not in live_layout_lids]
+        for k in stale_keys:
+            _entry_geo_cache.pop(k, None)
+
     # The painted map is part of the world frame too (E4 finding B7). Without
     # this a largely painted world with few placed locations gets cropped to
     # their box by everything that follows the frame (base plane, fog blanket,
@@ -662,7 +707,8 @@ def _build_location_block() -> LocationBlock:
     world_bounds = ({"min_x": round(_min_x, 2), "min_z": round(_min_z, 2),
                      "max_x": round(_max_x, 2), "max_z": round(_max_z, 2)}
                     if _min_x is not None else None)
-    return LocationBlock(tuple(rows), name_by_id, world_bounds, areas)
+    return LocationBlock(tuple(rows), name_by_id, world_bounds, areas,
+                         entry_geo)
 
 
 def _location_block_keyed() -> Tuple[tuple, LocationBlock]:
@@ -696,6 +742,16 @@ def _location_block_keyed() -> Tuple[tuple, LocationBlock]:
 def _location_block() -> LocationBlock:
     """The cached viewer-independent location block (see :class:`LocationBlock`)."""
     return _location_block_keyed()[1]
+
+
+def location_entry_geometry(location_id: str) -> Dict[str, Any]:
+    """Cached entry geometry (doors, level-0 rooms, contour) for ``location_id``."""
+    if not location_id:
+        return {"doors": [], "rooms": [], "contour": []}
+    geo = _location_block().entry_geo.get(location_id)
+    if geo is None:
+        return {"doors": [], "rooms": [], "contour": []}
+    return geo
 
 
 def build_worldmap_payload(avatar_name: Optional[str] = None,
@@ -1163,6 +1219,9 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             "text": ev.get("text") or "",
         })
 
+    from app.core.boundary_entry import (DOOR_ACROSS_M as _door_across_m,
+                                         DOOR_ALONG_PAD_M as _door_along_pad_m,
+                                         GATE_TOLERANCE_M as _gate_tolerance_m)
     backdrop = get_backdrop()
 
     payload = {
@@ -1232,6 +1291,11 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # thing the walker needs — the map itself.
         "max_step_height_m": get_max_step_height_m(),
         "max_slope_deg": get_max_slope_deg(),
+        "door_tolerance": {
+            "along_pad_m": _door_along_pad_m,
+            "across_m": _door_across_m,
+        },
+        "gate_tolerance_m": _gate_tolerance_m,
         # The FAR BACKDROP (§ A17), riding along for the same reasons as the
         # walk limits: it is a world setting, it reveals nothing about the
         # world (a silhouette at the horizon is visible from everywhere, so it
@@ -1587,9 +1651,6 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
                 "width_m": round(min(max(width_m, 0.5), max_width_m), 3),
                 "type": "passage",
             }
-            room = op.get("room")
-            if isinstance(room, str) and room.strip():
-                entry["room"] = room.strip()[:64]
             entries.append(entry)
         if entries:
             out["boundary_openings"] = entries

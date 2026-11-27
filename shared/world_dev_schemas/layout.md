@@ -56,6 +56,7 @@ Think in real rooms. The reference is a person **1.70 m** tall:
       "open": false,
       "surfaces": {"floor": "wood_planks", "wall": "plaster"},
       "openings": [
+        {"edge": 2, "at": 0.5, "width_m": 1.0, "height_m": 2.1, "type": "door", "to": "outside"},
         {"edge": 1, "at": 0.5, "width_m": 0.9, "height_m": 2.1, "type": "door", "to": "r9f8e7d6"},
         {"edge": 0, "at": 0.3, "width_m": 1.2, "height_m": 1.4, "sill_m": 0.9, "type": "window"}
       ]
@@ -73,9 +74,6 @@ Think in real rooms. The reference is a person **1.70 m** tall:
       "x": -6, "y": -4, "w": 5, "d": 6,
       "level": 1
     }
-  ],
-  "boundary_openings": [
-    {"edge": 0, "at": 0.5, "width_m": 3, "room": "r1a2b3c4"}
   ],
   "stairs": [
     {"at": [-5.4, -3.5], "from_level": 0, "dir_deg": 0}
@@ -125,15 +123,13 @@ One entry per hole in a wall of THIS room:
 room's wall is a door into a solid wall. Put the opening on the wall the two rooms actually share,
 and give its `at` a position that lies inside the shared stretch.
 
-### `boundary_openings` — how one gets onto the plot
+### `boundary_openings` — gates in a fenced plot
 
-Pass-throughs in the **plot outline**, not in a room wall: the gate in the fence, the mouth of the
-street, the gap in the hedge. One entry per crossing (a road crossing the plot east–west is two).
+Use ONLY for a **fenced** plot (a gate in a fence, a gap in a hedge, a street mouth through a wall): once a location has `boundary_openings`, characters can enter and leave the plot only through them. Omit `boundary_openings` for an open plot boundary. Buildings get NO `boundary_openings` — they are entered through outside doors (`to: "outside"` on a level-0 room wall). One entry per gate (a road crossing a fenced plot east–west is two):
 
 - `edge` — a 0-based index into the plot outline listed under **The location** (edge `i` runs from
   point `i` to point `i+1`). An index the outline does not have is dropped.
 - `at` — `0`…`1` along that edge. `width_m` — metres, at most the plot's own width.
-- `room` — optional: which room one arrives in.
 
 ### `stairs` — how one gets from storey to storey
 
@@ -165,8 +161,8 @@ level 0. At most 8 flights per location.
 
 ### `entry_room`
 
-The one room characters enter and leave the location through. Name an existing room `id`, or the
-`name` of a room you are creating in this same plan. Pick the room that actually touches the
+The arrival room for travel, teleport and scheduler. Name an existing room `id`, or the
+`name` of a room you are creating in this same plan. Pick a room that actually touches the
 outside — a hallway, a taproom, a yard — never an inner chamber.
 
 ## Rules

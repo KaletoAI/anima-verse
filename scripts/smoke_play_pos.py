@@ -58,49 +58,63 @@ cases:
 
   * same location, or wilderness → wilderness: accepted, nothing but the
     point is written;
-  * ENTRY (derived, different, non-empty): across an authored boundary
-    opening — the point must lie within 1.5 m of one of the target's opening
-    world points (§ A1.1) — and only when ``accessible_when`` and
-    ``check_access`` pass. A target with NO authored opening at all has a
-    FREE boundary (case [15]): it never said where its way in is, so the
-    geometric half of the gate has nothing to check and only the rule gates
-    remain. The arrival semantics are the ones every other arrival path uses:
-    the location is set through ``save_character_current_location`` (which
-    discovers the place), and the room is the opening's linked room;
+  * ENTRY (derived, different, non-empty): ``boundary_entry.may_enter``
+    judges the point against ``world_ops.location_entry_geometry``. A FENCED
+    plot (non-empty ``boundary_openings``) requires crossing within
+    ``GATE_TOLERANCE_M`` (1.5 m) of a gate (else 403 ``no_opening``). The
+    entered room comes from ``room_at_point`` (level-0 room outline, else
+    ``__floor__0`` inside the building contour, else ``__ground__``); if that
+    room is walled, the point must satisfy ``at_door`` for one of its level-0
+    outside doors (|along| ≤ width/2 + 0.3 m, |across| ≤ 1.5 m, else 403
+    ``no_door``). Then ``accessible_when`` and ``check_access`` run. The
+    location is written through ``save_character_current_location`` (which
+    discovers the place) and the derived room replaces the arrival-room
+    default;
   * EXIT (current non-empty → empty or another): ``boundary_entry.may_leave``
-    with the room the avatar stands in — across a near opening from the room
-    it links to, from the entry room over any edge, or freely when the
-    location declares no entry room at all — AND ``rules.check_leave``, the
-    rule half every other movement path asks before it moves anybody;
-  * location → location (adjacent footprints): EXIT check, then ENTRY check.
+    with the room the avatar stands in — a fenced plot requires a gate, and
+    leaving a walled room requires one of its level-0 outside doors (except
+    under the no-trap rule: an unfenced location with zero level-0 outside
+    doors lets one leave from any room; ``entry_room`` is never an exit rule)
+    — AND ``rules.check_leave``, the rule half every other movement path asks
+    before it moves anybody;
+  * location → location (adjacent or nested footprints): EXIT check, then
+    ENTRY check.
 
 THE WORLD used below (all grass unless painted):
 
-    HALL    (50, 50)   w 10, yaw 0, opening N at 0.5 → (50, 45),
-                       rooms foyer + hall, entry_room "hall",
-                       the opening links to "foyer"
-    LOCKED  (150, 50)  w 10, opening N at 0.5 → (150, 45),
+    HALL    (50, 50)   w 10, yaw 0, gate edge 0 at 0.5 → (50, 45) (fenced),
+                       rooms ground + foyer + hall (no layouts), entry_room "hall"
+    LOCKED  (150, 50)  w 10, gate edge 0 at 0.5 → (150, 45),
                        accessible_when ["has_item:silver_key"]
-    GATE    (250, 50)  w 10, opening N at 0.5 → (250, 45),
+    GATE    (250, 50)  w 10, gate edge 0 at 0.5 → (250, 45),
                        behind a block rule (action "enter")
-    OPEN    (350, 50)  w 10, opening N at 0.5 → (350, 45), NO entry_room
-    SQUARE  (0, 200)   w 40, NO openings at all, no entry_room
-    HUT     (0, 200)   w 8, INSIDE the square, opening edge 2 (south) at
-                       0.5 → (0, 204),
-                       rooms foyer + hall, entry_room "hall", link "foyer"
-    BLUFF   (600, 50)  w 10, opening edge 0 (north) at 0.5 → (600, 45), ON
+    OPEN    (350, 50)  w 10, gate edge 0 at 0.5 → (350, 45) (fenced), NO entry_room
+    SQUARE  (0, 200)   w 40, NO gates at all (unfenced), no entry_room
+    HUT     (0, 200)   w 8, INSIDE the square, gate edge 2 (south) at
+                       0.5 → (0, 204) (fenced), rooms ground + foyer + hall
+    BLUFF   (600, 50)  w 10, gate edge 0 (north) at 0.5 → (600, 45), ON
                        PAINTED ROCK
                        (rock x ∈ [596, 604], z ∈ [46, 54] — strictly inside
                        the footprint, so the approach outside stays grass)
+    BLDG_B  (100, 100) yaw 0, boundary ±5 × ±3 (x 95..105, z 97..103), NO gates,
+                       entry_room "hall":
+                       - room "hall": local x -5..1, z -3..3, walled, south
+                         outside door (edge "S", at 0.5, w 1.2) → local (-2, 3)
+                         → world (98, 103), outward (0, 1), along-limit 0.6 + 0.3 = 0.9 m
+                       - room "kitchen": local x 1..5, z -3..3, walled, east
+                         outside door (edge "E", at 0.5, w 0.9) → local (5, 0)
+                         → world (105, 100), outward (1, 0), along-limit 0.45 + 0.3 = 0.75 m
+    PLOT_F  (300, 100) boundary ±20, gate edge 0 at 0.5 → (300, 80) (fenced)
+    PLOT_Q  (500, 100) boundary ±20, NO gates (unfenced), walled room "shop"
+                       at local ±5, entry_room "shop"
     a deep-water rectangle x ∈ [-10, 10], z ∈ [6, 26]
     a rock rectangle  x ∈ [640, 650], z ∈ [40, 50] (wilderness, case [20])
 
-HAND-DERIVED EXPECTATIONS (the opening points first, since every entry case
+HAND-DERIVED EXPECTATIONS (the gate points first, since every fenced-plot case
 rests on them — ``opening_world_points`` puts the point on the boundary EDGE
-the opening names (v6 Nr. 5) and maps local → world through the pin; without a
-drawn boundary the effective one is the square, whose edge 0 is the north side
-(z = −w/2) and edge 2 the south. At yaw 0 the map is the identity, so HALL's
-edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
+the gate names (v6 Nr. 5) and maps local → world through the pin; on a square
+edge 0 is the north side (z = −w/2) and edge 2 the south. At yaw 0 the map is
+the identity, so HALL's edge-0 gate at 0.5 sits at (50, 50 − 5) = (50, 45)):
 
   [1] wilderness → wilderness is free: (0, 0) → (0, 3) is accepted with
       ``location_id: ""`` and ``room_id: ""``.
@@ -121,39 +135,40 @@ edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
       (0, 3) → (3, 5) is √(3² + 2²) = 3.606 m ≤ 5 → accepted;
       (3, 5) → (500, 0) is ≈ 497 m > 5 → 409 ``too_far`` + (3, 5) back.
 
-  [4] ENTRY through the opening. Standing at (50, 43.5) (wilderness, north of
+  [4] ENTRY through the gate. Standing at (50, 43.5) (wilderness, north of
       HALL), the reported point (50, 46.4) is inside the footprint
-      (x ∈ [45, 55], z ∈ [45, 55]) and |46.4 − 45| = 1.4 m from the opening
-      (50, 45) → accepted. The room is the OPENING's link "foyer", NOT the
-      entry room "hall" (an opening that names a room answers the question by
-      itself), and HALL joins ``known_locations`` — arrival discovers.
+      (x ∈ [45, 55], z ∈ [45, 55]) and |46.4 − 45| = 1.4 m ≤ 1.5 m from the
+      gate (50, 45) → accepted. HALL has no room layouts, so ``room_at_point``
+      returns ``__ground__`` (NOT ``entry_room`` "hall"), and HALL joins
+      ``known_locations`` — arrival discovers.
 
   [5] The same step 20 cm further in is refused: (50, 46.6) is 1.6 m > 1.5 m
-      from the opening → 403 ``no_opening`` + the last valid point.
+      from the gate → 403 ``no_opening`` + the last valid point.
 
   [6] ``accessible_when`` is a WALL, not a hint (backend-status-3d.md,
-      bdd8598): the entry at (150, 46.4) — 1.4 m from LOCKED's opening — is
+      bdd8598): the entry at (150, 46.4) — 1.4 m from LOCKED's gate — is
       refused with 403 ``not_accessible`` without the silver key and accepted
       with it in the inventory.
 
   [7] A block rule (action "enter") on GATE refuses the entry at
       (250, 46.4) with 403 ``block_enter`` and the RULE's own sentence.
 
-  [8] LEAVING is ``may_leave``. Standing in HALL's room "foyer" at (50, 52),
-      the reported point (50, 56) leaves over the south edge — 11 m from the
-      only opening, so no opening backs it, and "foyer" is not the entry room
-      "hall" → 403 ``leave_blocked``.
+  [8] LEAVING is ``may_leave``. Standing in fenced HALL's room "foyer" at
+      (50, 52), the reported point (50, 56) leaves over the south edge — 11 m
+      from the only gate → 403 ``leave_blocked``.
 
-  [9] From the same room ACROSS THE OPENING it works: standing at (50, 46),
-      the point (50, 44) is 1 m from the opening (50, 45), whose link
-      ("foyer") is the room the avatar is in → accepted, and the avatar
-      stands in the wilderness afterwards (location and room both empty).
+  [9] From the ground ACROSS THE GATE it works: standing on ``__ground__`` at
+      (50, 46), the point (50, 44) is 1 m ≤ 1.5 m from the gate (50, 45) →
+      accepted, and the avatar stands in the wilderness afterwards (location
+      and room both empty).
 
-  [10] From the ENTRY ROOM every edge is a way out: standing in "hall" at
-      (50, 52), the same southern point (50, 56) is accepted.
+  [10] ``entry_room`` is no longer an exit rule: standing in "hall" at
+      (50, 52) in fenced HALL, the southern point (50, 56) is 11 m from the
+      gate → 403 ``leave_blocked``.
 
-  [11] A location without an entry room lets go anywhere: standing on OPEN's
-      ground at (350, 52), (350, 56) is accepted.
+  [11] Fenced OPEN (gate at (350, 45), no ``entry_room``): standing on OPEN's
+      ground at (350, 52), (350, 56) is 11 m from the gate → 403
+      ``leave_blocked``.
 
   [12] A running journey dies with the first accepted report: after
       ``POST /play/travel`` the profile holds a journey and a movement
@@ -172,28 +187,27 @@ edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
   [14] A party follower is refused with 403 ``party_follower``; a non-finite
       coordinate is a 400.
 
-  [15] A location with NO authored opening has a FREE boundary (decision of
-      the E4 task 5 review): it never said where its way in is, which is the
-      mirror of ``may_leave``'s "no entry room = leave anywhere". SQUARE
-      spans x, z ∈ [−20, 20] around (0, 200), so (0, 185) is inside it and
-      15 m from every corner — accepted, and the room is the ordinary
-      arrival rule's answer (no entry room → the ground). The rule gates are
-      untouched by the exemption: the place is still discovered on arrival.
+  [15] An UNFENCED location (no ``boundary_openings``) has a freely walkable
+      boundary: SQUARE spans x, z ∈ [−20, 20] around (0, 200), so (0, 185) is
+      inside it and 15 m from every corner → accepted, room ``__ground__``.
+      The rule gates still run and the place is discovered on arrival.
 
-  [16] Nested footprints. HUT (8 m) sits inside SQUARE (40 m) on the same
-      centre, so HUT covers z ∈ [196, 204] and ``location_at_point`` gives
-      the SMALLEST match: (0, 200) is the hut, (0, 205.2) is the square.
-      Walking out of the hut is therefore an EXIT and an ENTRY in ONE report
-      — |205.2 − 204| = 1.2 m ≤ 1.5 from the hut's S opening whose link
-      "foyer" is the room the avatar stands in, and the square is openingless
-      → free. The way BACK is not free: the hut HAS an opening, so (0, 203)
-      (1 m from it) is let in and (0, 197) (7 m from it) is refused.
+  [16] Nested footprints. HUT (8 m, fenced, south gate at (0, 204)) sits
+      inside SQUARE (40 m, unfenced) on the same centre, so HUT covers
+      z ∈ [196, 204] and ``location_at_point`` gives the SMALLEST match:
+      (0, 200) is the hut, (0, 205.2) is the square. Walking out of the hut
+      from ``__ground__`` is an EXIT plus ENTRY in ONE report —
+      |205.2 − 204| = 1.2 m ≤ 1.5 m from HUT's gate, and SQUARE is unfenced
+      → accepted into SQUARE (``__ground__``). The way BACK requires HUT's
+      gate: (0, 203) (1 m from (0, 204)) is let in (room ``__ground__``) and
+      (0, 197) (7 m from (0, 204)) is refused with 403 ``no_opening``.
 
   [17] ``rules.check_leave`` is a gate here too. The geometry of case [9]
-      verbatim, but with a block rule ``action="leave"`` on HALL: 403
-      ``block_leave`` with the rule's own sentence. Every other movement path
-      asks that rule (travel route, ticker, SetLocation skill, scheduler);
-      walking out must not be the one hole in it.
+      verbatim (from ``__ground__`` across HALL's gate), but with a block rule
+      ``action="leave"`` on HALL: 403 ``block_leave`` with the rule's own
+      sentence. Every other movement path asks that rule (travel route,
+      ticker, SetLocation skill, scheduler); walking out must not be the one
+      hole in it.
 
   [18] Walking WAKES a sleeping avatar — the same rule ``/play/enter-room``
       and ``/play/travel`` apply. A REFUSED report wakes nobody: it moved
@@ -217,9 +231,9 @@ edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
         a) the ROCK IS REALLY THERE: ``passability_at(600, 46.4)`` is False
            and ``kind_at`` says "rock" — without this line the case could
            pass on a world where nothing was painted at all;
-        b) entering at (600, 46.4) — 1.4 m ≤ 1.5 from the opening (600, 45),
-           and on that very rock — is ACCEPTED, room "foyer"; walking on
-           within the place to (600, 48) (1.6 m, deeper into the rock) is
+        b) entering at (600, 46.4) — 1.4 m ≤ 1.5 from the gate (600, 45),
+           and on that very rock — is ACCEPTED, room ``__ground__``; walking
+           on within the place to (600, 48) (1.6 m, deeper into the rock) is
            accepted too: the ground inside is nobody's gate;
         c) DELETE the location and report the identical point from the
            identical parking spot: now it is wilderness rock and comes back
@@ -370,6 +384,37 @@ edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
            corner at i = 4 is null -> 0.90) 0.9 m away, dh = 0.90 > 0.4 ->
            409 `too_steep` with the STEP sentence.
 
+  [B] Building outside doors on Fixture B at (100, 100), yaw 0, unfenced:
+      hall south door (98, 103), outward (0, 1), w 1.2 (|along| ≤ 0.9, |across| ≤ 1.5);
+      kitchen east door (105, 100), outward (1, 0), w 0.9 (|along| ≤ 0.75, |across| ≤ 1.5).
+        [B1] (98, 104.2) → (98, 102.6): along 0.0 ≤ 0.9, across -0.4 (|0.4| ≤ 1.5)
+             → accepted, room "hall".
+        [B2] (99.2, 104.2) → (99.2, 102.6): along 1.2 > 0.9, across -0.4
+             → 403 ``no_door``.
+        [B3] (106.2, 100) → (104.6, 100): along 0.0 ≤ 0.75, across -0.4 (|0.4| ≤ 1.5)
+             → accepted, room "kitchen".
+        [B4] in "kitchen" (104.6, 100) → (105.8, 100): along 0.0 ≤ 0.75, across 0.8 ≤ 1.5
+             → accepted (wilderness).
+        [B5] in "kitchen" (104.6, 102) → (105.6, 102.4): along 2.4 > 0.75, across 0.6
+             → 403 ``leave_blocked``.
+        [B6] in "hall" (101.0, 102.0) → (101.0, 104.0): along 3.0 > 0.9, across 1.0
+             → 403 ``leave_blocked``.
+
+  [F] Fenced plot Fixture F at (300, 100), boundary ±20, gate at (300, 80):
+      enter (300, 81.4) (dist 1.4 ≤ 1.5) → accepted, room ``__ground__``;
+      enter (310, 81) (dist 10.05 > 1.5) → 403 ``no_opening``;
+      leave from ``__ground__`` to (310, 79) (dist 10.05 > 1.5) → 403 ``leave_blocked``;
+      leave from ``__ground__`` to (300, 79) (dist 1.0 ≤ 1.5) → accepted.
+
+  [Q] Unfenced plot Fixture Q at (500, 100), boundary ±20, walled "shop" at
+      local ±5, ``entry_room`` "shop":
+      enter (500, 81) (outside "shop") → accepted, room ``__ground__`` (NOT "shop");
+      leave from ``__ground__`` to (500, 79) → accepted.
+
+  [ER] ``POST /play/enter-room`` for a room outside the current location while
+      standing in the wilderness (location "") → 409
+      ``{"reason": "not_in_location", "location_id": ""}``.
+
 NOTE ON THE PARKING HELPER. ``park()`` writes the avatar's point directly
 (``set_character_pos``) and forgets the report clock — it is WORLD SETUP, not
 a call of the route: walking the 45 m up to HALL through the route would be a
@@ -420,7 +465,7 @@ from app.models.world import (  # noqa: E402
     GROUND_ROOM_ID, _load_world_data, _save_world_data, add_location,
     delete_location, update_location_position)
 from app.routes import play as play_route  # noqa: E402
-from app.routes.play import play_pos, play_travel  # noqa: E402
+from app.routes.play import play_enter_room, play_pos, play_travel  # noqa: E402
 
 FAILURES = []
 CHECKED = 0
@@ -492,24 +537,23 @@ def set_map3d(location_id: str, **fields) -> None:
     _save_world_data(data)
 
 
-def place(name: str, x: float, z: float, *, room: str = "",
+def place(name: str, x: float, z: float, *,
           entry_room: str = "", width: float = 10.0, edge: int = 0,
           openings: bool = True) -> str:
-    """A location at (x, z) with ONE authored opening (default: edge 0, the
-    NORTH side of the square boundary — contract v6 Nr. 5 numbers the edges
-    clockwise from the north-west corner).
+    """A location at (x, z) with ONE authored fence gate (default: edge 0, the
+    NORTH side of the square boundary).
 
-    ``openings=False`` draws none at all — the FREE-BOUNDARY case: a place
-    that never said where its way in is (a painted square, a meadow).
+    ``openings=False`` draws none at all — an unfenced plot.
     """
     loc_id = add_location(name=name, description="play/pos smoke")["id"]
     update_location_position(loc_id, x, z)
     set_map3d(loc_id, plan_width_m=width,
               boundary_openings=[{"edge": edge, "at": 0.5, "width_m": 4.0,
-                                  "type": "passage", "room": room}]
+                                  "type": "passage"}]
               if openings else [])
     patch_location(loc_id,
-                   rooms=[{"id": "foyer", "name": "Foyer"},
+                   rooms=[{"id": GROUND_ROOM_ID, "name": "Ground"},
+                          {"id": "foyer", "name": "Foyer"},
                           {"id": "hall", "name": "Hall"}],
                    entry_room=entry_room)
     return loc_id
@@ -557,19 +601,80 @@ def refusal_of(res):
 set_game_factor(0.0)
 set_game_time(START_GT)
 
-HALL = place("Smoke Hall", 50.0, 50.0, room="foyer", entry_room="hall")
-LOCKED = place("Smoke Vault", 150.0, 50.0, room="foyer", entry_room="hall")
-GATE = place("Smoke Gate", 250.0, 50.0, room="foyer", entry_room="hall")
+HALL = place("Smoke Hall", 50.0, 50.0, entry_room="hall")
+LOCKED = place("Smoke Vault", 150.0, 50.0, entry_room="hall")
+GATE = place("Smoke Gate", 250.0, 50.0, entry_room="hall")
 OPEN = place("Smoke Clearing", 350.0, 50.0)
 # The nested pair: a 40 m square WITHOUT openings (x, z ∈ [-20, 20] + 200) and
-# an 8 m hut in its middle (z ∈ [196, 204]) whose S opening sits at (0, 204).
+# an 8 m hut in its middle (z ∈ [196, 204]) whose S gate sits at (0, 204).
 SQUARE = place("Smoke Square", 0.0, 200.0, width=40.0, openings=False)
-HUT = place("Smoke Hut", 0.0, 200.0, width=8.0, edge=2, room="foyer",
-            entry_room="hall")
-BLUFF = place("Smoke Bluff", 600.0, 50.0, room="foyer", entry_room="hall")
+HUT = place("Smoke Hut", 0.0, 200.0, width=8.0, edge=2, entry_room="hall")
+BLUFF = place("Smoke Bluff", 600.0, 50.0, entry_room="hall")
 # Case [23]: the baked-surface yard — 40 m without openings (x, z ∈ [980,
 # 1020] around (1000, 1000)), far from every other fixture, on flat ground.
 YARD = place("Smoke Yard", 1000.0, 1000.0, width=40.0, openings=False)
+
+# Fixture B: unfenced building at (100, 100), boundary +-5 x +-3 (x 95..105, z 97..103),
+# hall south door (98, 103) out (0, 1) w 1.2, kitchen east door (105, 100) out (1, 0) w 0.9.
+BLDG_B = add_location(name="Fixture B", description="building doors smoke")["id"]
+update_location_position(BLDG_B, 100.0, 100.0, 0.0)
+set_map3d(BLDG_B,
+          boundary=[[-5.0, -3.0], [5.0, -3.0], [5.0, 3.0], [-5.0, 3.0]],
+          plan_width_m=10.0)
+patch_location(
+    BLDG_B,
+    entry_room="hall",
+    rooms=[
+        {"id": GROUND_ROOM_ID, "name": "Ground"},
+        {
+            "id": "hall", "name": "Hall",
+            "layout": {
+                "x": -5.0, "y": -3.0, "w": 6.0, "d": 6.0, "level": 0,
+                "openings": [
+                    {"edge": "S", "at": 0.5, "width_m": 1.2,
+                     "type": "door", "to": "outside"},
+                ],
+            },
+        },
+        {
+            "id": "kitchen", "name": "Kitchen",
+            "layout": {
+                "x": 1.0, "y": -3.0, "w": 4.0, "d": 6.0, "level": 0,
+                "openings": [
+                    {"edge": "E", "at": 0.5, "width_m": 0.9,
+                     "type": "door", "to": "outside"},
+                ],
+            },
+        },
+    ],
+)
+
+# Fixture F: fenced plot at (300, 100), boundary +-20, gate edge 0 at 0.5 -> (300, 80).
+PLOT_F = add_location(name="Fixture F", description="fenced plot smoke")["id"]
+update_location_position(PLOT_F, 300.0, 100.0, 0.0)
+set_map3d(PLOT_F,
+          boundary=[[-20.0, -20.0], [20.0, -20.0], [20.0, 20.0], [-20.0, 20.0]],
+          plan_width_m=40.0,
+          boundary_openings=[{"edge": 0, "at": 0.5, "width_m": 3.0, "type": "passage"}])
+
+# Fixture Q: unfenced plot at (500, 100), boundary +-20, walled room "shop" at local +-5,
+# entry_room "shop".
+PLOT_Q = add_location(name="Fixture Q", description="unfenced yard + walled room")["id"]
+update_location_position(PLOT_Q, 500.0, 100.0, 0.0)
+set_map3d(PLOT_Q,
+          boundary=[[-20.0, -20.0], [20.0, -20.0], [20.0, 20.0], [-20.0, 20.0]],
+          plan_width_m=40.0)
+patch_location(
+    PLOT_Q,
+    entry_room="shop",
+    rooms=[
+        {"id": GROUND_ROOM_ID, "name": "Ground"},
+        {
+            "id": "shop", "name": "Shop",
+            "layout": {"x": -5.0, "y": -5.0, "w": 10.0, "d": 10.0, "level": 0},
+        },
+    ],
+)
 patch_location(LOCKED, accessible_when=["has_item:silver_key"])
 add_item(name="Silver Key", description="opens the vault", item_id="silver_key")
 terrain.save_area({"kind": "deep_water",
@@ -653,18 +758,18 @@ def main() -> int:
     check("the avatar did not move", get_character_pos(AVATAR),
           {"x": 3.0, "z": 5.0})
 
-    print("\n[4] ENTRY across the authored opening (1.4 m from (50, 45))")
+    print("\n[4] ENTRY across the authored gate (1.4 m from (50, 45))")
     park(50.0, 43.5)
     status, payload = report(50.0, 46.4)
     check("the call succeeded", status, "ok")
     check("accepted", (payload or {}).get("ok"), True)
     check("the derived location", (payload or {}).get("location_id"), HALL)
-    check("the room is the OPENING's link, not the entry room",
-          (payload or {}).get("room_id"), "foyer")
+    check("the room is the room at the point (ground, no room layouts)",
+          (payload or {}).get("room_id"), GROUND_ROOM_ID)
     check("the profile agrees on the location",
           get_character_current_location(AVATAR), HALL)
     check("the profile agrees on the room",
-          get_character_current_room(AVATAR), "foyer")
+          get_character_current_room(AVATAR), GROUND_ROOM_ID)
     check("arriving discovered the place",
           HALL in get_known_locations(AVATAR), True)
 
@@ -724,8 +829,8 @@ def main() -> int:
     check("the avatar is still inside",
           get_character_current_location(AVATAR), HALL)
 
-    print("\n[9] …but across the opening, from the room it links to, it works")
-    park(50.0, 46.0, room="foyer")
+    print("\n[9] …but across the gate, from the ground, it works")
+    park(50.0, 46.0, room=GROUND_ROOM_ID)
     status, payload = report(50.0, 44.0)
     check("the call succeeded", status, "ok")
     check("accepted", (payload or {}).get("ok"), True)
@@ -733,19 +838,23 @@ def main() -> int:
     check("and roomless with it", (payload or {}).get("room_id"), "")
     check("the profile agrees", get_character_current_location(AVATAR), "")
 
-    print("\n[10] from the entry room every edge is a way out")
+    print("\n[10] fenced HALL: entry_room is no longer an exit rule (refused)")
     park(50.0, 52.0, room="hall")
-    status, payload = report(50.0, 56.0)
-    check("the call succeeded", status, "ok")
-    check("out in the wilderness", (payload or {}).get("location_id"), "")
+    res = report(50.0, 56.0)
+    status, reason, _pos, _loc, _msg = refusal_of(res)
+    check("refused", res[0], "refused")
+    check("the status", status, 403)
+    check("the reason", reason, "leave_blocked")
 
-    print("\n[11] a location without an entry room lets go anywhere")
-    park(350.0, 52.0)
+    print("\n[11] fenced OPEN: leaving away from its gate is refused")
+    park(350.0, 52.0, room=GROUND_ROOM_ID)
     check("the setup put the avatar in OPEN",
           get_character_current_location(AVATAR), OPEN)
-    status, payload = report(350.0, 56.0)
-    check("the call succeeded", status, "ok")
-    check("out in the wilderness", (payload or {}).get("location_id"), "")
+    res = report(350.0, 56.0)
+    status, reason, _pos, _loc, _msg = refusal_of(res)
+    check("refused", res[0], "refused")
+    check("the status", status, 403)
+    check("the reason", reason, "leave_blocked")
 
     print("\n[12] the first accepted report cancels a running journey")
     park(50.0, 43.5)
@@ -830,7 +939,7 @@ def main() -> int:
     #   exit  — |205.2 - 204| = 1.2 m <= 1.5 from the S opening, whose link
     #           "foyer" is the room the avatar stands in -> may_leave
     #   enter — SQUARE has no openings -> free boundary
-    park(0.0, 200.0, room="foyer")
+    park(0.0, 200.0, room=GROUND_ROOM_ID)
     check("the setup put the avatar in the hut",
           get_character_current_location(AVATAR), HUT)
     status, payload = report(0.0, 205.2)
@@ -838,15 +947,14 @@ def main() -> int:
     check("one report, two gates: it lands in the square",
           (payload or {}).get("location_id"), SQUARE)
     check("...on its ground", (payload or {}).get("room_id"), GROUND_ROOM_ID)
-    # And the way back in: the hut HAS an opening, so only that one lets in.
+    # And the way back in: the hut HAS a gate, so only that one lets in.
     status, payload = report(0.0, 203.0)     # 1 m inside, 1 m from (0, 204)
-    check("back in through the hut's own opening", status, "ok")
+    check("back in through the hut's own gate", status, "ok")
     check("the derived location", (payload or {}).get("location_id"), HUT)
-    check("the room is the opening's link", (payload or {}).get("room_id"),
-          "foyer")
-    park(0.0, 200.0, room="foyer")
+    check("the room is ground", (payload or {}).get("room_id"), GROUND_ROOM_ID)
+    park(0.0, 200.0, room=GROUND_ROOM_ID)
     status, _payload = report(3.0, 197.0)    # still inside the hut
-    check("moving WITHIN the hut needs no opening at all", status, "ok")
+    check("moving WITHIN the hut needs no gate at all", status, "ok")
     park(0.0, 210.0)                         # in the square, north of the hut
     res = report(0.0, 197.0)                 # into the hut, 7 m from (0, 204)
     status, reason, _pos, _loc, _msg = refusal_of(res)
@@ -854,15 +962,13 @@ def main() -> int:
     check("the reason", reason, "no_opening")
 
     print("\n[17] a leave RULE bars the way out, not just the geometry")
-    # The geometry of case [9] verbatim — out of HALL across its own opening,
-    # from the room it links to — but with a block rule on leaving. Every
-    # other movement path asks check_leave (travel, ticker, skill, scheduler);
-    # walking out must not be the one hole in it.
+    # The geometry of case [9] verbatim — out of HALL across its own gate,
+    # from the ground — but with a block rule on leaving.
     rule = add_rule({"type": "block", "action": "leave", "name": "Pinned",
                      "condition": "always",
                      "message": "You promised to wait here.",
                      "target": {"scope": "location", "location_id": HALL}})
-    park(50.0, 46.0, room="foyer")
+    park(50.0, 46.0, room=GROUND_ROOM_ID)
     res = report(50.0, 44.0)
     status, reason, pos, loc_id, message = refusal_of(res)
     check("refused", res[0], "refused")
@@ -872,7 +978,7 @@ def main() -> int:
     check("the avatar is still inside",
           get_character_current_location(AVATAR), HALL)
     delete_rule(rule.get("id") if isinstance(rule, dict) else rule)
-    park(50.0, 46.0, room="foyer")
+    park(50.0, 46.0, room=GROUND_ROOM_ID)
     status, _payload = report(50.0, 44.0)
     check("without the rule the very same step works again", status, "ok")
 
@@ -919,8 +1025,7 @@ def main() -> int:
     status, payload = report(600.0, 46.4)
     check("the call succeeded", status, "ok")
     check("the derived location", (payload or {}).get("location_id"), BLUFF)
-    check("the room is the opening's link", (payload or {}).get("room_id"),
-          "foyer")
+    check("the room is ground", (payload or {}).get("room_id"), GROUND_ROOM_ID)
     status, payload = report(600.0, 48.0)      # 1.6 m deeper into the rock
     check("walking on inside the place is free too", status, "ok")
     check("...and it stays the same location",
@@ -1262,6 +1367,101 @@ def main() -> int:
     finally:
         model_surface._scene_specs = real_placed
         model_surface.forget_surfaces()
+
+    print("\n[B] building outside doors — Fixture B (100, 100), hall + kitchen")
+    from app.core.world_ops import location_entry_geometry
+    b_doors = {d["room"]: d for d in location_entry_geometry(BLDG_B)["doors"]}
+    check("Fixture B hall door world pos", b_doors["hall"]["at_world"], [98.0, 103.0])
+    check("Fixture B hall door outward", b_doors["hall"]["outward"], [0.0, 1.0])
+    check("Fixture B kitchen door world pos", b_doors["kitchen"]["at_world"], [105.0, 100.0])
+    check("Fixture B kitchen door outward", b_doors["kitchen"]["outward"], [1.0, 0.0])
+
+    # [B1] from (98, 104.2) to (98, 102.6): across 0.4, along 0 -> accepted, room "hall"
+    park(98.0, 104.2)
+    status, payload = report(98.0, 102.6)
+    check("[B1] enter hall at door accepted", status, "ok")
+    check("[B1] room is hall", (payload or {}).get("room_id"), "hall")
+    check("[B1] profile room is hall", get_character_current_room(AVATAR), "hall")
+
+    # [B2] to (99.2, 102.6): along 1.2 > 0.6 + 0.3 -> 403 no_door
+    park(99.2, 104.2)
+    res = report(99.2, 102.6)
+    status, reason, _pos, _loc, _msg = refusal_of(res)
+    check("[B2] enter hall beside door refused", res[0], "refused")
+    check("[B2] status 403", status, 403)
+    check("[B2] reason no_door", reason, "no_door")
+
+    # [B3] from (106.2, 100) to (104.6, 100) -> accepted, room "kitchen"
+    park(106.2, 100.0)
+    status, payload = report(104.6, 100.0)
+    check("[B3] enter kitchen at door accepted", status, "ok")
+    check("[B3] room is kitchen", (payload or {}).get("room_id"), "kitchen")
+
+    # [B4] in kitchen at (104.6, 100) to (105.8, 100): across 0.8 -> accepted
+    park(104.6, 100.0, room="kitchen")
+    status, payload = report(105.8, 100.0)
+    check("[B4] leave kitchen at door accepted", status, "ok")
+    check("[B4] out in wilderness", (payload or {}).get("location_id"), "")
+
+    # [B5] in kitchen at (104.6, 102) to (105.6, 102.4): along 2.4 > 0.75 -> 403 leave_blocked
+    park(104.6, 102.0, room="kitchen")
+    res = report(105.6, 102.4)
+    status, reason, _pos, _loc, _msg = refusal_of(res)
+    check("[B5] leave kitchen beside door refused", res[0], "refused")
+    check("[B5] status 403", status, 403)
+    check("[B5] reason leave_blocked", reason, "leave_blocked")
+
+    # [B6] in "hall" to (101.0, 104.0): along 3.0 > 0.9 to hall door -> 403 leave_blocked
+    park(101.0, 102.0, room="hall")
+    res = report(101.0, 104.0)
+    status, reason, _pos, _loc, _msg = refusal_of(res)
+    check("[B6] leave hall beside door refused", res[0], "refused")
+    check("[B6] status 403", status, 403)
+    check("[B6] reason leave_blocked", reason, "leave_blocked")
+
+    print("\n[F] fenced plot — Fixture F (300, 100), gate at (300, 80)")
+    park(300.0, 78.5)
+    status, payload = report(300.0, 81.4)
+    check("[F] enter at gate accepted", status, "ok")
+    check("[F] room is __ground__", (payload or {}).get("room_id"), GROUND_ROOM_ID)
+    park(310.0, 78.5)
+    res = report(310.0, 81.0)
+    status, reason, _pos, _loc, _msg = refusal_of(res)
+    check("[F] enter beside gate refused", res[0], "refused")
+    check("[F] status 403", status, 403)
+    check("[F] reason no_opening", reason, "no_opening")
+    park(310.0, 81.0, room=GROUND_ROOM_ID)
+    res = report(310.0, 79.0)
+    status, reason, _pos, _loc, _msg = refusal_of(res)
+    check("[F] leave beside gate refused", res[0], "refused")
+    check("[F] status 403", status, 403)
+    check("[F] reason leave_blocked", reason, "leave_blocked")
+    park(300.0, 81.0, room=GROUND_ROOM_ID)
+    status, payload = report(300.0, 79.0)
+    check("[F] leave at gate accepted", status, "ok")
+    check("[F] out in wilderness", (payload or {}).get("location_id"), "")
+
+    print("\n[Q] unfenced plot with walled room — Fixture Q (500, 100)")
+    park(500.0, 78.5)
+    status, payload = report(500.0, 81.0)
+    check("[Q] enter yard accepted", status, "ok")
+    check("[Q] room is __ground__, NOT shop", (payload or {}).get("room_id"),
+          GROUND_ROOM_ID)
+    status, payload = report(500.0, 79.0)
+    check("[Q] leave from ground accepted", status, "ok")
+    check("[Q] out in wilderness", (payload or {}).get("location_id"), "")
+
+    print("\n[ER] POST /play/enter-room outside current location -> 409 not_in_location")
+    park(0.0, 0.0)
+    try:
+        asyncio.run(play_enter_room(_FakeRequest({"room_id": "hall"}), user=USER))
+        er_res = ("ok", None)
+    except HTTPException as exc:
+        er_res = ("refused", (exc.status_code, exc.detail))
+    check("[ER] refused in wilderness", er_res[0], "refused")
+    check("[ER] status 409", er_res[1][0], 409)
+    check("[ER] detail not_in_location", er_res[1][1],
+          {"reason": "not_in_location", "location_id": ""})
 
     print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
     for f in FAILURES:

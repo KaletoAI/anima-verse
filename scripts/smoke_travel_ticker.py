@@ -208,7 +208,7 @@ Hand-derived expectations:
           ROUTE against one tick's travel:
             remaining   = total_m − progress_m = 40 − 36 = 4.0 m
             tick travel = 5.0 s × speed_m_s 1.0 = 5.0 m
-            4.0 ≤ 5.0   → at the goal → the E opening's room "Yard"
+            4.0 ≤ 5.0   → at the goal → the room of the outside door at the goal, "Yard"
           [7b] is the counter-case on the same building: the crossing there
           happens 67 m before the end of the route, so the ground room stands.
       (e) THE WINDOW RIDES THE SPEED, NOT THE GAME-CLOCK FACTOR. One tick
@@ -233,7 +233,7 @@ Hand-derived expectations:
             · without the key → refused, standoff one step back from the
               door → (494.5, 0.0), outside, denial + travel_blocked;
             · with the key → enters, and because the arrival point IS the
-              journey's goal the opening's room link wins → "Vault Hall".
+              journey's goal the outside door's room wins → "Vault Hall".
 
 Usage:  ./.venv/bin/python scripts/smoke_travel_ticker.py
 """
@@ -392,10 +392,30 @@ set_map3d(HOME, plan_width_m=10.0,
                               "type": "passage"}])
 MARKET = add_location(name="Ticker Market", description="travel ticker smoke")["id"]
 update_location_position(MARKET, 100.0, 0.0)
-HALL = add_room(MARKET, "Hall", "the room the west gate opens into", sync_world=True)["id"]
+HALL = add_room(MARKET, "Hall", "walled room with west outside door", sync_world=True)["id"]
+# West gate on edge 3 at 0.5 -> (95.0, 0.0) (for [1] entry_edge=3) on open
+# ground, plus HALL layout x=-1..5, z=-3..3 with its west outside door at
+# local (-1, 0) -> world (99.0, 0.0), outward (-1, 0), w=1.2. The gate is NOT
+# at that door (across = 4 m > 1.5 m), and (95, 0) lies west of HALL
+# (95 < 99), so a gate arrival is on the plot's ground: room_at_point ==
+# __ground__ and the figure keeps the gate point. The south rim (100.0, 5.0)
+# is outside HALL too (z=5 > 3) -> __ground__.
 set_map3d(MARKET, plan_width_m=10.0,
           boundary_openings=[{"edge": 3, "at": 0.5, "width_m": 4.0,
-                              "type": "passage", "room": HALL}])
+                              "type": "passage"}])
+_mkt_wd = _load_world_data()
+for _loc in _mkt_wd.get("locations", []):
+    if _loc.get("id") == MARKET:
+        for _r in _loc.get("rooms") or []:
+            if _r.get("id") == HALL:
+                _r["layout"] = {
+                    "x": -1.0, "y": -3.0, "w": 6.0, "d": 6.0, "level": 0,
+                    "openings": [
+                        {"edge": "W", "at": 0.5, "width_m": 1.2,
+                         "type": "door", "to": "outside"},
+                    ],
+                }
+_save_world_data(_mkt_wd)
 BARN = add_location(name="Ticker Barn", description="no opening at all")["id"]
 update_location_position(BARN, 0.0, 200.0)
 set_map3d(BARN, plan_width_m=10.0)
@@ -462,21 +482,22 @@ check_true("t=120 the journey is still there",
 tick_at(155)
 check("arrived at the target", get_character_current_location("demo_npc"),
       MARKET)
-check("the arrival room is the one the W opening links to",
-      get_character_current_room("demo_npc"), HALL)
-check_true("… and not the room the arrival rule would pick",
-           HALL != GROUND_ROOM_ID, f"{HALL} vs {GROUND_ROOM_ID}")
+check("the arrival room is the plot's ground at the W gate (fenced plot)",
+      get_character_current_room("demo_npc"), GROUND_ROOM_ID)
 check("movement_target cleared", get_movement_target("demo_npc"), "")
 check("journey gone", travel_engine.get_journey("demo_npc"), None)
 check("the arrival keeps the point it walked to — MARKET's W opening",
       pos_of("demo_npc"), (95.0, 0.0))
 
-print("[2b] an arrival WITHOUT an opening edge falls back to the arrival room")
+print("[2b] an arrival away from the door falls back to room_at_point (__ground__)")
+# South rim (100.0, 5.0): distance to HALL's west door (99, 0) is hypot(1, 5) = 5.10 m
+# (not at_door) and z=5 > 3 (outside HALL) -> room_at_point == __ground__.
 new_npc("fallback_npc", "", 60.0, 0.0)
-give_journey("fallback_npc", MARKET, entry_edge=None)
+give_journey("fallback_npc", MARKET, entry_edge=None,
+             waypoints=[[60.0, 0.0, 0.0], [100.0, 5.0, 41.0]])
 tick_at(155)
 check("arrived", get_character_current_location("fallback_npc"), MARKET)
-check("room = get_arrival_room_id (the ground)",
+check("room = room_at_point (the ground)",
       get_character_current_room("fallback_npc"), GROUND_ROOM_ID)
 
 # ── [3] party followers ─────────────────────────────────────────────────
@@ -714,13 +735,34 @@ check("the ticker leaves it where the editor put it", pos_of("shift_npc"),
 
 # ── [7] the through-target route (final review, finding C1) ─────────────
 print("[7] a route through the target's footprint never enters it ungated")
+# Unfenced building at (300, 0), boundary +-5 (x 295..305, z -5..5), entry_room
+# YARD walled at local x 1..5, z -3..3 (world x 301..305, z -3..3) with east
+# outside door at local (5, 0) -> world (305.0, 0.0), outward (1, 0), w 1.2
+# (outer point = (305.5, 0.0)).
+# - Caught at (298, 0) ([7b]): not at_goal, x=298 < 301 outside YARD -> __ground__.
+# - Caught at (305, 4) with 4 m remaining ([7d]/[7e]):
+#   * window 5 m (1 m/s): 4 <= 5 -> at_goal True -> goal (305, 0) is at_door -> YARD.
+#   * window 2.5 m (0.5 m/s): 4 > 2.5 -> at_goal False -> (305, 4) has z=4 > 3 -> __ground__.
+#   * 4 s later at (305, 2): 2 <= 2.5 -> at_goal True -> goal (305, 0) is at_door -> YARD.
 EASTGATE = add_location(name="Ticker Eastgate",
                         description="its only door faces away")["id"]
 update_location_position(EASTGATE, 300.0, 0.0)
-YARD = add_room(EASTGATE, "Yard", "behind the east gate", sync_world=True)["id"]
-set_map3d(EASTGATE, plan_width_m=10.0,
-          boundary_openings=[{"edge": 1, "at": 0.5, "width_m": 4.0,
-                              "type": "passage", "room": YARD}])
+YARD = add_room(EASTGATE, "Yard", "walled room with east outside door", sync_world=True)["id"]
+set_map3d(EASTGATE, plan_width_m=10.0)
+_eg_wd = _load_world_data()
+for _loc in _eg_wd.get("locations", []):
+    if _loc.get("id") == EASTGATE:
+        _loc["entry_room"] = YARD
+        for _r in _loc.get("rooms") or []:
+            if _r.get("id") == YARD:
+                _r["layout"] = {
+                    "x": 1.0, "y": -3.0, "w": 4.0, "d": 6.0, "level": 0,
+                    "openings": [
+                        {"edge": "E", "at": 0.5, "width_m": 1.2,
+                         "type": "door", "to": "outside"},
+                    ],
+                }
+_save_world_data(_eg_wd)
 THROUGH = [[290.0, 0.0, 0.0], [300.0, 0.0, 10.0], [300.0, 30.0, 40.0],
            [305.0, 30.0, 45.0], [305.0, 0.0, 75.0]]
 
@@ -796,7 +838,7 @@ give_journey("wallwalk_npc", EASTGATE, entry_edge=1, waypoints=WALL_ROUTE)
 tick_at(36)
 check("the crossing settles as the arrival",
       get_character_current_location("wallwalk_npc"), EASTGATE)
-check("remaining 4 m ≤ one tick's 5 m → the opening's room wins",
+check("remaining 4 m ≤ one tick's 5 m → the door's room wins",
       get_character_current_room("wallwalk_npc"), YARD)
 check("journey gone", travel_engine.get_journey("wallwalk_npc"), None)
 
@@ -812,7 +854,7 @@ for _f in (0.5, 4.0):
     give_journey(_n, EASTGATE, entry_edge=1, waypoints=WALL_ROUTE)
     tick_at(36)
     check(f"factor {_f} still arrives", get_character_current_location(_n), EASTGATE)
-    check(f"factor {_f}: remaining 4 m <= the 5 m window -> the opening's room",
+    check(f"factor {_f}: remaining 4 m <= the 5 m window -> the door's room",
           get_character_current_room(_n), YARD)
 set_factor(0.0)                        # the game clock stands still again
 
@@ -820,7 +862,7 @@ _RATE[0] = 0.0                         # a frozen world: the window keeps its si
 new_npc("frozen_npc", "", 305.0, 40.0)
 give_journey("frozen_npc", EASTGATE, entry_edge=1, waypoints=WALL_ROUTE)
 tick_at(36)
-check("motion rate 0: remaining 4 m <= 5 m -> the opening's room (no floor)",
+check("motion rate 0: remaining 4 m <= 5 m -> the door's room (no floor)",
       get_character_current_room("frozen_npc"), YARD)
 _RATE[0] = 1.0
 
@@ -838,20 +880,32 @@ new_npc("halfpace_npc2", "", 305.0, 40.0)
 give_journey("halfpace_npc2", EASTGATE, entry_edge=1, waypoints=SLOW_WALL,
              speed=0.5)
 tick_at(76)
-check("four seconds later remaining 2 m <= 2.5 m -> the opening's room",
+check("four seconds later remaining 2 m <= 2.5 m -> the door's room",
       get_character_current_room("halfpace_npc2"), YARD)
 
 print("[7c] accessible_when is a wall at the arrival gate too")
+# Unfenced building at (500, 0), boundary +-5, entry_room VAULT_HALL walled at
+# local x -5..1, z -3..3 with west outside door at local (-5, 0) -> world
+# (495.0, 0.0), outward (-1, 0), w 1.2. VAULT_ROUTE ends at (495.0, 0.0),
+# which is at_door -> arrives in VAULT_HALL once silver_key is held.
 VAULT = add_location(name="Ticker Vault", description="needs the key")["id"]
 update_location_position(VAULT, 500.0, 0.0)
 VAULT_HALL = add_room(VAULT, "Vault Hall", "behind the west door", sync_world=True)["id"]
-set_map3d(VAULT, plan_width_m=10.0,
-          boundary_openings=[{"edge": 3, "at": 0.5, "width_m": 4.0,
-                              "type": "passage", "room": VAULT_HALL}])
+set_map3d(VAULT, plan_width_m=10.0)
 _wd = _load_world_data()
 for _loc in _wd.get("locations", []):
     if _loc.get("id") == VAULT:
         _loc["accessible_when"] = ["has_item:silver_key"]
+        _loc["entry_room"] = VAULT_HALL
+        for _r in _loc.get("rooms") or []:
+            if _r.get("id") == VAULT_HALL:
+                _r["layout"] = {
+                    "x": -5.0, "y": -3.0, "w": 6.0, "d": 6.0, "level": 0,
+                    "openings": [
+                        {"edge": "W", "at": 0.5, "width_m": 1.2,
+                         "type": "door", "to": "outside"},
+                    ],
+                }
 _save_world_data(_wd)
 add_item(name="Silver Key", description="opens the vault", item_id="silver_key")
 VAULT_ROUTE = [[460.0, 0.0, 0.0], [495.0, 0.0, 35.0]]
@@ -877,7 +931,7 @@ give_journey("keyed_npc", VAULT, entry_edge=3, waypoints=VAULT_ROUTE)
 tick_at(35)
 check("with the key it enters", get_character_current_location("keyed_npc"),
       VAULT)
-check("and the arrival point IS the door — the opening's room wins",
+check("and the arrival point IS the door — the door's room wins",
       get_character_current_room("keyed_npc"), VAULT_HALL)
 check("journey gone", travel_engine.get_journey("keyed_npc"), None)
 

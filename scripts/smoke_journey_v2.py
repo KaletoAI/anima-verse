@@ -818,6 +818,118 @@ with patch.object(
     again, why = travel_engine.start_journey_to_point("demo_npc", 1, 0)
     check_true("replacement gets distinct ID", (again or {}).get("journey_id") != point_id)
 
+print("\n[travel arrival at unfenced building B -> door + outward*0.5, room 'hall']")
+BLDG_B = add_location(name="Fixture B", description="travel door arrival")["id"]
+update_location_position(BLDG_B, 100.0, 100.0, 0.0)
+set_map3d(BLDG_B,
+          boundary=[[-5.0, -3.0], [5.0, -3.0], [5.0, 3.0], [-5.0, 3.0]],
+          plan_width_m=10.0)
+_b_data = _load_world_data()
+for _loc in _b_data.get("locations", []):
+    if _loc.get("id") == BLDG_B:
+        _loc["entry_room"] = "hall"
+        _loc["rooms"] = [
+            {"id": "__ground__", "name": "Ground"},
+            {
+                "id": "hall", "name": "Hall",
+                "layout": {
+                    "x": -5.0, "y": -3.0, "w": 6.0, "d": 6.0, "level": 0,
+                    "openings": [
+                        {"edge": "S", "at": 0.5, "width_m": 1.2,
+                         "type": "door", "to": "outside"},
+                    ],
+                },
+            },
+            {
+                "id": "kitchen", "name": "Kitchen",
+                "layout": {
+                    "x": 1.0, "y": -3.0, "w": 4.0, "d": 6.0, "level": 0,
+                    "openings": [
+                        {"edge": "E", "at": 0.5, "width_m": 0.9,
+                         "type": "door", "to": "outside"},
+                    ],
+                },
+            },
+        ]
+_save_world_data(_b_data)
+travel_engine.cancel_journey("demo_npc")
+set_character_pos("demo_npc", 100.0, 120.0)
+set_known_locations("demo_npc", [HOME, MARKET, PARK, BLDG_B])
+j_b, why_b = travel_engine.start_journey("demo_npc", BLDG_B)
+check("journey to B starts", why_b, "")
+check("B journey entry_edge is None", (j_b or {}).get("entry_edge"), None)
+end_pt = (round(j_b["waypoints"][-1][0], 2), round(j_b["waypoints"][-1][1], 2)) if j_b else None
+check("B journey end point is (98.0, 103.5)", end_pt, (98.0, 103.5))
+if j_b:
+    _arr_s = float(j_b["started_at_s"]) + float(j_b["waypoints"][-1][2]) + 1.0
+    MOTION[0] = _arr_s
+    travel_engine.advance_all_journeys()
+    check("arrived at B", get_character_current_location("demo_npc"), BLDG_B)
+    check("arrival room is 'hall'", get_character_current_room("demo_npc"), "hall")
+
+# Hand-derived second case (Item 6): unfenced building B at (100, 100),
+# boundary +-5 x +-3 (x 95..105, z 97..103), whose entry_room "hall" has NO
+# outside door (only "kitchen" has one). _arrival_point uses an outside door
+# ONLY when entry_room itself is walled and has an outside door, so it falls
+# back to the nearest boundary rim point from (100, 120): (100.0, 103.0),
+# entry_edge = None. On arrival, (100.0, 103.0) is not at kitchen's door
+# (105, 100) and room_at_point returns "__ground__".
+print("\n[travel arrival when entry_room has no outside door -> rim (100.0, 103.0), room '__ground__']")
+_b_data2 = _load_world_data()
+for _loc in _b_data2.get("locations", []):
+    if _loc.get("id") == BLDG_B:
+        for _rm in _loc.get("rooms") or []:
+            if _rm.get("id") == "hall" and isinstance(_rm.get("layout"), dict):
+                _rm["layout"]["openings"] = []
+_save_world_data(_b_data2)
+travel_engine.cancel_journey("demo_npc")
+set_character_pos("demo_npc", 100.0, 120.0)
+j_k, why_k = travel_engine.start_journey("demo_npc", BLDG_B)
+check("journey to B (rim fallback) starts", why_k, "")
+check("rim fallback entry_edge is None", (j_k or {}).get("entry_edge"), None)
+end_pt_k = (round(j_k["waypoints"][-1][0], 2), round(j_k["waypoints"][-1][1], 2)) if j_k else None
+check("rim fallback end point is (100.0, 103.0)", end_pt_k, (100.0, 103.0))
+if j_k:
+    _arr_k = float(j_k["started_at_s"]) + float(j_k["waypoints"][-1][2]) + 1.0
+    MOTION[0] = _arr_k
+    travel_engine.advance_all_journeys()
+    check("arrived at B via rim", get_character_current_location("demo_npc"), BLDG_B)
+    check("arrival room is '__ground__'", get_character_current_room("demo_npc"), "__ground__")
+
+# Hand-derived third case (Item 4): fenced plot at (200, 100), boundary +-5
+# (x 195..205, z 95..105), gate edge 0 at 0.5 -> (200.0, 95.0), entry_room
+# "hall" WITHOUT layout. Travel arrives at the gate (200.0, 95.0), entry_edge 0,
+# and arrival room is room_at_point -> "__ground__" (NOT "hall").
+print("\n[travel arrival at fenced plot with entry_room 'hall' (no layout) -> '__ground__']")
+FENCED_P = add_location(name="Fenced Plot", description="fenced arrival")["id"]
+update_location_position(FENCED_P, 200.0, 100.0, 0.0)
+set_map3d(FENCED_P, plan_width_m=10.0,
+          boundary_openings=[{"edge": 0, "at": 0.5, "width_m": 3.0, "type": "passage"}])
+_fp_data = _load_world_data()
+for _loc in _fp_data.get("locations", []):
+    if _loc.get("id") == FENCED_P:
+        _loc["entry_room"] = "hall"
+        _loc["rooms"] = [
+            {"id": "__ground__", "name": "Ground"},
+            {"id": "hall", "name": "Hall"},
+        ]
+_save_world_data(_fp_data)
+travel_engine.cancel_journey("demo_npc")
+set_character_pos("demo_npc", 200.0, 80.0)
+set_known_locations("demo_npc", [HOME, MARKET, PARK, BLDG_B, FENCED_P])
+j_f, why_f = travel_engine.start_journey("demo_npc", FENCED_P)
+check("journey to fenced plot starts", why_f, "")
+check("fenced plot entry_edge is 0", (j_f or {}).get("entry_edge"), 0)
+end_pt_f = (round(j_f["waypoints"][-1][0], 2), round(j_f["waypoints"][-1][1], 2)) if j_f else None
+check("fenced plot end point is gate (200.0, 95.0)", end_pt_f, (200.0, 95.0))
+if j_f:
+    _arr_f = float(j_f["started_at_s"]) + float(j_f["waypoints"][-1][2]) + 1.0
+    MOTION[0] = _arr_f
+    travel_engine.advance_all_journeys()
+    check("arrived at fenced plot", get_character_current_location("demo_npc"), FENCED_P)
+    check("fenced plot arrival room is '__ground__' (not 'hall')",
+          get_character_current_room("demo_npc"), "__ground__")
+
 print()
 if FAILURES:
     print(f"FAILED {len(FAILURES)}/{CHECKED}: {FAILURES}")

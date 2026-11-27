@@ -150,13 +150,11 @@ interface RoomLayoutEditorProps {
    *  says which of the two it is looking at, instead of showing one polygon
    *  for both states (user finding 2026-08-20). */
   placedOnMap?: boolean
-  /** Server verdict (Location.has_entrance): does this location carry any
-   *  boundary pass-through at all? Since the free-boundary rule (E4 task 5)
-   *  that is a HINT, not a verdict on reachability: a location without any
-   *  opening can be entered anywhere along its edge, one WITH openings only
-   *  across them. The boundary-openings section says so; it does not
-   *  re-derive the rule. */
-  hasEntrance?: boolean
+  /** Server verdict (Location.fenced): is this plot fenced by non-empty
+   *  boundary pass-throughs? When false, the plot is open on every side;
+   *  when true, characters enter and leave the plot only through its gates.
+   *  The boundary-openings section says so; it does not re-derive the rule. */
+  fenced?: boolean
   /** Reports the selected room id ('' = none) — the Floor-plan tab shows the
    *  model adjustment strip for it. */
   onSelectRoom?: (roomId: string) => void
@@ -245,7 +243,7 @@ function hullsOf(list: Room[], level: number, skipId = ''): PolyRoom[] {
 
 const NO_PREVIEW_POSES: Record<string, string> = {}
 
-export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', map3d, onMap3d, placedOnMap = true, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, previewPose = NO_PREVIEW_POSES, onPreviewPose, unsaved = false, defaultDoorPropId = '', defaultDoorStyle = '', onDefaultDoorProp, defaultWindowStyle = '', onDefaultWindowStyle, children }: RoomLayoutEditorProps) {
+export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', map3d, onMap3d, placedOnMap = true, fenced, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, previewPose = NO_PREVIEW_POSES, onPreviewPose, unsaved = false, defaultDoorPropId = '', defaultDoorStyle = '', onDefaultDoorProp, defaultWindowStyle = '', onDefaultWindowStyle, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [kitCatalog, setKitCatalog] = useState<FurnitureKitCatalog | null>(null)
@@ -2843,10 +2841,9 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
               : undefined}
             boundaryM={boundaryM}
             planW={planW}
-            placedRooms={placedRooms}
             selectedBoundary={selectedBoundary}
             onSelectBoundary={setSelectedBoundary}
-            hasEntrance={hasEntrance}
+            fenced={fenced}
           />
         )}
         selection={(

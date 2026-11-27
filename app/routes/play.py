@@ -570,7 +570,10 @@ def _play_enter_room_sync(user, body: Any):
         loc_obj = get_location_by_id(loc) if loc else None
         valid = {(r.get("id") or "") for r in ((loc_obj.get("rooms") if loc_obj else None) or [])}
         if room_id not in valid:
-            raise HTTPException(status_code=400, detail="room not in current location")
+            raise HTTPException(status_code=409, detail={
+                "reason": "not_in_location",
+                "location_id": loc,
+            })
         # The second of the two gates (plan-betreten-und-tueren.md § 5 A): a
         # block rule may forbid a ROOM, not just a location. The location step
         # has checked this since it was written; the room change never did, so
@@ -836,10 +839,6 @@ _POS_STEP_FACTOR = 3.0
 #: seconds (movement runs in real time since 2026-11-05); the allowance is the
 #: LARGEST of the three (floor, travel-speed term, walking term).
 _POS_WALK_SPEED_M_S = 3.4
-#: How close to an authored boundary opening a point has to be to count as
-#: crossing THROUGH it (metres). The client offers the entry at 3 m and walks
-#: the figure to the opening point, so an accepted crossing lands well inside.
-_POS_OPENING_TOLERANCE_M = 1.5
 #: When each avatar's last ACCEPTED report came in (``time.monotonic``).
 #: Process-local on purpose: it is a rate limit and a plausibility baseline,
 #: not world state — a restart simply grants everyone one free first report,
@@ -946,8 +945,8 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
          less than a metre, or a slope steeper than ``game.max_slope_deg``
          over more (``core/relief.slope_blocks``). Last because the height of
          a point depends on which location owns it; exempt within
-         ``_POS_OPENING_TOLERANCE_M`` of an opening, which IS the ramp onto a
-         place.
+         ``boundary_entry.GATE_TOLERANCE_M`` of a plot gate or at an outside
+         door (``boundary_entry.at_door``), which are the ramps onto a place.
 
     Every refusal carries ``{reason, message, pos, location_id}`` where ``pos``
     is the LAST VALID point — the client snaps the figure back onto it, so a
@@ -1001,22 +1000,20 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
     reported point. Same location, or wilderness → wilderness, is accepted as
     it stands. Otherwise:
 
-      * ENTRY (a different, non-empty location): across an authored boundary
-        opening — the point must lie within ``_POS_OPENING_TOLERANCE_M`` of
-        one of the target's opening world points (§ A1.1) — and only when
-        ``accessible_when`` and the access rules pass. Those two are the very
-        gates ``/play/travel`` applies before it sets off; a free walker that
-        could stroll past them would make every one of them decoration
-        (E3-C1). A location with NO authored opening at all has a FREE
-        boundary (decision E4 task 5): it never said where its way in is, the
-        mirror of ``may_leave``'s "no entry room = leave anywhere" — the rule
-        gates still apply,
+      * ENTRY (a different, non-empty location): ``boundary_entry.may_enter``
+        judges the point against the cached ``world_ops.location_entry_geometry``
+        — a fenced plot (non-empty ``boundary_openings``) requires crossing at
+        a gate (within ``GATE_TOLERANCE_M``, else 403 ``no_opening``), and
+        entering a walled level-0 room requires crossing at one of its outside
+        doors (``at_door``, else 403 ``no_door``). The entered room comes from
+        the point (``room_at_point``) and replaces the arrival-room default.
+        Then ``accessible_when`` and the access rules apply as before.
       * EXIT: ``boundary_entry.may_leave`` with the room the avatar stands in
-        — across a NEAR opening from the room it links to, from the entry room
-        or an open room (the ground, a room without walls) over any edge, or
-        freely when the location declares no entry room —
-        AND ``rules.check_leave``, the same rule gate every other movement
-        path asks before it moves anybody,
+        — a fenced plot requires a gate, and leaving a walled room requires one
+        of its outside doors (except under the no-trap rule: an unfenced
+        location with zero level-0 outside doors lets one leave from any room;
+        ``entry_room`` plays no role) — AND ``rules.check_leave``, the same
+        rule gate every other movement path asks before it moves anybody.
       * location → location (adjacent or NESTED footprints — a hut on a
         village square) is both: the exit check of the old one, then the
         entry check of the new one.
@@ -1298,29 +1295,20 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
 
     entry_room = ""
     if derived_id != current_id:
-        from app.core.boundary_entry import (may_leave, opening_entry_room,
-                                             opening_world_points)
+        from app.core.boundary_entry import may_enter, may_leave
+        from app.core.world_ops import location_entry_geometry
         if current_id:
-            # LEAVING. The exit edge is not a step direction any more, so it is
-            # read off the point: every opening the crossing happens AT is a
-            # candidate, and ``may_leave`` answers for each. With none nearby
-            # the missing edge index matches no opening, which is exactly right
-            # — the entry-room rule and the "no entry room at all" rule are
-            # what is left, and those are the other two ways out.
             current_loc = get_location_by_id(current_id) or {}
             current_room = get_character_current_room(avatar) or ""
-            entry_gate = str(current_loc.get("entry_room") or "").strip()
-            edges = [edge for edge, (ox, oz)
-                     in opening_world_points(current_loc)
-                     if math.hypot(ox - x, oz - z) <= _POS_OPENING_TOLERANCE_M]
-            if not any(may_leave(current_loc, current_room, entry_gate, edge)
-                       for edge in (edges or [None])):
+            leave_geo_ok, leave_geo_reason = may_leave(
+                current_loc, location_entry_geometry(current_id),
+                current_room, x, z)
+            if not leave_geo_ok:
                 logger.info("pos refused (leave): %s out of %s from room %r "
                             "at %.2f,%.2f", avatar, current_id, current_room,
                             x, z)
-                refuse(403, "leave_blocked",
-                       t("You cannot leave the place here — take the way you "
-                         "came in.", lang))
+                refuse(403, leave_geo_reason or "leave_blocked",
+                       t("You cannot leave here — use a door or a gate.", lang))
             # ``rules.check_leave`` — the RULE side of leaving, and the one
             # every other movement path in this world asks: ``/play/travel``
             # before it sets off, the travel ticker at the arrival, the
@@ -1342,35 +1330,15 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
                             avatar, current_id, leave_reason)
                 refuse(403, "block_leave", leave_reason)
         if derived_id:
-            # ENTERING. Through an authored opening, and past the gates the
-            # travel route applies to the very same destination.
-            best_edge, best_dist = None, None
-            for edge, (ox, oz) in opening_world_points(derived):
-                dist = math.hypot(ox - x, oz - z)
-                if best_dist is None or dist < best_dist:
-                    best_edge, best_dist = edge, dist
-            if best_dist is None:
-                # NO AUTHORED OPENINGS AT ALL = a free boundary (controller
-                # decision, E4 task 5 review). The mirror of ``may_leave``'s
-                # third rule: a location that declares no entry room lets one
-                # out anywhere, and a location that draws no opening has not
-                # said where its way in is either. Without this a painted
-                # square or a meadow would be a wall to a free walker,
-                # which is the opposite of what those places are for — and one
-                # CANNOT author an opening around them for every direction a
-                # walker may come from.
-                # The rule gates below are untouched: an openingless place is
-                # still subject to ``accessible_when`` and the access rules.
-                # ``opening_entry_room(None)`` answers '' and the ordinary
-                # arrival rule decides the room.
-                pass
-            elif best_dist > _POS_OPENING_TOLERANCE_M:
-                # It HAS openings — then those are the ways in, and this is
-                # not one of them (strictness decision 2026-08-04).
-                logger.info("pos refused (no opening): %s into %s at %.2f,%.2f",
-                            avatar, derived_id, x, z)
-                refuse(403, "no_opening",
-                       t("There is no way in here.", lang))
+            enter_geo_ok, enter_geo_reason, entry_room = may_enter(
+                derived, location_entry_geometry(derived_id), x, z)
+            if not enter_geo_ok:
+                logger.info("pos refused (%s): %s into %s at %.2f,%.2f",
+                            enter_geo_reason, avatar, derived_id, x, z)
+                msg = (t("The fence has no gate here.", lang)
+                       if enter_geo_reason == "no_opening"
+                       else t("There is no door here.", lang))
+                refuse(403, enter_geo_reason, msg)
             from app.core.world_ops import conditions_pass
             if not conditions_pass(derived.get("accessible_when") or [],
                                    avatar, derived_id):
@@ -1384,12 +1352,6 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
                 logger.info("pos refused (access rule): %s into %s: %s",
                             avatar, derived_id, enter_reason)
                 refuse(403, "block_enter", enter_reason)
-            # Arrival semantics, the same ones every other arrival path uses:
-            # the location is written by ``set_character_pos`` through
-            # ``save_character_current_location`` (which discovers the place
-            # and lands the avatar in the arrival room), and an opening that
-            # names a room overrides that — it answers the question itself.
-            entry_room = opening_entry_room(derived, best_edge)
 
     # THE GROUND PUSHES BACK (E8 task 1). Height is a RULE from here on: a
     # step too high or a slope too steep refuses the report, on the ONE baked
@@ -1407,10 +1369,12 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
     # there is no height to compare against and the gate skips, exactly like
     # the step-plausibility bound above.
     if here is not None:
-        from app.core.boundary_entry import opening_world_points
+        from app.core.boundary_entry import (GATE_TOLERANCE_M, at_door,
+                                             opening_world_points)
         from app.core.model_surface import stand_height_at
         from app.core.relief import (STEP_DISTANCE_M, get_max_slope_deg,
                                      get_max_step_height_m, slope_blocks)
+        from app.core.world_ops import location_entry_geometry
         # ``stand_height_at`` asks the WORLD's ground ("One ground" E5a): the
         # baked heightfield already carries every plateau, every carve and every
         # authored hill, so there is no per-location height field left to
@@ -1426,27 +1390,23 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
             - stand_height_at(was_loc, here["x"], here["z"])
         dist = math.hypot(x - here["x"], z - here["z"])
         def _at_an_opening() -> bool:
-            """OPENINGS ARE RAMP ENDS. An authored opening sits on the edge
-            of a place, which is exactly where the ground steps up onto it —
-            and an opening is by definition the way in. Refusing the crossing
-            for its height would lock a place behind its own door, so a point
-            within the entry tolerance of an opening of either location is
-            exempt, at BOTH ends of the step (a crossing has one foot on each
-            side). Asked only once the rule has already said "blocked": the
-            openings are parsed out of ``map3d``, and this route runs up to
-            four times a second per walker."""
-            # Both ends are resolved GEOMETRICALLY, out of the snapshot this
-            # report already read: the location the previous point lies in,
-            # not the avatar's recorded ``current_location``. The two can
-            # disagree — an admin move, a takeover, a teleport — and it is the
-            # POINT whose door this is about. ``was_loc`` is that location,
-            # resolved once above for the height the previous point stands at.
+            """GATES AND OUTSIDE DOORS ARE RAMP ENDS. Both ends of the step
+            are checked against the plot gates and cached level-0 outside doors
+            of ``derived`` and ``was_loc``."""
             for loc in (derived, was_loc):
-                for _edge, (ox, oz) in opening_world_points(loc or {}):
+                if not loc:
+                    continue
+                for _edge, (ox, oz) in opening_world_points(loc):
                     if min(math.hypot(ox - x, oz - z),
                            math.hypot(ox - here["x"], oz - here["z"])) \
-                            <= _POS_OPENING_TOLERANCE_M:
+                            <= GATE_TOLERANCE_M:
                         return True
+                lid = str(loc.get("id") or "")
+                if lid:
+                    for door in location_entry_geometry(lid).get("doors") or []:
+                        if (at_door(door, x, z)
+                                or at_door(door, here["x"], here["z"])):
+                            return True
             return False
 
         max_step = get_max_step_height_m()

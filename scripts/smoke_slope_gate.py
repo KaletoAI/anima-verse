@@ -800,7 +800,7 @@ def main() -> int:
     update_location_position(HOUSE, 3000.0, 3020.0)
     set_map3d(HOUSE, plan_width_m=8.0,
               boundary_openings=[{"edge": 1, "at": 0.5, "width_m": 2.0,
-                                  "type": "passage", "room": ""}])
+                                  "type": "passage"}])
     # A place stamps its plot because it DRAWS A BUILT FLOOR (E1, § G5) —
     # here one closed room. Without it this house would stand on the untouched
     # flank, which is case (a) all over again.
@@ -840,6 +840,35 @@ def main() -> int:
     check("...and so is walking in through the opening",
           (payload or {}).get("ok") if status == "ok" else status, True)
     check("...into the house", (payload or {}).get("location_id"), HOUSE)
+
+    # An unfenced building with an OUTSIDE DOOR (no boundary_openings): a step
+    # within 1.5 m in front of the door is exempt from the slope gate too.
+    DOOR_HOUSE = add_location(name="Door House",
+                              description="slope-gate outside door")["id"]
+    update_location_position(DOOR_HOUSE, 3000.0, 3040.0)
+    set_map3d(DOOR_HOUSE, plan_width_m=8.0)
+    _dh_data = _load_world_data()
+    for _loc in _dh_data.get("locations", []):
+        if _loc.get("id") == DOOR_HOUSE:
+            _loc["rooms"] = [
+                {"id": "__ground__", "name": "Ground"},
+                {"id": "hall", "name": "Hall", "layout": {
+                    "x": -4.0, "y": -4.0, "w": 8.0, "d": 8.0, "level": 0,
+                    "openings": [{"edge": "E", "at": 0.5, "width_m": 1.2,
+                                  "type": "door", "to": "outside"}],
+                }},
+            ]
+    _save_world_data(_dh_data)
+    set_known_locations(AVATAR, [LEDGE, GROVE, PLAIN, HOUSE, DOOR_HOUSE])
+    from app.core.world_ops import location_entry_geometry  # noqa: E402
+    _dh_doors = location_entry_geometry(DOOR_HOUSE)["doors"]
+    check("door house east door sits at (3004, 3040)",
+          _dh_doors and _dh_doors[0]["at_world"], [3004.0, 3040.0])
+    park(3005.0, 3040.0, "")
+    status, payload = report(3003.0, 3040.0)
+    check("walking in through an outside door on the steep flank is exempt",
+          (payload or {}).get("ok") if status == "ok" else status, True)
+    check("...landing in hall", (payload or {}).get("room_id"), "hall")
     def _ss(t):
         t = min(max(t, 0.0), 1.0)
         return t * t * (3.0 - 2.0 * t)

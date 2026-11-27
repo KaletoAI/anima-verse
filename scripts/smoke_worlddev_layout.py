@@ -277,7 +277,7 @@ DRAFT = {
         {"id": "__ground__", "x": 0, "y": 0, "w": 3, "d": 3},
     ],
     "boundary_openings": [
-        {"edge": 0, "at": 0.5, "width_m": 3, "room": TAPROOM},
+        {"edge": 0, "at": 0.5, "width_m": 3},
         {"edge": 9, "at": 0.5, "width_m": 3},
     ],
     "stairs": [
@@ -366,8 +366,7 @@ check("the Pantry is flagged new",
 
 print("[7] boundary openings ride the map3d whitelist")
 check("one survives, unclamped", NORM["boundary_openings"],
-      [{"edge": 0, "at": 0.5, "width_m": 3.0, "type": "passage",
-        "room": TAPROOM}])
+      [{"edge": 0, "at": 0.5, "width_m": 3.0, "type": "passage"}])
 check("the other is reported",
       code_count(WARN, "boundary_opening_dropped"), 1)
 
@@ -416,8 +415,7 @@ check("the Pantry exists with its description",
       ("Pantry", "Shelves, cool and dim."))
 check("entry_room points at the Taproom", after.get("entry_room"), TAPROOM)
 check("the boundary opening landed", after["map3d"].get("boundary_openings"),
-      [{"edge": 0, "at": 0.5, "width_m": 3.0, "type": "passage",
-        "room": TAPROOM}])
+      [{"edge": 0, "at": 0.5, "width_m": 3.0, "type": "passage"}])
 # Both plan-authored map3d keys in ONE write: written separately, the second
 # copy of the stored map3d would drop the first one's field.
 check("and so did the flight, beside it",

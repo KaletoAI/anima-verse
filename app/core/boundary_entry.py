@@ -1,71 +1,44 @@
-"""Entry/exit decisions at authored boundary openings (contract § B1 Nr. 13).
+"""Entry/exit decisions at plot gates and building outside doors.
 
-A ``boundary_opening`` on ``map3d`` is an authored pass-through at the
-LOCATION edge (a road crossing the cell). Since Etappe 3 of
-``plan-3d-lod-und-betreten.md`` it is not only geometry any more: a location
-change accepts an opening as a legitimate crossing point —
+Entry semantics:
 
-- ENTERING a location that HAS authored openings is only possible across one
-  of them (strictness decision 2026-08-04) — its own openings ARE its ways in,
-  and anything else is a wall. A location that draws NO opening at all is the
-  other case and has a FREE boundary (decision E4 task 5, ``POST /play/pos``):
-  it never said where its way in is, the mirror of ``may_leave``'s "no entry
-  room = leave anywhere", and a painted square or a meadow cannot author an
-  opening for every direction a walker may arrive from. The rule gates
-  (``accessible_when``, access rules) apply either way — the free
-  boundary drops the GEOMETRIC half of the gate, never the rules. The
-  opening's room link routes the avatar; WITHOUT one the opening says nothing
-  about the room and the arrival rule decides (``world.get_arrival_room_id``:
-  the declared entry room, otherwise the ground);
-- LEAVING across such an edge is allowed WITHOUT standing in the entry room,
-  provided the avatar stands in the opening's linked room (the round trip of
-  an opening entry — otherwise the avatar that walked in on the road could
-  never walk back out on it). A roomless opening leads onto the GROUND, and
-  since plan-grundflaeche.md the ground is a room like any other, so that is
-  the room it lets out of — nobody is roomless any more.
+- ``map3d.boundary_openings`` are GATES in a FENCE around a plot. A location
+  with non-empty ``boundary_openings`` is FENCED (:func:`fenced`): one enters
+  and leaves the plot only through its gates (within :data:`GATE_TOLERANCE_M`).
+  A location without them has a freely walkable boundary.
+- A building is entered and left through ANY of its level-0 OUTSIDE DOORS
+  (:func:`outside_door_frames`, :func:`at_door`), into / out of the room that
+  door belongs to.
+- ``entry_room`` is ONLY the arrival room for travel / teleport / scheduler —
+  never an exit rule.
+- No-trap rule: an UNFENCED location with zero level-0 outside doors lets one
+  leave from any room.
+- ``boundary_openings`` carry no ``room`` field; the room always comes from the
+  point (:func:`room_at_point`) or the door.
 
-The ``entry_room`` gate stays the gameplay authority for every other edge —
-except where nothing stands between the walker and the edge: the ground and
-a room without walls (``no_walls``, or an outdoor zone ``always_visible``)
-let one out over ANY edge (user decision 2026-11-08). Before that the open
-lake of a location whose entry room is its shore was an invisible wall:
-every step over its edge was refused and the avatar snapped back.
-
-Pure functions over location dicts on purpose: no DB, no config (the one
-import from ``app.models.world`` is the ground room's constant id, nothing
-that reads) — the smoke ``scripts/smoke_boundary_entry.py`` derives its
-expectations by hand and runs without a server or a world.
-
-AN EDGE IS AN INDEX (contract v6 Nr. 5). A location is a drawn polygon, so an
-opening names the 0-based index of the boundary edge it sits on (edge i =
-point i → point i+1) and ``at ∈ [0, 1]`` runs along that edge. The letters
-N/E/S/W are gone, and so is the ``tile_rotation`` turn that used to rotate
-them: a location faces the way its pin says (§ A1.1), and the boundary is
-authored in that same local frame. The index is what identifies an opening
-everywhere it travels — the journey remembers it as ``entry_edge``, the
-walking gate matches it, and none of them re-derives a point of their own:
-``world_geometry.polygon_edge_frame`` computes it once, for the scene payload
-and for this module alike.
-
-The worldmap row is the third consumer and reads the same function:
-:func:`opening_world_frames` is what ``world_ops.build_worldmap_payload``
-hands out as ``locations[].openings`` (§ A1.3), so the 3D client renders the
-very pass-throughs the entry gate judges — it computes nothing about an
-opening itself.
+Pure functions over location dicts and composed scene dicts: no DB, no config
+(the only model imports are the reserved ground/floor room id constants).
+Composing the scene is the caller's job (``world_ops`` cached location block).
 """
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.models.world import GROUND_ROOM_ID
+from app.models.world import GROUND_ROOM_ID, floor_room_id
+
+#: Distance (metres) from a plot gate point that counts as crossing through it.
+GATE_TOLERANCE_M = 1.5
+#: Extra slack (metres) on each side of a door's half-width along the wall.
+DOOR_ALONG_PAD_M = 0.3
+#: Distance (metres) perpendicular to a door plane that counts as at the door.
+DOOR_ACROSS_M = 1.5
 
 
 def _openings(location: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """The authored openings of a location as ``{edge, at, room}`` entries.
+    """The authored plot gates of a location as ``{edge, at}`` entries.
 
-    ``edge`` is the boundary EDGE INDEX, ``at`` the position along that edge
-    as a fraction; a missing or unusable ``at`` degrades to the edge midpoint
-    0.5 (the one degradation rule, applied in ``polygon_edge_frame``). An
-    entry whose edge is not a plain index is dropped — the sanitizer already
-    refuses those, so what is left here is a hand-posted blob.
+    ``edge`` is the 0-based boundary edge index, ``at`` the fraction along that
+    edge (degrades to 0.5 in ``polygon_edge_frame`` when missing/unusable).
+    Entries whose edge is not a non-negative int are skipped.
     """
     map3d = location.get("map3d") if isinstance(location, dict) else None
     if not isinstance(map3d, dict):
@@ -77,43 +50,26 @@ def _openings(location: Dict[str, Any]) -> List[Dict[str, Any]]:
         edge = op.get("edge")
         if isinstance(edge, bool) or not isinstance(edge, int) or edge < 0:
             continue
-        out.append({"edge": edge, "at": op.get("at"),
-                    "room": str(op.get("room") or "").strip()})
+        out.append({"edge": edge, "at": op.get("at")})
     return out
 
 
 def _r(value: float, digits: int = 2) -> float:
-    """Round for the payload — and never emit ``-0.0``.
-
-    ``+ 0.0`` is what normalizes it: IEEE-754 says ``-0.0 + 0.0 == +0.0``,
-    while ``round()`` alone keeps the sign a normal of a west-running edge
-    picks up.
-    """
+    """Round for payloads and normalize ``-0.0`` to ``0.0``."""
     return round(value, digits) + 0.0
 
 
+def fenced(location: Dict[str, Any]) -> bool:
+    """True when the location has at least one authored plot gate (fenced)."""
+    return bool(_openings(location))
+
+
 def opening_world_frames(location: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Every authored opening as ``{edge, at_world, inward, room}`` in WORLD
-    metres — the finished pass-through, ready to be delivered.
+    """Every authored plot gate as ``{edge, at_world, inward}`` in WORLD metres.
 
-    Empty for a location without an effective boundary (unplaced, or without
-    a DRAWN outline — since 2026-08-19 a legacy ``plan_width_m`` is no shape
-    any more): such a location has no area, so its openings have no point
-    either.
-
-    ONE geometry source: ``polygon_edge_frame`` puts the point AND the
-    measured unit inward normal on the local boundary edge, ``local_to_world``
-    maps the local frame into the world (§ A1.1). The normal is a DIRECTION,
-    so it takes the same rotation about the ORIGIN instead of the full
-    mapping. An index the boundary does not have is skipped, exactly like an
-    unusable edge letter used to be. ``room`` is the authored link, '' when
-    there is none — existence of that room is the entry gate's question
-    (:func:`opening_entry_room`), not the geometry's.
-
-    Hand-derived: a location at (50, 50) whose drawn boundary is the centred
-    10 m square (−5,−5) (5,−5) (5,5) (−5,5) — edge 0 at 0.5 is local (0, −5)
-    with inward (0, 1) → world (50, 45) / (0, 1), and the same location at
-    yaw 90 → (45, 50) / (1, 0).
+    Empty for a location without an effective drawn boundary. Uses
+    ``world_geometry.polygon_edge_frame`` and ``local_to_world`` so the
+    worldmap payload and the walking gate always agree.
     """
     from app.core.world_geometry import (effective_boundary, local_to_world,
                                          polygon_edge_frame)
@@ -133,117 +89,232 @@ def opening_world_frames(location: Dict[str, Any]) -> List[Dict[str, Any]]:
         wnx, wnz = local_to_world(nx, nz, 0.0, 0.0, yaw)
         out.append({"edge": int(op["edge"]),
                     "at_world": [_r(x), _r(z)],
-                    "inward": [_r(wnx, 4), _r(wnz, 4)],
-                    "room": op["room"]})
+                    "inward": [_r(wnx, 4), _r(wnz, 4)]})
     return out
 
 
 def opening_world_points(location: Dict[str, Any]
                          ) -> List[Tuple[int, Tuple[float, float]]]:
-    """Every authored opening as ``(edge index, (x, z))`` in WORLD metres.
-
-    The point half of :func:`opening_world_frames`, for the callers that
-    measure a distance and care about nothing else (the entry/exit gate of
-    ``POST /play/pos``). Same numbers, one derivation.
-    """
+    """Every authored plot gate as ``(edge index, (x, z))`` in WORLD metres."""
     return [(f["edge"], (f["at_world"][0], f["at_world"][1]))
             for f in opening_world_frames(location)]
 
 
 def opening_world_point(location: Dict[str, Any],
                         edge: Any) -> Optional[Tuple[float, float]]:
-    """World point of the opening on boundary edge ``edge``, or None.
-
-    Several openings on the same edge (a road in and a gate) are legal; the
-    FIRST authored one wins — a deterministic answer, and the caller that
-    needs a specific one iterates :func:`opening_world_points` itself.
-    """
+    """World point of the first plot gate on boundary edge ``edge``, or None."""
     for op_edge, point in opening_world_points(location):
         if op_edge == edge:
             return point
     return None
 
 
-def _room_exists(location: Dict[str, Any], room_id: str) -> bool:
-    return any(isinstance(r, dict) and r.get("id") == room_id
-               for r in (location.get("rooms") or []))
+def _location_pose(location: Any) -> Optional[Tuple[float, float, float]]:
+    """``(pos_x, pos_z, yaw_deg)`` of a placed location, or None."""
+    if not isinstance(location, dict):
+        return None
+    px, pz = location.get("pos_x"), location.get("pos_z")
+    if px is None or pz is None:
+        return None
+    try:
+        return float(px), float(pz), float(location.get("yaw_deg") or 0.0)
+    except (TypeError, ValueError):
+        return None
 
 
-def opening_entry_room(target: Dict[str, Any], entry_edge: Any) -> str:
-    """Room an authored opening on boundary edge ``entry_edge`` routes into.
+def outside_door_frames(location: Dict[str, Any],
+                        scene: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Level-0 outside doors of ``location`` in WORLD metres.
 
-    '' when the edge carries no opening with a valid room link — the opening
-    then makes no statement and the caller falls back to
-    ``world.get_arrival_room_id``. A room link that names no existing room is
-    ignored (the sanitizer checks format, never existence).
+    Each entry is ``{"at_world": [x, z], "outward": [nx, nz], "width_m": w,
+    "room": str, "level": 0, "hull": bool}``. Returns ``[]`` when ``scene`` is
+    None or ``location`` is unplaced.
     """
-    for op in _openings(target):
-        if op["edge"] == entry_edge and op["room"] \
-                and _room_exists(target, op["room"]):
-            return op["room"]
-    return ""
-
-
-def opening_on_edge(location: Dict[str, Any], edge: Any) -> bool:
-    """True when ``location`` carries an authored opening on boundary ``edge``.
-
-    The room link answers "which room does it route into"; this answers "is
-    this edge a way in at all". Since the strictness decision of 2026-08-04
-    the second question stands on its own: an opening WITHOUT a room link is
-    an entrance too, it just leaves the room to the arrival rule.
-    """
-    return any(op["edge"] == edge for op in _openings(location))
-
-
-def has_entrance(location: Dict[str, Any]) -> bool:
-    """True when the location carries at least one authored opening.
-
-    NOT a reachability verdict — it has not been one since the free-boundary
-    rule (E4 task 5): a location WITHOUT any opening is entered anywhere along
-    its edge, one WITH openings only across them. The old step gate this
-    function once served is gone with the grid, so the two consumers left are
-    an editor hint (the boundary-openings section says which of the two modes
-    the location is in) and the payload flag ``Location.has_entrance`` that
-    carries it there. Nothing decides a crossing by it — that is
-    ``POST /play/pos`` with ``opening_world_points`` / ``may_leave``.
-    """
-    return bool(_openings(location))
-
-
-def may_leave(current: Dict[str, Any], current_room: str, entry_room: str,
-              exit_edge: Any) -> bool:
-    """Whether the avatar may leave ``current`` across ``exit_edge``.
-
-    Four ways out, in this order:
-
-    - across an authored opening on that edge, from the room it links to — an
-      opening without a link leads onto the ground, so standing on the ground
-      is what that one requires (the round trip of an opening entry);
-    - from anywhere when the location declares no entry room;
-    - from an OPEN room over any edge (:func:`room_is_open` — the ground, or
-      a room without walls): no wall stands between it and the edge, so a
-      gate there would be an invisible one (user decision 2026-11-08);
-    - from the entry room, the gameplay gate for every other edge.
-
-    A WALLED room other than the entry room stays shut: whoever stands in it
-    walks into the entry room (or out onto the ground) first.
-    """
-    for op in _openings(current):
-        if op["edge"] != exit_edge:
+    from app.core.scene_recipe import _door_outward
+    from app.core.world_geometry import local_to_world
+    if not isinstance(scene, dict):
+        return []
+    pose = _location_pose(location)
+    if pose is None:
+        return []
+    cx, cz, yaw = pose
+    out: List[Dict[str, Any]] = []
+    for d in scene.get("doorways") or []:
+        if not isinstance(d, dict) or not d.get("outside"):
             continue
-        if (op["room"] or GROUND_ROOM_ID) == current_room:
+        if int(d.get("level") or 0) != 0:
+            continue
+        at_local = d.get("at_world")
+        if not isinstance(at_local, (list, tuple)) or len(at_local) < 2:
+            continue
+        hull = bool(d.get("hull"))
+        raw_norm = d.get("outward_normal")
+        if not (isinstance(raw_norm, (list, tuple)) and len(raw_norm) >= 2):
+            if not isinstance(d.get("along"), (list, tuple)) or len(d["along"]) < 2:
+                continue
+            raw_norm = _door_outward(d)
+        nx, nz = float(raw_norm[0]), float(raw_norm[1])
+        rooms = d.get("rooms") or []
+        room_id = str(rooms[0]) if rooms else ""
+        wx, wz = local_to_world(float(at_local[0]), float(at_local[1]),
+                                cx, cz, yaw)
+        wnx, wnz = local_to_world(nx, nz, 0.0, 0.0, yaw)
+        out.append({
+            "at_world": [_r(wx), _r(wz)],
+            "outward": [_r(wnx, 4), _r(wnz, 4)],
+            "width_m": _r(float(d.get("width_m") or 0.0), 3),
+            "room": room_id,
+            "level": 0,
+            "hull": hull,
+        })
+    return out
+
+
+def entry_geometry(location: Dict[str, Any],
+                   scene: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """World-space entry geometry of ``location`` from its composed ``scene``.
+
+    Returns ``{"doors": [...], "rooms": [...], "contour": [...]}`` where:
+    - ``doors`` are the level-0 outside doors (:func:`outside_door_frames`),
+    - ``rooms`` are every level-0 room block of ``scene`` as
+      ``{"room": id, "outline": [[x, z], ...], "walled": bool}`` in world metres,
+    - ``contour`` is the level-0 building outline (``scene_recipe._outline_world``)
+      in world metres, or ``[]``.
+    """
+    from app.core.scene_recipe import _outline_world
+    from app.core.world_geometry import local_to_world
+    pose = _location_pose(location)
+    if pose is None:
+        return {"doors": [], "rooms": [], "contour": []}
+    cx, cz, yaw = pose
+    doors = outside_door_frames(location, scene)
+    rooms: List[Dict[str, Any]] = []
+    if isinstance(scene, dict):
+        for rb in scene.get("rooms") or []:
+            if not isinstance(rb, dict):
+                continue
+            if int(rb.get("level") or 0) != 0:
+                continue
+            outline = rb.get("outline") or []
+            if len(outline) < 3:
+                continue
+            rid = str(rb.get("room_id") or "")
+            world_pts = []
+            for pt in outline:
+                wx, wz = local_to_world(float(pt[0]), float(pt[1]),
+                                        cx, cz, yaw)
+                world_pts.append([_r(wx, 4), _r(wz, 4)])
+            rooms.append({
+                "room": rid,
+                "outline": world_pts,
+                "walled": not room_is_open(location, rid),
+            })
+    map3d = location.get("map3d") if isinstance(location, dict) else None
+    local_contour = _outline_world(map3d, 0) if isinstance(map3d, dict) else []
+    contour: List[List[float]] = []
+    for pt in local_contour:
+        wx, wz = local_to_world(float(pt[0]), float(pt[1]), cx, cz, yaw)
+        contour.append([_r(wx, 4), _r(wz, 4)])
+    return {"doors": doors, "rooms": rooms, "contour": contour}
+
+
+def at_door(door: Dict[str, Any], x: float, z: float) -> bool:
+    """True when ``(x, z)`` lies within the crossing box of ``door``."""
+    cx, cz = door["at_world"]
+    out_x, out_z = door["outward"]
+    dx, dz = x - cx, z - cz
+    along = dx * (-out_z) + dz * out_x
+    across = dx * out_x + dz * out_z
+    half_w = float(door.get("width_m") or 0.0) / 2.0
+    return (abs(along) <= half_w + DOOR_ALONG_PAD_M
+            and abs(across) <= DOOR_ACROSS_M)
+
+
+def at_gate(location: Dict[str, Any], x: float, z: float) -> bool:
+    """True when ``(x, z)`` lies within :data:`GATE_TOLERANCE_M` of a plot gate."""
+    for _edge, (ox, oz) in opening_world_points(location):
+        if math.hypot(ox - x, oz - z) <= GATE_TOLERANCE_M:
             return True
-    if not entry_room or room_is_open(current, current_room):
-        return True
-    return current_room == entry_room
+    return False
+
+
+def room_at_point(geo: Optional[Dict[str, Any]], x: float, z: float) -> str:
+    """Room of ``geo`` containing ``(x, z)`` on level 0.
+
+    First matching level-0 room outline wins; inside the building contour but
+    in no room returns ``floor_room_id(0)`` (``"__floor__0"``); otherwise
+    :data:`GROUND_ROOM_ID` (``"__ground__"``).
+    """
+    from app.core.world_geometry import point_in_polygon
+    if isinstance(geo, dict):
+        for r in geo.get("rooms") or []:
+            if point_in_polygon(x, z, r.get("outline")):
+                return str(r.get("room") or GROUND_ROOM_ID)
+        contour = geo.get("contour") or []
+        if len(contour) >= 3 and point_in_polygon(x, z, contour):
+            return floor_room_id(0)
+    return GROUND_ROOM_ID
+
+
+def may_enter(location: Dict[str, Any], geo: Optional[Dict[str, Any]],
+              x: float, z: float) -> Tuple[bool, str, str]:
+    """Whether ``(x, z)`` may enter ``location``, returning ``(ok, reason, room)``.
+
+    - Fenced and not at a gate -> ``(False, "no_opening", "")``.
+    - Room is derived from ``(x, z)`` (:func:`room_at_point`). If that room is
+      walled and no outside door of that room satisfies :func:`at_door` ->
+      ``(False, "no_door", "")``.
+    - Otherwise ``(True, "", room)``.
+    """
+    if fenced(location) and not at_gate(location, x, z):
+        return False, "no_opening", ""
+    room = room_at_point(geo, x, z)
+    if not room_is_open(location, room):
+        doors = (geo.get("doors") or []) if isinstance(geo, dict) else []
+        if not any(d.get("room") == room and at_door(d, x, z) for d in doors):
+            return False, "no_door", ""
+    return True, "", room
+
+
+def may_leave(location: Dict[str, Any], geo: Optional[Dict[str, Any]],
+              current_room: str, x: float, z: float) -> Tuple[bool, str]:
+    """Whether an avatar in ``current_room`` may leave ``location`` via ``(x, z)``.
+
+    - Fenced and not at a gate -> ``(False, "leave_blocked")``.
+    - Walled ``current_room`` requires being at one of its outside doors, EXCEPT
+      under the no-trap rule (zero level-0 outside doors on the location — once
+      any fence gate check has passed, a character cannot be trapped in a room
+      with no outside door at all).
+    - The walled-room rule is skipped when ``current_room`` has no drawn
+      layout: it has no walls or doors to pass, so a character a teleport or
+      the scheduler put into a layout-less entry room is never trapped (at a
+      fenced plot it still leaves through a gate).
+    - ``entry_room`` plays no role.
+    """
+    if fenced(location) and not at_gate(location, x, z):
+        return False, "leave_blocked"
+    if (current_room and not room_is_open(location, current_room)
+            and _has_layout(location, current_room)):
+        doors = (geo.get("doors") or []) if isinstance(geo, dict) else []
+        if doors:
+            if not any(d.get("room") == current_room and at_door(d, x, z)
+                       for d in doors):
+                return False, "leave_blocked"
+    return True, ""
+
+
+def _has_layout(location: Dict[str, Any], room_id: str) -> bool:
+    """Whether ``room_id`` is a room of ``location`` with a drawn layout."""
+    for room in (location.get("rooms") if isinstance(location, dict) else None) or []:
+        if isinstance(room, dict) and str(room.get("id") or "").strip() == room_id:
+            return isinstance(room.get("layout"), dict) and bool(room["layout"])
+    return False
 
 
 def room_is_open(location: Dict[str, Any], room_id: str) -> bool:
-    """Whether nothing stands between ``room_id`` and the location's edge:
-    the ground, or a room of ``location`` without walls — ``no_walls`` (open
-    zone, pavilion) or ``always_visible`` (an outdoor zone, which builds no
-    shell either; the same pair ``scene_recipe`` reads for "no wall here").
-    A room the location does not list counts as walled."""
+    """Whether nothing stands between ``room_id`` and the plot outside:
+    the ground, or a room of ``location`` without walls (``no_walls`` or
+    ``always_visible``). A room the location does not list counts as walled."""
     if room_id == GROUND_ROOM_ID:
         return True
     for room in (location.get("rooms") if isinstance(location, dict) else None) or []:

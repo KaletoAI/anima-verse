@@ -15,12 +15,12 @@
  * for the same reason: they belong to the plot, not to a selected room, so the
  * room panel is the wrong home and the plan's own column was the expensive
  * one. An ordinary means of every location, not a speciality of area/detail
- * ones (ruling 2026-08-04) — listed with zero openings too, when the server
- * reports no entrance at all, which is exactly where one gets added.
+ * ones (ruling 2026-08-04) — listed with zero openings too, when the plot is
+ * unfenced, which is where gates get added to fence it.
  */
 import { useI18n } from '../../i18n/I18nProvider'
 import { clamp, edgeSegment, r4 } from './planGeometry'
-import { roomLabel, type Map3D, type Room, type SceneProblem } from './worldTypes'
+import { type Map3D, type Room, type SceneProblem } from './worldTypes'
 
 interface Props {
   /** The plot exists (`map3d.boundary`, ≥ 3 points) — the legend draws its
@@ -43,18 +43,17 @@ interface Props {
   boundaryM: Array<[number, number]>
   /** Width of the location in metres — the cap for a pass-through. */
   planW: number
-  /** Rooms on the plan, for the "leads to" link. */
-  placedRooms: Room[]
   selectedBoundary: number | null
   onSelectBoundary: (i: number | null) => void
-  /** The server found no way in at all — then the list is shown even empty. */
-  hasEntrance?: boolean
+  /** Server verdict: is the plot fenced (`boundary_openings` non-empty)?
+   *  When false, the section shows the open-plot hint even with zero gates. */
+  fenced?: boolean
 }
 
 export function PlanFindings({
   hasBoundary, placedOnMap, tinyRooms, tinyRoomM, problems, problemText,
-  map3d, onMap3d, boundaryM, planW, placedRooms, selectedBoundary,
-  onSelectBoundary, hasEntrance,
+  map3d, onMap3d, boundaryM, planW, selectedBoundary,
+  onSelectBoundary, fenced,
 }: Props) {
   const { t } = useI18n()
   return (
@@ -114,12 +113,12 @@ export function PlanFindings({
       ))}
 
       {onMap3d
-        && (map3d?.boundary_openings?.length || hasEntrance === false) ? (
+        && (map3d?.boundary_openings?.length || fenced === false) ? (
         <div className="ga-form" style={{ gap: 4, marginTop: 6 }}>
           <div className="ga-form-section-label">{t('Boundary pass-throughs')}</div>
-          {hasEntrance === false ? (
+          {fenced === false ? (
             <div className="ga-anchor-banner">
-              <span>ℹ {t('No pass-through drawn: characters may enter anywhere along the boundary. Draw openings to channel entry.')}</span>
+              <span>ℹ {t('No pass-through drawn: the plot is open on every side. Draw pass-throughs to fence it — then it is entered only through them.')}</span>
             </div>
           ) : null}
           {(map3d?.boundary_openings || []).map((bo, i) => {
@@ -181,15 +180,6 @@ export function PlanFindings({
                       write({ width_m: clamp(v, 0.5, planW || 10) })
                     }
                   }} />
-                <select className="ga-input" style={{ flex: 1, minWidth: 80 }}
-                  value={bo.room || ''}
-                  title={t('Linked room — where the pass-through leads (feeds the future journey walk-through).')}
-                  onChange={(e) => write({ room: e.target.value || undefined })}>
-                  <option value="">{t('No room link')}</option>
-                  {placedRooms.map((r) => (
-                    <option key={r.id} value={r.id}>{roomLabel(r, t)}</option>
-                  ))}
-                </select>
                 <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
                   title={t('Remove')}
                   onClick={(e) => {

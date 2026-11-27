@@ -100,10 +100,9 @@ export interface BoundaryOpeningMeta {
   at: number;
   width_m: number;
   type?: string;
-  room?: string;
 }
 
-/** One authored boundary pass-through as the WORLDMAP row delivers it
+/** One authored boundary gate as the WORLDMAP row delivers it
  *  (§ A1.3, contract v6): computed by the server with the very function the
  *  entry gate of `POST /play/pos` measures with
  *  (`boundary_entry.opening_world_frames`), so offer and crossing cannot
@@ -112,12 +111,10 @@ export interface BoundaryOpeningMeta {
 export interface MapOpening {
   /** boundary EDGE INDEX (edge i = point i -> i+1) */
   edge: number;
-  /** the pass-through point, world metres */
+  /** the gate point, world metres */
   at_world: [number, number];
   /** inward unit normal at that point, world axes (x east, z south) */
   inward: [number, number];
-  /** room this opening routes into; '' = none, then the arrival rule decides */
-  room?: string;
 }
 
 export interface WorldLocation {

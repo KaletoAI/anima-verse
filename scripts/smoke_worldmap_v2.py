@@ -262,7 +262,8 @@ def main() -> int:
     check("inn.plan_width_m", inn.get("plan_width_m"), 10.0)
     check("inn keys", sorted(inn),
           sorted(["id", "name", "pos_x", "pos_z", "yaw_deg", "plan_width_m",
-                  "map3d", "layout_sig", "boundary", "openings"]))
+                  "map3d", "layout_sig", "boundary", "openings",
+                  "fenced", "doors"]))
     # v6 "Gebiete": a location travels as a polygon and as nothing else —
     # the inn's drawn square in LOCAL metres (edge 10 -> half 5), clockwise.
     check("inn.boundary (the drawn square, CW)", inn.get("boundary"),
@@ -485,18 +486,14 @@ def main() -> int:
     # edge 0 at 0.5 -> local (0, -6), inward (0, 1) -> world the same at yaw 0.
     set_map3d(boundary_openings=[{"edge": 0, "at": 0.5, "width_m": 2}])
     check("edge 0 at 0.5 of the 12 m square, yaw 0", gate_openings(),
-          [{"edge": 0, "at_world": [0.0, -6.0], "inward": [0.0, 1.0],
-            "room": ""}])
-    # The room link travels along; existence of that room is the entry gate's
-    # question, not the geometry's.
-    set_map3d(boundary_openings=[{"edge": 0, "at": 0.5, "width_m": 2,
-                                  "room": "hall"}])
-    check("the room link rides along", gate_openings()[0].get("room"), "hall")
+          [{"edge": 0, "at_world": [0.0, -6.0], "inward": [0.0, 1.0]}])
+    check("fenced is True when boundary_openings is non-empty",
+          entry(build_worldmap_payload("demo_avatar", show_all=True),
+                GATE).get("fenced"), True)
     # yaw 90: the point turns about the PIN, the normal about the ORIGIN.
     update_location_position(GATE, 0.0, 0.0, 90.0)
     check("yaw 90 turns point and normal", gate_openings(),
-          [{"edge": 0, "at_world": [-6.0, 0.0], "inward": [1.0, 0.0],
-            "room": "hall"}])
+          [{"edge": 0, "at_world": [-6.0, 0.0], "inward": [1.0, 0.0]}])
     update_location_position(GATE, 0.0, 0.0, 0.0)
     # An index the boundary does not have names no edge and therefore no
     # point — the square has exactly the edges 0..3.
@@ -507,6 +504,61 @@ def main() -> int:
     set_map3d(boundary=None, plan_width_m=None,
               boundary_openings=[{"edge": 0, "at": 0.5, "width_m": 2}])
     check("no boundary, no opening points", gate_openings(), [])
+
+    print("\n[10] building doors, fenced flag, and root entry tolerances")
+    _data = _load_world_data()
+    _data.setdefault("locations", []).append({
+        "id": "bldg_b",
+        "name": "Building B",
+        "pos_x": 100.0,
+        "pos_z": 100.0,
+        "yaw_deg": 0.0,
+        "entry_room": "hall",
+        "map3d": {
+            "boundary": [[-5.0, -3.0], [5.0, -3.0], [5.0, 3.0], [-5.0, 3.0]],
+            "plan_width_m": 10.0,
+        },
+        "rooms": [
+            {
+                "id": "hall",
+                "name": "Hall",
+                "layout": {
+                    "x": -5.0, "y": -3.0, "w": 6.0, "d": 6.0, "level": 0,
+                    "openings": [
+                        {"edge": "S", "at": 0.5, "width_m": 1.2,
+                         "type": "door", "to": "outside"},
+                    ],
+                },
+            },
+            {
+                "id": "kitchen",
+                "name": "Kitchen",
+                "layout": {
+                    "x": 1.0, "y": -3.0, "w": 4.0, "d": 6.0, "level": 0,
+                    "openings": [
+                        {"edge": "E", "at": 0.5, "width_m": 0.9,
+                         "type": "door", "to": "outside"},
+                    ],
+                },
+            },
+        ],
+    })
+    _save_world_data(_data)
+    wm_b = build_worldmap_payload("demo_avatar", show_all=True)
+    check("root door_tolerance", wm_b.get("door_tolerance"),
+          {"along_pad_m": 0.3, "across_m": 1.5})
+    check("root gate_tolerance_m", wm_b.get("gate_tolerance_m"), 1.5)
+    row_b = entry(wm_b, "bldg_b")
+    check("location B fenced is False", row_b.get("fenced"), False)
+    doors_b = sorted(row_b.get("doors") or [], key=lambda d: d["room"])
+    check("location B doors [hall, kitchen] match hand-derived world coords",
+          doors_b,
+          [
+              {"x": 98.0, "z": 103.0, "out_x": 0.0, "out_z": 1.0,
+               "width_m": 1.2, "room": "hall", "level": 0},
+              {"x": 105.0, "z": 100.0, "out_x": 1.0, "out_z": 0.0,
+               "width_m": 0.9, "room": "kitchen", "level": 0},
+          ])
 
     print()
     if FAILURES:

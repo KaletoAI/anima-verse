@@ -688,7 +688,7 @@ export function LocationEditor({ location, items, allLocations, onChanged, onDir
             && Number.isFinite(location.pos_x)
             && typeof location.pos_z === 'number'
             && Number.isFinite(location.pos_z)}
-          hasEntrance={location.has_entrance}
+          fenced={location.fenced}
           onSelectRoom={setFloorRoomSel}
           scene={scene}
           calibrationRoomId={calibration?.roomId || ''}
