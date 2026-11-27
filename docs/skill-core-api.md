@@ -1538,12 +1538,17 @@ the admin list exposes this through **Remove finished** with confirmation.
 **Wrong steps.** Every open or paused entry is judged against `invalid_reason` once
 after a start and then every `SCAN_INTERVAL_S` (the tick; `GET /improvements` only
 reads), a scan judges its entry before its diff, and a step is judged once more right
-before it is submitted and at the worker. The tick's validity pass and its standing
-rescan are held while the world is frozen or the task queue is paused
-(`engine.automatic_pass_held`, shown in the queue panel as `validity_held`) — like
-every hygiene job, nothing is deleted then; the entries are due on the first tick
-after. Explicit work is not held: **Remove invalid**, the scan of a new or rescanned
-entry and the check before a forced (**Run now**) step. A wrong step (pending, skipped or failed — never a
+before it is submitted and at the worker. While the world is frozen or the task
+queue is paused (`engine.automatic_pass_held`, shown in the queue panel as
+`validity_held`) the automatic deleting of a NOT forced entry is held like every
+hygiene job: the tick's validity pass skips it, and its standing rescan only ADDS
+(`scan(add_only=True)` — new candidates, reopened fulfilled ones; nothing judged,
+closed or deleted, `last_scan_at` left at the last full scan). Its full rescan and
+validity pass are due on the first tick after. A forced (**Run now**) entry runs
+under a freeze or pause by design, so its rescans and validity passes go on. Explicit
+work is not held either: **Remove invalid**, the scan of a new or rescanned entry and
+the check before a step runs. An `invalid_reason` that cannot judge (an unreadable
+input) raises; the engine then keeps the entry's steps. A wrong step (pending, skipped or failed — never a
 running one, never done/fulfilled history) is deleted together with the files
 `release_invalid` names. `GET /improvements/invalid` is the dry run, `POST
 /improvements/remove-invalid` the explicit pass behind **Remove invalid** in the

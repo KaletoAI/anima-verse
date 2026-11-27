@@ -19,6 +19,9 @@ FIXTURE (all signatures 12 hex, the outfit-signature shape)
   Out — humanoid on the pipeline whose character folder is a symlink OUT of the
         storage. O1 = "c1c1c1c1c1c1": tpose_O1.png outside the world.
   The .json sidecars are written as "{}" (2 B each).
+  Ann, Out (template "human-roleplay") and Rex ("animal-default") are real
+  character rows: ``invalid_reason`` reads profile, config and template strictly
+  before the (fixed) pipeline verdict.
 
   Standing entry E (mesh_from_tpose, backend "hy"), steps as the OLD rule
   stored them: Ann:A1:t1, Ann:A2:t2, Out:O1:t3, Rex:R1:t4 pending; Ann:A0:t0
@@ -48,6 +51,13 @@ EXPECTATIONS, derived by hand from the rules
     {"skipped": "invalid: <reason>"} and the row is gone; apply never ran.
 [7] An entry whose type cannot judge (invalid_reason raises) is left as it
     is: reported with the error, its step still pending.
+[8] invalid_reason cannot judge → it RAISES, never "humanoid": Ann's
+    profile_json made unreadable ("[" is no JSON) → raises (a JSONDecodeError,
+    a ValueError); Ann's template set to "no-such-template" → raises
+    LookupError. remove_invalid over a one_shot H with the step Ann:A1:t6 then
+    reports an error and keeps the step pending. A character that is not in the
+    roster ("Gone:<A1>:t1") → "" (not this rule's to judge). Ann restored →
+    FIGURE_BUILD again.
 """
 import os
 import sys
@@ -109,6 +119,10 @@ A2_FILES = [write(ANN / f"tpose_{A2}.png", 200), write(ANN / f"tpose_{A2}.json",
 REX_FILE = write(CHARS / "Rex" / "model_refs" / f"tpose_{R1}.png", 70)
 OUT_FILE = write(OUTSIDE / "model_refs" / f"tpose_{O1}.png", 40)
 (CHARS / "Out").symlink_to(OUTSIDE, target_is_directory=True)
+
+from app.models.character import save_character_profile  # noqa: E402
+for _name, _template in (("Ann", "human-roleplay"), ("Out", "human-roleplay"), ("Rex", "animal-default")):
+    assert save_character_profile(_name, {"character_name": _name, "template": _template}, create_new=True)
 
 
 def load_old_type():
@@ -215,6 +229,38 @@ check("reported with the error, nothing removed", (report["removed"], report["en
       (0, "roster unreadable"))
 check("…its step still pending", [s["status"] for s in store.list_steps(G)], ["pending"])
 store.delete(G)
+
+print("[8] invalid_reason raises when it cannot judge")
+conn = db.get_connection()
+ANN_ROW = conn.execute("SELECT profile_json, template FROM characters WHERE name='Ann'").fetchone()
+
+
+def ann_row(profile_json, template):
+    with db.transaction() as c:
+        c.execute("UPDATE characters SET profile_json=?, template=? WHERE name='Ann'", (profile_json, template))
+
+
+def raised(key):
+    try:
+        return ("returned", TYPE.invalid_reason(key, PARAMS))
+    except Exception as e:  # noqa: BLE001 — the class is what is checked
+        return ("raised", isinstance(e, (ValueError, LookupError)))
+
+
+ann_row("[", ANN_ROW[1])
+check("unreadable profile → raises", raised(f"Ann:{A1}:t6"), ("raised", True))
+H = store.create(TYPE.id, "Unreadable", PARAMS, "one_shot")["id"]
+store.replace_steps_scan(H, [(f"Ann:{A1}:t6", "Ann · a1", 0, "")])
+report = engine.remove_invalid(H)
+check("…remove_invalid reports an error, removes nothing",
+      (report["removed"], bool(report["entries"] and report["entries"][0]["error"])), (0, True))
+check("…its step still pending", [s["status"] for s in store.list_steps(H)], ["pending"])
+store.delete(H)
+ann_row('{"character_name": "Ann", "template": "no-such-template"}', "no-such-template")
+check("unknown template → raises", raised(f"Ann:{A1}:t6"), ("raised", True))
+check("a character not in the roster → ''", raised(f"Gone:{A1}:t1"), ("returned", ""))
+ann_row(ANN_ROW[0], ANN_ROW[1])
+check("Ann restored → Figure Build again", raised(f"Ann:{A1}:t6"), ("returned", FIG))
 
 for p in patches:
     p.stop()

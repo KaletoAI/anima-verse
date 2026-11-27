@@ -114,11 +114,28 @@ class MeshFromTpose(ImprovementType):
         return split_key(key)[0]
 
     def invalid_reason(self, key: str, params: Dict[str, Any]) -> str:
+        """``FIGURE_BUILD`` for a character on the base-body pipeline. The readers behind
+        ``base_body.is_base_pipeline`` fail OPEN (an unreadable profile or template counts as
+        humanoid), which here would drop a valid step with its files — so the inputs are read
+        strictly first, and one that cannot be read RAISES: the engine keeps the step
+        (``engine.remove_invalid``). A character that is not in the roster any more is not this
+        rule's to judge ("")."""
         name, signature = split_key(key)
         from app.core.model_refs import is_state_fork
         if not signature or is_state_fork(signature):
             return NOT_A_COMBINATION
-        return FIGURE_BUILD if _on_figure_pipeline(name) else ""
+        from app.core import base_body
+        from app.models.character import (get_character_config, get_character_profile,
+                                          list_available_characters)
+        from app.models.character_template import template_features
+        if name not in list_available_characters(include_dormant=True, strict=True):
+            return ""
+        profile = get_character_profile(name, strict=True)
+        get_character_config(name, profile=profile, strict=True)
+        template = profile.get("template") or "human-default"
+        if template_features(template) is None:
+            raise LookupError(f"Character template not found: {template}")
+        return FIGURE_BUILD if base_body.is_base_pipeline(name, profile=profile) else ""
 
     def release_invalid(self, keys: List[str], params: Dict[str, Any], *,
                         explicit: bool, dry_run: bool) -> Dict[str, Any]:

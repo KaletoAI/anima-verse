@@ -50,6 +50,12 @@ VALIDATE_STATUSES = ("pending", "skipped", "failed")
 _validated_at: Dict[str, float] = {}
 _validated_lock = threading.Lock()
 
+# improvement_id -> ``time.monotonic()`` of its last ADD-ONLY scan (``scan(add_only=True)``, the rescan
+# of a standing entry while the automatic passes are held). In memory, like ``_validated_at``: it paces
+# those scans to the interval, while ``last_scan_at`` stays at the last FULL scan, so the full one is due
+# on the first tick after the hold.
+_added_at: Dict[str, float] = {}
+
 # Steps that came back BUSY (BackendBusyError / CandidateBusy), keyed
 # (improvement_id, candidate_key) -> SYSTEM time until which ``tick`` passes
 # them over. Without it the first pending step is submitted on every tick, and
@@ -87,23 +93,35 @@ def _deferred(improvement_id: str, key: str, now: datetime) -> bool:
 # Scanning
 # ---------------------------------------------------------------------------
 
-def scan(improvement_id: str) -> Dict[str, int]:
-    """Ask the type for its candidates and diff them onto the steps."""
+def scan(improvement_id: str, *, add_only: bool = False) -> Dict[str, int]:
+    """Ask the type for its candidates and diff them onto the steps.
+
+    ``add_only`` = the rescan while the automatic passes are held
+    (``automatic_pass_held``): new candidates are added and fulfilled ones
+    reopened, but nothing is judged, closed or deleted — no validity pass, no
+    unlisted step closed (``store.replace_steps_scan(close_unlisted=False)``),
+    ``last_scan_at`` left at the last full scan."""
     improvement = store.get(improvement_id)
     if improvement is None:
         return {"added": 0, "closed": 0}
     improvement_type = registry.get(improvement["type_id"])
     if improvement_type is None:
         return {"added": 0, "closed": 0}
-    # Wrong steps go BEFORE the diff: a step the type no longer lists would
-    # otherwise be closed as "fulfilled", which it is not, and its own files
-    # would stay behind.
-    remove_invalid(improvement_id)
+    if not add_only:
+        # Wrong steps go BEFORE the diff: a step the type no longer lists would
+        # otherwise be closed as "fulfilled", which it is not, and its own files
+        # would stay behind.
+        remove_invalid(improvement_id)
     listing = improvement_type.list_candidates(improvement["params"])
     result = store.replace_steps_scan(
         improvement_id,
         [(c.key, c.label, c.hub_jobs, c.note) for c in listing.candidates],
-        withheld=listing.withheld)
+        withheld=listing.withheld, close_unlisted=not add_only)
+    with _validated_lock:
+        if add_only:
+            _added_at[improvement_id] = time.monotonic()
+            return result
+        _added_at.pop(improvement_id, None)
     store.update(improvement_id, last_scan_at=utc_now_iso())
     # A one_shot whose scan finds nothing has nothing to do — ever. Without
     # this it would sit 'open' with 0/0 steps forever, because the only other
@@ -112,9 +130,16 @@ def scan(improvement_id: str) -> Dict[str, int]:
     return result
 
 
-def _scan_due(improvement: Dict[str, Any]) -> bool:
+def _scan_due(improvement: Dict[str, Any], *, add_only: bool = False) -> bool:
     """Only a standing entry rescans, and only on the interval.  A one_shot
-    was scanned when it was created; its candidate list is its whole job."""
+    was scanned when it was created; its candidate list is its whole job.
+    ``add_only``: the interval also runs from the last add-only scan
+    (``_added_at``)."""
+    if add_only:
+        with _validated_lock:
+            added = _added_at.get(improvement["id"])
+        if added is not None and time.monotonic() - added < SCAN_INTERVAL_S:
+            return False
     if improvement["mode"] != "standing":
         return False
     if improvement["status"] not in ("open", "paused"):
@@ -212,11 +237,13 @@ def remove_invalid(improvement_id: Optional[str] = None, *, keys: Optional[Itera
 
 
 def automatic_pass_held() -> str:
-    """Why the AUTOMATIC passes that delete (the validity pass and the standing rescan, which judges
-    its entry first) are held right now: "frozen" | "paused" | "" (they run). The same rule as every
-    other hygiene job (``periodic_jobs._sub_artefact_gc``): a world freeze or a task-queue pause stops
-    them. A person's explicit "Remove invalid", the check right before a forced step runs and the
-    scan of a new or rescanned entry are on-demand work and are not held."""
+    """Why the AUTOMATIC deleting of a NOT forced entry is held right now: "frozen" | "paused" | ""
+    (it runs). The same rule as every other hygiene job (``periodic_jobs._sub_artefact_gc``): a world
+    freeze or a task-queue pause stops it. Held means: the tick's validity pass skips the entry, and
+    its standing rescan only adds (``scan(add_only=True)``). A forced (Run now) entry runs under a
+    freeze or pause by design (``RUN_NOW_OVERRIDES``), so its rescans and validity passes go on; a
+    person's explicit "Remove invalid", the check right before a step runs and the scan of a new or
+    rescanned entry are on-demand work and are not held either."""
     if is_world_frozen():
         return "frozen"
     if get_task_queue().is_paused("default"):
@@ -226,13 +253,13 @@ def automatic_pass_held() -> str:
 
 def validate_due_entries() -> Dict[str, Any]:
     """The automatic validity pass over every open or paused entry that was not judged within
-    ``SCAN_INTERVAL_S`` (the tick calls it; after a start every entry is due once). Held by
-    ``automatic_pass_held`` — it judges nothing then and stamps nothing, so every entry is due as
-    soon as the world runs again; ``held`` names the gate."""
+    ``SCAN_INTERVAL_S`` (the tick calls it; after a start every entry is due once). While
+    ``automatic_pass_held`` names a gate (``held``) only the forced entries are judged; the others
+    are neither judged nor stamped, so they are due as soon as the hold ends."""
     total: Dict[str, Any] = {"removed": 0, "files": 0, "bytes": 0, "held": automatic_pass_held()}
-    if total["held"]:
-        return total
     for improvement in store.list_all():
+        if total["held"] and not improvement["forced"]:
+            continue
         if improvement["status"] not in ("open", "paused") or not _validate_due(improvement["id"]):
             continue
         try:
@@ -441,11 +468,13 @@ def tick() -> Dict[str, Any]:
             logger.info("improvements: %d orphaned step(s) made runnable again",
                         rescued)
 
-    # 2. Sweep finished one-shots and rescan standing entries, independent of idleness — but not
-    #    while the automatic passes are held: a scan drops its entry's wrong steps and their files
-    #    first (``scan``), and a freeze or pause stops that like any hygiene job. The entry's
-    #    ``last_scan_at`` stays old, so it rescans on the first tick after.
-    held = automatic_pass_held()
+    # 2. Sweep finished one-shots and rescan standing entries, independent of idleness. While the
+    #    automatic passes are held a NOT forced entry's rescan only adds (``scan(add_only=True)``):
+    #    a full scan drops its entry's wrong steps and their files first and closes what is no
+    #    longer listed, and a freeze or pause stops that like any hygiene job. Its ``last_scan_at``
+    #    stays old, so the full rescan comes on the first tick after. A forced entry runs under the
+    #    hold by design (``RUN_NOW_OVERRIDES``) and keeps its full rescans.
+    hold = automatic_pass_held()
     scanned = 0
     forced: Set[str] = set()
     for improvement in store.list_all():
@@ -462,10 +491,11 @@ def tick() -> Dict[str, Any]:
                 stop_run_now(improvement["id"])
             else:
                 forced.add(improvement["id"])
-        if held or not _scan_due(improvement):
+        add_only = bool(hold) and improvement["id"] not in forced
+        if not _scan_due(improvement, add_only=add_only):
             continue
         try:
-            scan(improvement["id"])
+            scan(improvement["id"], add_only=add_only)
             scanned += 1
         except Exception as e:  # noqa: BLE001 — one broken type must not stop the tick
             logger.warning("improvements: scan of %s failed: %s",
@@ -473,7 +503,8 @@ def tick() -> Dict[str, Any]:
 
     # 3. Every entry that did not rescan is judged for wrong steps on the scan
     #    interval (and once after a start) — a one_shot or paused entry never
-    #    rescans, and a scan judges its own entry first. Held like step 2.
+    #    rescans, and a full scan judges its own entry first. While held only
+    #    the forced entries are judged.
     validate_due_entries()
 
     # 4. One step.
@@ -707,7 +738,7 @@ def status() -> Dict[str, Any]:
             0, int(settings["idle_minutes"] * 60 - idle_seconds)),
         "frozen": is_world_frozen(),
         "reason": reason,
-        # The automatic validity pass and rescan ("frozen" | "paused" | "" = they run).
+        # The automatic deleting of a not forced entry ("frozen" | "paused" | "" = it runs).
         "validity_held": automatic_pass_held(),
         # A forced entry runs past the gates in RUN_NOW_OVERRIDES — the panel
         # says so instead of a gate that does not hold it back.

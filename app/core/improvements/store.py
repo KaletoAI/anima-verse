@@ -173,7 +173,8 @@ def _under(key: str, prefixes: Iterable[str]) -> bool:
 
 def replace_steps_scan(improvement_id: str,
                        candidates: List[Tuple[str, str, Optional[int], str]],
-                       withheld: Iterable[str] = ()
+                       withheld: Iterable[str] = (),
+                       *, close_unlisted: bool = True
                        ) -> Dict[str, int]:
     """candidates = [(key, label, hub_jobs, note)].  The scan's diff onto the
     steps:
@@ -200,6 +201,12 @@ def replace_steps_scan(improvement_id: str,
       this a transient omission would turn a done step whose run did not
       satisfy its subject into ``fulfilled``, and the next scan would reopen it
       and spend the same run again — once per flicker.
+
+    ``close_unlisted`` False = ADD only: the first three rules apply, no
+    unlisted key is closed (the scan while the automatic passes are held,
+    ``engine.automatic_pass_held`` — a step the type stopped listing may be a
+    WRONG one, and closing it as fulfilled would hide it from the validity
+    pass that drops it with its files once the hold ends).
 
     running/failed rows untouched.  Returns {"added": n, "closed": m} —
     ``added`` counts the inserted and the reopened steps, ``closed`` the
@@ -239,7 +246,7 @@ def replace_steps_scan(improvement_id: str,
             "SELECT candidate_key, status FROM improvement_steps "
             "WHERE improvement_id=? AND status IN ('pending', 'done')",
             (improvement_id,),
-        ).fetchall()
+        ).fetchall() if close_unlisted else []
         for row in rows:
             key = row["candidate_key"]
             if key in listed or _under(key, withheld):

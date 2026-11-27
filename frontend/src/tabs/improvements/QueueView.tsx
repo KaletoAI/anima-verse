@@ -294,7 +294,7 @@ export function QueueView() {
         </span>
         {status.validity_held ? (
           <span className="ga-form-hint"
-            title={t('Wrong steps and their files are removed again once this ends. Remove invalid in Entries works now.')}>
+            title={t('Standing entries still add new steps; wrong steps and their files are removed once this ends. Entries started with Run now and Remove invalid in Entries are not held.')}>
             {status.validity_held === 'frozen'
               ? t('Invalid-step check waits while the world is frozen')
               : t('Invalid-step check waits while the task queue is paused')}
