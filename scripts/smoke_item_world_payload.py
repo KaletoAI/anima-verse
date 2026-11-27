@@ -29,7 +29,9 @@ Hand-derived expectations:
 [a] Visible placeable item ("Brass Key", size 0.1) placed in "study" gets a
     stored anchor on table T (y=0.75); GET /play/locations/{id}/items returns
     200 with that item carrying the exact stored at/y/yaw, size_m=0.1,
-    actions=["take", "look"], image_url=None, model_url=None, model_version=None.
+    actions=[{"id": "look", "label": "Look", "source": "core"},
+             {"id": "take", "label": "Take", "source": "core"}],
+    image_url=None, model_url=None, model_version=None.
 [b] Hidden placeable item ("Secret Diary", difficulty 70) in "study":
     - viewer A (no item_discoveries row) -> absent from payload;
     - viewer B (with a direct row in item_discoveries) -> present in payload.
@@ -258,7 +260,14 @@ def main() -> int:
                 check("[a] exact y", ka.get("y") == key_anchor.get("y"), f"{ka.get('y')} vs {key_anchor.get('y')}")
                 check("[a] exact yaw", ka.get("yaw") == key_anchor.get("yaw"), f"{ka.get('yaw')} vs {key_anchor.get('yaw')}")
                 check("[a] size_m == 0.1", ka.get("size_m") == 0.1, repr(ka.get("size_m")))
-                check("[a] actions == ['take', 'look']", ka.get("actions") == ["take", "look"], repr(ka.get("actions")))
+                check(
+                    "[a] actions == [look, take] core dicts",
+                    ka.get("actions") == [
+                        {"id": "look", "label": "Look", "source": "core"},
+                        {"id": "take", "label": "Take", "source": "core"},
+                    ],
+                    repr(ka.get("actions")),
+                )
                 check("[a] model_url is None", ka.get("model_url") is None, repr(ka.get("model_url")))
                 check("[a] image_url is None", ka.get("image_url") is None, repr(ka.get("image_url")))
 

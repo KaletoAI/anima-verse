@@ -11,24 +11,14 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 from app.core.i18n import localized
+from app.core.item_actions import actions_for
 from app.core.item_mesh import mesh_meta
-from app.core.item_reading import has_pages
 from app.models.inventory import (
     discovered_by,
     get_item,
     item_world_size,
     placement_seen_by,
 )
-
-# Fallback core action list used until Task 8 introduces item_actions.actions_for.
-CORE_ACTIONS_FALLBACK: tuple[str, ...] = ("take", "look")
-
-
-def _actions(item: Dict[str, Any]) -> List[str]:
-    """Return the actions offered for a world-placeable item."""
-    if has_pages(item):
-        return ["take", "read", "look"]
-    return list(CORE_ACTIONS_FALLBACK)
 
 
 def _ready_mesh_version(item_id: str) -> Optional[str]:
@@ -52,7 +42,7 @@ def items_etag(location: Dict[str, Any], viewer: str, lang: str) -> str:
     """
     loc_id = str((location or {}).get("id") or "")
     rooms_fp: List[Dict[str, Any]] = []
-    distinct_ids: set[str] = set()
+    item_cache: Dict[str, Optional[Dict[str, Any]]] = {}
 
     for room in (location or {}).get("rooms") or []:
         if not isinstance(room, dict):
@@ -65,21 +55,35 @@ def items_etag(location: Dict[str, Any], viewer: str, lang: str) -> str:
             iid = str(entry.get("item_id") or "").strip()
             if not iid:
                 continue
-            distinct_ids.add(iid)
+            if iid not in item_cache:
+                item_cache[iid] = get_item(iid)
+            item = item_cache[iid]
             hidden = bool(entry.get("hidden", False))
             discovered = (bool(viewer) and viewer in discovered_by(loc_id, room_id, iid)) if hidden else False
+            entry_actions = None
+            if (
+                item
+                and item.get("world_placeable")
+                and isinstance(entry.get("anchor"), dict)
+                and (not hidden or discovered)
+            ):
+                entry_actions = [
+                    [a["id"], a["label"]]
+                    for a in actions_for(viewer, item, entry, lang)
+                ]
             entries_fp.append({
                 "item_id": iid,
                 "quantity": int(entry.get("quantity", 1) or 1),
                 "anchor": entry.get("anchor"),
                 "hidden": hidden,
                 "discovered": discovered,
+                "actions": entry_actions,
             })
         rooms_fp.append({"room_id": room_id, "entries": entries_fp})
 
     items_fp: Dict[str, Any] = {}
-    for iid in sorted(distinct_ids):
-        item = get_item(iid)
+    for iid in sorted(item_cache):
+        item = item_cache[iid]
         if not item:
             items_fp[iid] = None
             continue
@@ -151,7 +155,7 @@ def build_items_payload(location: Dict[str, Any], viewer: str, lang: str) -> Dic
                 "model_url": f"/inventory/items/{quoted_id}/model?v={version}" if version else None,
                 "model_version": version,
                 "image_url": f"/inventory/items/{quoted_id}/image" if item.get("image") else None,
-                "actions": _actions(item),
+                "actions": actions_for(viewer, item, entry, lang),
             })
 
     return {"location_id": loc_id, "items": out_items}
