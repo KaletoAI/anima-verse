@@ -13,6 +13,7 @@ Storage:
 """
 from contextlib import contextmanager
 import json
+import math
 import random
 import re as _re_module
 import uuid
@@ -43,6 +44,31 @@ VALID_OBTAIN_METHODS = ("found", "given", "crafted", "purchased", "quest_reward"
 VALID_PIECE_SLOTS = (
     "underwear_top", "underwear_bottom", "legs",
     "top", "bottom", "outer", "feet", "hands", "neck", "face", "head")
+
+# Default longest-edge length in metres when an item has no explicit world_size_m.
+DEFAULT_WORLD_SIZE_M = 0.25
+
+
+def _clean_world_size(raw) -> Optional[float]:
+    """Normalize ``world_size_m``: positive finite float capped at 5.0 m, rounded to 3 decimals, else None."""
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or value <= 0:
+        return None
+    rounded = round(min(value, 5.0), 3)
+    return rounded if rounded > 0 else None
+
+
+def item_world_size(item: Dict[str, Any]) -> float:
+    """Return the item's longest edge in metres, falling back to DEFAULT_WORLD_SIZE_M."""
+    raw = (item or {}).get("world_size_m")
+    if not isinstance(raw, bool) and isinstance(raw, (int, float)) and math.isfinite(raw) and raw > 0:
+        return float(raw)
+    return DEFAULT_WORLD_SIZE_M
 
 
 # ============================================================
@@ -121,7 +147,8 @@ def _load_shared_items(*, strict: bool = False) -> List[Dict[str, Any]]:
         return []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return data.get("items", [])
+        return [{"world_placeable": False, "world_size_m": None, **it}
+                for it in data.get("items", [])]
     except FileNotFoundError:
         return []
     except Exception:
@@ -225,6 +252,8 @@ def _load_items(*, strict: bool = False) -> List[Dict[str, Any]]:
                 "category": r[2],
                 "prompt_fragment": r[3],
                 "created_at": r[7],
+                "world_placeable": False,
+                "world_size_m": None,
                 **meta,
             }
             try:
@@ -255,7 +284,8 @@ def _load_items(*, strict: bool = False) -> List[Dict[str, Any]]:
             return []
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            return data.get("items", [])
+            return [{"world_placeable": False, "world_size_m": None, **it}
+                    for it in data.get("items", [])]
         except Exception:
             return []
 
@@ -341,6 +371,8 @@ def get_item(item_id: str, *, strict: bool = False) -> Optional[Dict[str, Any]]:
                 "category": row[2],
                 "prompt_fragment": row[3],
                 "created_at": row[7],
+                "world_placeable": False,
+                "world_size_m": None,
                 **meta,
             }
             try:
@@ -691,7 +723,9 @@ def add_item(name: str,
     pages_source: str = "",
     portable: bool = True,
     extra_fields: Optional[Dict[str, Any]] = None,
-    garment: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    garment: Optional[Dict[str, Any]] = None,
+    world_placeable: bool = False,
+    world_size_m: Any = None) -> Dict[str, Any]:
     """Create an item with an optional explicit ID and localized extra fields.
 
     Empty IDs are derived from the name with a unique numeric suffix.
@@ -731,6 +765,8 @@ def add_item(name: str,
         "owner": owner.strip(),
         "pages_source": pages_source.strip(),
         "portable": bool(portable),
+        "world_placeable": bool(world_placeable),
+        "world_size_m": _clean_world_size(world_size_m),
         **{k: v for k, v in (extra_fields or {}).items()
            if _re_module.fullmatch(r"(?:name|description)_[a-z]{2,3}(?:-[A-Za-z0-9]+)*", k)},
         "name": name.strip(),
@@ -972,6 +1008,7 @@ def update_item(item_id: str,
         "prompt_fragment", "prompt_fragment_back", "outfit_piece", "effects", "garment",
         # Tracker: while carried, the carrier sees the target's location in the prompt.
         "tracks_character",
+        "world_placeable", "world_size_m",
     } | spell_only
 
     def _apply_updates(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -1082,6 +1119,8 @@ def update_item(item_id: str,
             for key in spell_only:
                 item.pop(key, None)
         _clean_back_text(item)
+        item["world_placeable"] = bool(item.get("world_placeable", False))
+        item["world_size_m"] = _clean_world_size(item.get("world_size_m"))
         return item
 
     found: Optional[Dict[str, Any]] = None
