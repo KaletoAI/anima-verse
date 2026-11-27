@@ -40,6 +40,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
     private JsonElement? _seatMap;
     private double _seatMapAt;
     private JsonElement? Map => _figures.LatestMap ?? _world.FirstMap;
+    private EntryWorld Entry => _figures.LatestEntry ?? _world.FirstEntry ?? EntryWorld.Empty;
     private Figure? Avatar => _figures.Figures.GetValueOrDefault(_figures.AvatarName);
     private bool CanUse => !Suspended && _active && !_disposed && !_steering.MovementLocked && !_steering.PropActionDriven && !_figures.ServerDriven;
     private bool CanEnter => CanUse && !RoomRequestInFlight() && !_steering.PendingSnap && !_steering.SeatWritePending
@@ -157,30 +158,22 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
         }
         _hud.SetState("talkTarget",talk is { } t ? new JsonObject { ["name"]=t.Name,["dist"]=t.Dist } : null);
         _entry=null; _entryReason=null;
-        if(CanUse && Avatar is { } avatar && Map is { } root)
+        if(CanUse && Avatar is { } avatar)
         {
+            var entryWorld=Entry;
             var candidates=new List<EntryTile>();
-            foreach(var loc in LocationInfo.ParseList(root))
+            foreach(var loc in entryWorld.Locations.Values)
             {
                 if(!loc.IsPlaced) continue;
-                var openings=new List<EntryOpening>();
-                if(root.TryGetProperty("locations",out var rows)) foreach(var row in rows.EnumerateArray())
-                {
-                    if(Text(row,"id")!=loc.Id || !row.TryGetProperty("openings",out var oo)) continue;
-                    foreach(var o in oo.EnumerateArray())
-                        if(o.TryGetProperty("at_world",out var at) && o.TryGetProperty("inward",out var inward))
-                            openings.Add(new(o.TryGetProperty("edge",out var edge) ? edge.GetInt32() : 0,
-                                new(at[0].GetDouble(),at[1].GetDouble()),new(inward[0].GetDouble(),inward[1].GetDouble())));
-                }
-                if(openings.Count==0 && _world.Slots.GetValueOrDefault(loc.Id)?.Openable!=true) continue;
-                candidates.Add(new(loc.Id,new(loc.PosX!.Value,loc.PosZ!.Value,loc.YawDeg*Math.PI/180),openings,
-                    openings.Count==0 ? loc.Boundary?.Select(p=>new P2(p.X,p.Z)).ToArray() : null,Locks.IsLocked(LockedLocations,loc.Id)));
+                if(loc.Gates.Count==0 && loc.Doors.Count==0) continue;
+                candidates.Add(new(loc.Id,loc.Fenced,loc.Gates,loc.Doors,Locks.IsLocked(LockedLocations,loc.Id)));
             }
             _entry=EnterLocation.EntryOfferNear(new(avatar.Position.X,avatar.Position.Z),_world.PlaceAt(avatar.Position.X,avatar.Position.Z) ?? "",candidates);
             if(_entry is { } entry && Locks.IsLocked(LockedLocations,entry.LocId)) _entryReason=Locks.LockReason(LockedLocations,entry.LocId);
+            _hud.SetState("enterOffer",_entry is { } e && _entryReason is null ? new JsonObject
+            { ["name"]=entryWorld.Locations.TryGetValue(e.LocId,out var hit) ? hit.Name : "",["dist"]=e.Dist } : null);
         }
-        _hud.SetState("enterOffer",_entry is { } e && _entryReason is null ? new JsonObject
-        { ["name"]=LocationInfo.ParseList(Map!.Value).FirstOrDefault(l=>l.Id==e.LocId)?.Name ?? "",["dist"]=e.Dist } : null);
+        else _hud.SetState("enterOffer",null);
     }
 
     /// <summary>Task 52: explicit chip action uses exactly SceneKeys' resolution, including sole/multi-stop lifts.</summary>

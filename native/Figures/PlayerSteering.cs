@@ -94,7 +94,7 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
     private bool _clipOverride, _bridgeHeld, _stoodUp;
     private double _clock, _nextLoadingToast;
     private Figure? Avatar => figures.Figures.GetValueOrDefault(figures.AvatarName);
-    private JsonElement? Map => figures.LatestMap ?? world.FirstMap;
+    private EntryWorld Entry => figures.LatestEntry ?? world.FirstEntry ?? EntryWorld.Empty;
 
     public void SetActive(bool active)
     {
@@ -132,7 +132,7 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
 
     private bool Blocked(LocationSlot? mine, double x, double z, P2? from = null)
     {
-        if (world.PlayerBlocked(mine,x,z,from,Map)) return true;
+        if (world.PlayerBlocked(mine,x,z,from,Entry)) return true;
         foreach (var r in _refused)
             if (r.Until>_clock && double.Hypot(x-r.At.X,z-r.At.Z)<RefusedRadiusM) return true;
         return false;
@@ -394,8 +394,20 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
         double lead=Math.Min(Math.Max(NpcWalk.WalkSpeed*(sprint ? NpcWalk.RunFactor : 1)*dt,MinLead),reach);
         var target=new P2(pos.X+direction.X*lead,pos.Z+direction.Z*lead);
         target=Walk.SlideBlocked(from,target,(x,z)=>Blocked(here,x,z,from));
-        if (world.PlayerWalls(here,RoomId) is { } walls)
-            target=Collide.ClampAgainstWalls(from,target,walls.Segments,walls.Radius);
+        var entry=Entry;
+        var innerWalls=world.PlayerWalls(here,RoomId,entry);
+        var outerWalls=world.OutsideWalls(here,RoomId,from.X,from.Z,entry,lead);
+        if (innerWalls is { } iw && outerWalls is { } ow)
+        {
+            var combined=new List<WallSegment>(iw.Segments.Count+ow.Segments.Count);
+            combined.AddRange(iw.Segments);
+            combined.AddRange(ow.Segments);
+            target=Collide.ClampAgainstWalls(from,target,combined,Math.Max(iw.Radius,ow.Radius));
+        }
+        else if (innerWalls is { } iwOnly)
+            target=Collide.ClampAgainstWalls(from,target,iwOnly.Segments,iwOnly.Radius);
+        else if (outerWalls is { } owOnly)
+            target=Collide.ClampAgainstWalls(from,target,owOnly.Segments,owOnly.Radius);
         // Plan E2 Task 6: inside the footprint the step stays on the navmesh of the avatar's storey.
         if (here is not null && world.NavFor(here) is { Ready: true } navMap && f.Ride is null && world.FootprintAt(target.X,target.Z)==here)
             target=ClampToNav(from,target,f.Position.Y,here.Scene is { StoreyM: > 0 } sc ? sc.StoreyM : 3,navMap);

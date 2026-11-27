@@ -482,7 +482,7 @@ public static class NavCheck
             var steering = new PlayerSteering(manager, builder) { RoomId = "r-a" };
             steering.SetActive(true);
             double now = 0;
-            rooms = new AvatarRoomsController(manager, builder, steering, source, hud, () => now);
+            rooms = new AvatarRoomsController(manager, builder, steering, source, hud, () => "loc-nav", () => now);
             rooms.SetActive(true);
             hud.SetState("mode", "embodied");
             manager.AvatarLinkRide = rooms.OrderLinkRide;

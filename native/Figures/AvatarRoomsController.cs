@@ -29,6 +29,7 @@ public sealed class AvatarRoomsController : IDisposable
     private readonly WorldBuilder _world;
     private readonly PlayerSteering _steering;
     private readonly HudOverlay _hud;
+    private readonly Func<string> _confirmedLocation;
     private readonly Func<double> _clock;
     private bool _active,_disposed;
     private int _generation;
@@ -53,9 +54,9 @@ public sealed class AvatarRoomsController : IDisposable
     public bool Suspended { get; set; }
     private bool CanUse => !Suspended && _active && !_disposed && !_steering.MovementLocked && !_steering.PropActionDriven && !_figures.ServerDriven;
 
-    public AvatarRoomsController(FigureManager figures,WorldBuilder world,PlayerSteering steering,IWorldSource source,HudOverlay hud,Func<double>? clock=null)
+    public AvatarRoomsController(FigureManager figures,WorldBuilder world,PlayerSteering steering,IWorldSource source,HudOverlay hud,Func<string> confirmedLocation,Func<double>? clock=null)
     {
-        _figures=figures; _world=world; _steering=steering; _hud=hud; _clock=clock ?? (()=>source.MonotonicMs);
+        _figures=figures; _world=world; _steering=steering; _hud=hud; _confirmedLocation=confirmedLocation ?? throw new ArgumentNullException(nameof(confirmedLocation)); _clock=clock ?? (()=>source.MonotonicMs);
         Channel=new(async (room, ct) =>
         {
             Log?.Invoke($"[pos] enter-room send room={room}");
@@ -118,6 +119,8 @@ public sealed class AvatarRoomsController : IDisposable
         if (Suspended) return;
         using var hitch = AnimaNative.Ui.HitchLog.Time("AvatarRoomsController");
         if(!_active || _disposed) { Channel.Idle(); return; }
+        string confirmed=_confirmedLocation() ?? "";
+        Channel.SetLocation(confirmed);
         if(Avatar is not { } figure) { Channel.Idle(); ClearOffers(); return; }
         var tile=Tile; var room=tile is null ? null : Room(tile);
         var p=new P2(figure.Position.X,figure.Position.Z);
@@ -137,7 +140,7 @@ public sealed class AvatarRoomsController : IDisposable
         if(Level(tile,room) is { } level && level!=_followedLevel)
         { _followedLevel=level; _world.SetLevel(tile.Loc.Id,level); }
         bool interior=tile.Open;
-        if(!CanUse || !(interior || tile.Fade.ShellArea || tile.Stands.AlwaysVisible.Count>0) || (room is null && _steering.RoomId.Length>0)) Channel.Idle();
+        if(!CanUse || tile.Loc.Id!=confirmed || !(interior || tile.Fade.ShellArea || tile.Stands.AlwaysVisible.Count>0) || (room is null && _steering.RoomId.Length>0)) Channel.Idle();
         else
         {
             var locks=tile.Loc.Id==LockedLoc ? LockedRooms : new Dictionary<string,string>();

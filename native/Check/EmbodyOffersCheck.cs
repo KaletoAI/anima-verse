@@ -93,6 +93,22 @@ public static class EmbodyOffersCheck
             Is("O3 report adopts destination",position.LocationId=="loc-hall" && position.RoomId=="r-b" && source.PositionRequests.Count==1);
             position.SetActive(false);
 
+            var unfenced=JsonNode.Parse(map.RootElement.GetRawText())!;
+            unfenced["locations"]![0]!["fenced"]=false;
+            unfenced["locations"]![0]!["openings"]=new JsonArray();
+            using (var unfencedDoc=JsonDocument.Parse(unfenced.ToJsonString()))
+            {
+                await manager.Apply(unfencedDoc.RootElement);
+                At(3,5); offers.UpdateOffers();
+                Is("O3b unfenced door offer at (3,5)",offers.NearestOffer=="enter" && hud.SceneOwned("enterOffer") is not null);
+                await offers.EnterAsync();
+                Is("O3b unfenced door walk-in goal (3,3.5)",steering.WalkIn is { } dw && Math.Abs(dw.Goal.X-3)<.0002 && Math.Abs(dw.Goal.Z-3.5)<.0002);
+                steering.WalkIn=null;
+                At(-3,5); offers.UpdateOffers();
+                Is("O3b unfenced no door within 3m -> no offer",hud.SceneOwned("enterOffer") is null);
+            }
+            await manager.Apply(map.RootElement);
+
             At(-3,1); steering.RoomId="r-a";
             var diorama=hall.Placements.Single(p=>p.Spec.Role=="room").Node!;
             diorama.Visible=false;

@@ -169,6 +169,35 @@
         }
       }
     ],
+    "enter-room-not-in-location": [
+      {
+        "method": "POST",
+        "path": "/play/enter-room",
+        "request": {
+          "room_id": "r-b"
+        },
+        "status": 409,
+        "body": {
+          "detail": {
+            "reason": "not_in_location",
+            "location_id": ""
+          }
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/play/enter-room",
+        "request": {
+          "room_id": "r-b"
+        },
+        "status": 200,
+        "body": {
+          "ok": true,
+          "location_id": "loc-hall",
+          "room_id": "r-b"
+        }
+      }
+    ],
     "take-room-pose": [
       {
         "method": "GET",

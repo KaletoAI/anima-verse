@@ -124,7 +124,7 @@ public static class ResumeCheck
             fig.FaceTowards(new(0, 0, 1), true);
             transport.Paths.Clear();
             var hud = new HudOverlay();
-            using var roomController = new AvatarRoomsController(manager, builder, steering, api, hud, () => 340);
+            using var roomController = new AvatarRoomsController(manager, builder, steering, api, hud, () => position.LocationId, () => 340);
             roomController.SetActive(true);
             roomController.Channel.Walk("r-loft", new(64, 128),
                 new[] { new AnimaNative.Scene.ElevatorRoom("__floor__1", 1, new(64, 128)) }, 1);

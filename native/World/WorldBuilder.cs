@@ -271,6 +271,8 @@ public sealed partial class WorldBuilder
     public IReadOnlyList<LocationInfo> Details { get; private set; } = Array.Empty<LocationInfo>();
     /// <summary>The <c>/play/worldmap</c> payload the build used (the anchor's fallback snapshot).</summary>
     public JsonElement? FirstMap { get; private set; }
+    /// <summary>Parsed entry snapshot of <see cref="FirstMap"/>, built once at boot.</summary>
+    public Embody.EntryWorld? FirstEntry { get; private set; }
     /// <summary>The ground surfaces of the build (null = plain material).</summary>
     public GroundSurfaces? Ground { get; private set; }
     /// <summary>The CDLOD terrain of the build (null before <see cref="BuildAsync"/> reached it).</summary>
@@ -363,6 +365,7 @@ public sealed partial class WorldBuilder
         var details = LocationInfo.ParseList(boot.Locations);
         Details = details;
         FirstMap = mapRoot;
+        FirstEntry = Embody.EntryWorld.Parse(mapRoot);
         hooks?.Stage?.Invoke("world");
         _log($"heightfield {overview.Grid.Cols}x{overview.Grid.Rows} step {overview.Grid.Step} m, "
              + $"{overview.TileIndex.Count} indexed tiles; worldmap {locations.Count} locations, "

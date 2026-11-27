@@ -276,7 +276,7 @@ public static partial class OrderCheck
                 var f = m.Figures[m.AvatarName];
                 var steering = new PlayerSteering(m, ordersBuilder) { RoomId = "r-a" };
                 double now = 0;
-                rooms = new AvatarRoomsController(m, ordersBuilder, steering, src, hud, () => now);
+                rooms = new AvatarRoomsController(m, ordersBuilder, steering, src, hud, () => "loc-nav", () => now);
                 rooms.SetActive(true);
                 var events = new List<string>();
                 m.OrderFrameShown += (name, frame) => { if (name == m.AvatarName) events.AddRange(frame.Events); };

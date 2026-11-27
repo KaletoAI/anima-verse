@@ -50,7 +50,8 @@ public static class EmbodyRoomsCheck
             var f=manager.Figures[manager.AvatarName];
             var steering=new PlayerSteering(manager,builder) { RoomId="r-a" }; steering.SetActive(true);
             double now=0;
-            rooms=new(manager,builder,steering,source,hud,()=>now);
+            string confirmedLoc="loc-hall";
+            rooms=new(manager,builder,steering,source,hud,()=>confirmedLoc,()=>now);
             rooms.SetActive(true); hud.SetState("mode","embodied");
             void At(float x,float z,float y=.01f) { steering.CancelRoute(); manager.SnapPlayerTo(f.CharacterName,new(x,y,z)); }
             At(-.3f,2);
@@ -162,7 +163,20 @@ public static class EmbodyRoomsCheck
             rooms.Channel.Reset(); At(3,2); steering.RoomId="foreign-ground"; rooms.GroundRoomId="foreign-ground";
             source.SelectRoomScenario("enter-room"); now+=100; rooms.Tick(); now+=1500; rooms.Tick();
             Is("R10 foreign ground ID cannot become a room here",source.RoomRequests.Count==0);
-            return $"rooms={n} R1-R10=ok hold=1500 reject=4000 confirm=10000 ride=4s head=(3.5,3.01,-2) door=3rad/s";
+            rooms.Channel.Reset(); At(3,2); steering.RoomId="r-a"; rooms.GroundRoomId="";
+            confirmedLoc="";
+            source.SelectRoomScenario("enter-room"); now+=100; rooms.Tick(); now+=1600; rooms.Tick();
+            Is("R11 unconfirmed location sends no enter-room",source.RoomRequests.Count==0);
+            confirmedLoc="loc-hall";
+            source.SelectRoomScenario("enter-room-not-in-location");
+            now+=100; rooms.Tick(); now+=1500; rooms.Tick(); await rooms.Channel.Pending!;
+            Is("R12 409 not_in_location sent once",source.RoomRequests.Count==1);
+            now+=5000; rooms.Tick();
+            Is("R12 409 not_in_location not retried after 5s",source.RoomRequests.Count==1);
+            confirmedLoc="loc-other"; rooms.Tick();
+            confirmedLoc="loc-hall"; now+=100; rooms.Tick(); now+=1500; rooms.Tick(); await rooms.Channel.Pending!;
+            Is("R12 retried after SetLocation reports new location",source.RoomRequests.Count==2);
+            return $"rooms={n} R1-R12=ok hold=1500 reject=4000 confirm=10000 ride=4s head=(3.5,3.01,-2) door=3rad/s";
         }
         finally
         {
