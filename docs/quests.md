@@ -1,41 +1,53 @@
-# Quests (stages 1 and 2)
+# Quests (stages 1 to 3)
 
-Hand-made quests: an admin builds a quest template in Game-Admin → **Quests**, starts it as a run that binds the
-template's roles to this world, and avatars fulfil its steps by acting in the world. In stage 2, a quest can also put
-objects into the world at start (items, hidden room items, props — including generated 3D props), give hints to NPCs as
-secrets, pay effects when a step is done and rewards when the quest finishes, and clean up every non-permanent object
-when the run ends. The player reads the progress spoiler-free in the HUD's quest book. Quests replace the removed story
-arc engine.
+Hand-made and LLM-written quests: an admin builds a quest template in Game-Admin → **Quests** (or drafts one from a
+short brief with **Generate with LLM**), starts it as a run that binds the template's roles to this world, and avatars
+fulfil its steps by acting in the world. In stage 2, a quest can put objects into the world at start (items, hidden room
+items, props — including generated 3D props), give hints to NPCs as secrets, pay effects when a step is done and rewards
+when the quest finishes, and clean up every non-permanent object when the run ends. In stage 3, steps can also be judged
+from the avatar's conversation transcript (`llm_judgement`), awake NPCs standing near an avatar can offer automatic
+time-limited quests (`origin: "auto"`), and unkept generated templates are dropped once their runs leave the player's
+chronicle. The player reads the progress spoiler-free in the HUD's quest book. Quests replace the removed story arc
+engine.
 
-Stages 1 and 2 of 5 — see [What later stages add](#what-later-stages-add). Code:
+Stages 1 to 3 of 5 — see [What later stages add](#what-later-stages-add). Code:
 
 | File | Responsibility |
 |---|---|
-| `app/models/quests.py` | Storage: tables `quest_templates`, `quest_runs`, `quest_facts`, `quest_run_objects`, `quest_run_payouts` in `world.db` (no engine logic) |
+| `app/models/quests.py` | Storage: tables `quest_templates`, `quest_runs`, `quest_facts`, `quest_run_objects`, `quest_run_payouts`, `quest_judgements` in `world.db` (no engine logic) |
 | `app/core/quest_catalog.py` | `QuestType`, `Scope`, the registry (capability `quest.types`), expression walking, effect-list and parameter checks |
 | `app/core/quest_objects.py` | Core registry of run object kinds (`exists`, `remove`, `label`) |
-| `app/core/quest_effects.py` | `EffectContext`, `CreatedObject`, `EffectFailed`, the `quest-effects` worker (`pass_once`, `wake`, `retry`), built-in effect types |
-| `app/core/quest_types.py` | Built-in condition and prerequisite types, `QuestContext`, binding checks |
-| `app/core/quest_engine.py` | Template validation, start/cancel, signal-driven evaluation, the tick, notifications, `_after_run_ended` |
-| `app/core/quest_prompt.py` | Per-turn quest giver and hint lines (`lines_for`, `block_for`) |
+| `app/core/quest_effects.py` | `EffectContext`, `CreatedObject`, `EffectFailed`, the `quest-effects` worker (`pass_once`, `wake`, `retry`, unkept generated template drop), built-in effect types |
+| `app/core/quest_types.py` | Built-in condition (`llm_judgement` included) and prerequisite types, `QuestContext`, binding checks |
+| `app/core/quest_engine.py` | Template validation, `dry_check`, `blocking_issue`, start/cancel, signal-driven evaluation, `notify`, the tick, notifications, `_after_run_ended` |
+| `app/core/quest_judgement.py` | Cached-verdict orchestration for `llm_judgement` (`request`, rate limits, `quest_judgement` task-queue handler, `llm_judge`, `parse_verdict`) |
+| `app/core/quest_context.py` | World context and capped quest-type catalog builder (`build`, `render`, `capped_catalog_lines`) for LLM authoring |
+| `app/core/quest_authoring.py` | Authoring pipeline (`generate`: `draft` → `structure` → `validate` → `repair` → `done`, modes `admin` / `auto`) and the `quest_generate` job (`submit`, `recent_jobs`) |
+| `app/core/quest_auto.py` | Automatic NPC-giver quests (`tick`, `pick_giver`, `quest_auto` task-queue handler, caps and expiry) |
+| `app/core/quest_prompt.py` | Per-turn quest giver, role-note and hint lines (`lines_for`, `block_for`) |
 | `app/core/quest_book.py` | The player payload of `GET /play/quests` (whitelist + finished labels, including `rewards_label`) |
-| `app/routes/quests.py` | Admin HTTP adapter under `/quests` |
+| `app/routes/quests.py` | Admin HTTP adapter under `/quests` (templates with `generated` filter and `kept`, runs with `origin` and `judgements`, `POST /quests/generate`, `GET /quests/generate/jobs`) |
 | `plugins/share_secret/` | Skill package providing the `share_secret` verb so NPCs can tell quest hints to characters in the same room |
-| `frontend/src/tabs/quests/` | The Game-Admin tab (Templates with effect editor, Runs with objects, payouts and retry) |
+| `frontend/src/tabs/quests/` | The Game-Admin tab (Templates with "Generate with LLM", library/generated filter and Keep; Runs with origin badge, current-step judgements, objects, payouts and retry) |
 | `packages/player-ui/src/QuestsPanel.tsx` | The quest book (`QuestBook` renders, `QuestsPanel` polls) |
 
 The callable surface for packages is in [`docs/skill-core-api.md`](skill-core-api.md) → "Quest catalog".
-The acceptance play-through is `scripts/smoke_quest_playthrough.py` (two parts: part 1 plays the stage-1 reference
-quest "Errand"; part 2 plays the stage-2 reference quest "The big rock" with stubbed media).
+The acceptance play-through is `scripts/smoke_quest_playthrough.py` (four parts: part 1 plays the stage-1 reference
+quest "Errand"; part 2 plays the stage-2 reference quest "The big rock" with stubbed media; part 3 plays the
+conversation quest "A mug for the guard" under a frozen game clock; part 4 plays stage 3 — admin LLM generation, an
+automatic NPC quest, and `llm_judgement` — over the real routes and task queue with a stubbed LLM).
 
 ## Model
 
-**Template** — what the author writes. It refers to **roles**, never to world entities. Fields: `title`, `summary`,
-`gm_notes` (admin only), `giver_role` (optional character role key), `roles`, `steps` (each with an optional `on_done`
-effect list), `start_condition`, `prerequisites`, `setup_effects`, `rewards`, `time_limit_s` (game seconds, `0` =
-none), `state` `draft` | `ready`, `origin` (`admin` in stages 1–2) and an integer `revision`. Only a `ready` template
-can be started, and a `ready` template is always free of authoring issues (see [Admin routes](#admin-routes)). Columns
-for later stages (`dependencies`, `repeat`, `kept`) exist; nothing reads them yet.
+**Template** — what the author (or the authoring pipeline) writes. It refers to **roles**, never to world entities.
+Fields: `title`, `summary`, `gm_notes` (admin only), `giver_role` (optional character role key), `roles`, `steps` (each
+with optional `on_done` and `role_notes`), `start_condition`, `prerequisites`, `setup_effects`, `rewards`,
+`time_limit_s` (game seconds, `0` = none), `state` `draft` | `ready`, `origin` (`admin` | `auto` in stages 1–3; `story`
+and `import` reserved for stages 4–5), `kept` (`bool`, default `true`; `false` on unkept generated templates — see
+[Generated templates](#generated-templates)) and an integer `revision`. A serialized template is at most 256 KiB
+(`quest_engine.MAX_TEMPLATE_BYTES`). Only a `ready` template can be started, and a `ready` template is always free of
+authoring issues (see [Admin routes](#admin-routes)). Columns for later stages (`dependencies`, `repeat`) exist; nothing
+reads them yet.
 
 **Run** — one playing of a template. It binds every role to a world entity (`bindings`) and freezes a copy of the
 template at start (`template_snapshot`, D2): evaluation, effects and the quest book read only the snapshot, so editing
@@ -108,8 +120,10 @@ A type declares its parameters as a list of dicts in the `config_schema` field v
   - `rewards[j]` reaches all `setup_effects`, all `steps[].on_done`, and earlier reward entries (`0 .. j-1`).
   Violations report `unknown_target`, `wrong_kind`, or `not_yet_created` (when naming an effect key defined later in
   the template).
-- A `text` parameter accepts `{role_key}` placeholders unless its spec sets `"placeholders": False` (used for JSON
-  parameters such as `create_item.effects` and `create_item.stat_bonuses`).
+- On effects, a `text` parameter accepts `{role_key}` placeholders unless its spec sets `"placeholders": False` (used
+  for JSON parameters such as `create_item.effects` and `create_item.stat_bonuses`). On conditions and prerequisites, a
+  `text` parameter accepts `{role_key}` placeholders when its spec opts in with `"placeholders": True` (used by
+  `llm_judgement.criterion`).
 
 ### Expressions
 
@@ -156,17 +170,18 @@ the shape:
 
 ### Placeholders
 
-A text the player reads may name a role: `{role_key}` in `title`, `summary`, a step's `text`, `hint` and
-`role_notes[].text`, `prerequisites.locked_text`, and effect `text` parameters without `"placeholders": False`
-(`gm_notes` is never substituted). `{{` and `}}` are literal braces. A placeholder naming an undeclared role is the
-issue `unknown_role` at that field's path; a single `{` or `}` is `bad_text`.
+A text the player (or an NPC prompt / judge) reads may name a role: `{role_key}` in `title`, `summary`, a step's
+`text`, `hint` and `role_notes[].text`, `prerequisites.locked_text`, effect `text` parameters without
+`"placeholders": False`, and condition `text` parameters with `"placeholders": True` (`gm_notes` is never substituted).
+`{{` and `}}` are literal braces. A placeholder naming an undeclared role is the issue `unknown_role` at that field's
+path; a single `{` or `}` is `bad_text`.
 
 The labels are frozen when the run starts (`binding_labels`): character → its name, location → the location's name,
 room → the room's name, item → the item's name (a label that cannot be read falls back to the id). Renaming the room
 afterwards does not change what the quest book says. `quest_engine.render_text(text, run)` is the one renderer: the
-quest book, the step and completion notices, the announcement, the admin run row's title, the quest prompt block, and
-effect `text` parameters (rendered before `apply` is called) all use it. A label is not a spoiler; ids and hints stay
-withheld.
+quest book, the step and completion notices, the announcement, the admin run row's title, the quest prompt block,
+`llm_judgement` criteria, and effect `text` parameters (rendered before `apply` is called) all use it. A label is not a
+spoiler; ids and hints stay withheld.
 
 ### Steps and prerequisites
 
@@ -192,6 +207,7 @@ lists only `effect`.
 | `knows_secret` | condition | `secret*` (target: secret object) | `secret.learned` |
 | `found_item` | condition | `placement*` (target: room_item object) | `item.discovered` |
 | `near_object` | condition | `object*` (target: world_prop, room_prop or room_item object), `radius_m` (float 1–200, default 10) | `character.entered_room`, `world_tick` |
+| `llm_judgement` | condition | `criterion*` (text, `placeholders=True`, <= 500 chars); `step_only=True` | `utterance.spoken`, `quest.judged` |
 | `relationship_at_least` | prerequisite | `character*` (role: character), `strength*` (int 0–100) | — |
 
 **Read rule.** Location, room and inventory are read for the ACTING BODY; facts (`spoke_with`, `found`) and secret
@@ -281,7 +297,7 @@ immediately by `wake()` (on start, step done, end, retry) and otherwise every 15
 **not** gated by world freeze or task-queue pause (a World Dev run freezes the world while still expecting setup and
 cleanup to complete).
 
-`pass_once()` (serialized by `_pass_lock`, also callable directly from smokes) runs four phases in order:
+`pass_once()` (serialized by `_pass_lock`, also callable directly from smokes) runs five phases in order:
 
 1. **Pending `setup` payouts** — apply `setup_effects` in list order, stopping at the first entry that waits or fails;
    when all setup objects are `live`, call `finish_preparing` and mark the `setup` payout `applied`.
@@ -294,6 +310,9 @@ cleanup to complete).
    so placements are removed before their library prop), calling `remove(ref)`.
 4. **Untag permanent props** — iterate `quests.permanent_props_of_ended_runs()` (`kind='prop'`, `permanent=1`, status
    `live` or `pending` of ended runs) and clear their `quest_run` sidecar tag (D17).
+5. **Drop unkept generated templates** — delete unkept `auto` / `story` templates and their ended runs once cleanup and
+   prop untagging are complete and every run has left the `CHRONICLE_SIZE` ended-run window (see
+   [Generated templates](#generated-templates)).
 
 **Idempotence and restart reconciliation (D8).** Before an external write, an effect calls `ctx.record_pending(...)`
 with a pre-minted id (or a `before` count). On a later pass or after a restart, any `pending` row is reconciled with
@@ -374,6 +393,7 @@ A type is a `QuestType` (`app.core.quest_catalog`):
 | `object_kind_when` | Optional tuple of `(param_key, object_kind)` pairs (declarative equivalent sent to the admin client) |
 | `validate(params, bindings)` | Optional; returns `list[ConditionIssue]`. `bindings` is `None` at template time (check only what needs no world entity) and the run's bindings at start and at every tick |
 | `needs_open_run` | Default `False`. `True` for a type that can only be read once the run has opened (it counts from `started_game_ts`, like `time_elapsed`): `validate_template` refuses it under `start_condition` (code `not_allowed_here`), and under `prerequisites.condition` when `start_condition` is non-empty |
+| `step_only` | Default `False`. `True` for a type that is only allowed in a step condition (`steps[i].condition`), never in `start_condition`, `prerequisites.condition`, or under a `not` operator; `validate_template` refuses it there with code `not_allowed_here` (see [`docs/skill-core-api.md`](skill-core-api.md) → "Quest catalog") |
 
 What the catalog guarantees a type:
 
@@ -460,16 +480,21 @@ Only `quest_engine` subscribes (hook tag `"quest_engine"`) to six events (`SIGNA
 |---|---|---|
 | `character.entered_room` | a successful real room change (`save_character_current_room`, a location change into its arrival room) | evaluates that character |
 | `inventory.changed` | `add_to_inventory`, `remove_from_inventory`, `update_inventory_entry` with a `quantity` | evaluates that character |
-| `utterance.heard` | `perception.record_utterance` | records `spoke_with`, then evaluates the avatars it concerns |
+| `utterance.heard` | `perception.record_utterance` | records `spoke_with`, then evaluates the avatars it concerns (`utterance.heard`) plus hearing/speaking avatars on `utterance.spoken` |
 | `secret.learned` | `secrets.add_known_by` (when a new knower is stored) | evaluates every avatar belonging to that mind |
 | `item.discovered` | `inventory.placement_visible_to` (when a hidden placement is first revealed) | records `found`, then evaluates every avatar belonging to that mind |
 | `world_tick` | the periodic runner | the tick (below) |
+
+In addition, `quest_engine.notify(event, character)` queues an internal character signal directly onto the worker
+(used by `quest_judgement.handle` to send `quest.judged` once a verdict is stored).
 
 - `inventory.changed` carries the REAL stored `delta` (signed; an add onto a stack capped by `max_stack` reports what
   was actually added) and nothing is emitted for a zero change or a failed write. Some inventory writes emit no event
   at all: an item definition deleted (`delete_item` and its cleanup), a character import or reset. The tick's full
   re-evaluation covers them — read quantities (`get_item_quantity`), never sum deltas.
-- `utterance.heard`'s `heard_by` and `avatars` EXCLUDE the speaker.
+- `utterance.heard`'s `heard_by` and `avatars` EXCLUDE the speaker. Inside `_heard`, every hearing avatar AND the
+  speaker (when `speaker_is_avatar` is true) are also evaluated with `utterance.spoken`, so an avatar's own spoken line
+  triggers `llm_judgement` without needing an NPC reply first.
 - **"Has spoken with"** is recorded for every line of an NPC (`source` `"loop"`, the speaker not an avatar) addressed
   to an avatar that heard it: the fact `(mind_of(avatar), "spoke_with", mind_of(speaker))`. It is written whether or
   not a quest is running — a talk before the quest started counts — and it belongs to the MIND, so it survives a
@@ -545,6 +570,176 @@ task queue paused (`tick()` itself has no freeze check). Order:
 - Quests are world-wide: every avatar sees the same runs; only `locked` and `rewards_label` are per avatar. Without an
   avatar the answer is `{"avatar": "", "quests": []}`.
 
+## LLM judgement
+
+`llm_judgement` (`app/core/quest_types.py`, `app/core/quest_judgement.py`) lets a step ask whether what an avatar said
+and heard since the step began satisfies a natural-language `criterion` (at most 500 characters,
+`MAX_JUDGEMENT_CRITERION_CHARS`, `{role}` placeholders rendered via `quest_engine.render_text`; `step_only=True`).
+Neither `quest_engine`, the hook listeners, nor the `quest-effects` worker ever calls `llm_call`:
+
+1. **Cached verdict (`quest_judgements`).** Keyed by `(run_id, step, criterion_key, mind)`, where `criterion_key` is
+   `sha1(rendered_criterion).hexdigest()[:16]` (`quest_judgement.criterion_key`) and `mind` is `mind_of(avatar)`.
+   Columns: `avatar`, `state` (`pending` | `yes` | `no` | `error`), `reason` (<= 500 chars), `judged_through`
+   (`perceptions.id` watermark), `requested_at` / `judged_at` (UTC ISO microseconds, system time), `attempts`,
+   `task_id`.
+2. **Evaluator (`_llm_judgement`).** Reads `quests.get_judgement(run_id, step, criterion_key, ctx.mind)`. When
+   `state == "yes"`, returns `ConditionResult(True, True, "")`. Otherwise calls `quest_judgement.request(ctx, criterion)`
+   and returns plain false `ConditionResult(True, False, reason or "Not judged yet")` — "not judged yet" is available /
+   false (never `unavailable`, which is reserved for storage read failures). When `run_id` is empty
+   (`quest_engine.dry_check`), it returns plain false without submitting a job.
+3. **Claim and rate-limit gates (`quest_judgement.request`, `quests.claim_judgement`).** Only an `open` run with a
+   non-empty `run_id` may request a check. Before touching the DB, `_rate_limited()` enforces the in-process rolling
+   60-second submission cap `quests.judgement_max_per_minute` (default `MAX_PER_MINUTE = 6`). Then
+   `quests.claim_judgement` atomically claims the row under `keyed_lock("quest_run", run_id)` when:
+   - no row exists yet (`attempts = 1`),
+   - the row is `no` or `error`, `judged_through < newest_perception_id(avatar)` (new matching lines arrived), AND
+     `requested_at` is at least `quests.judgement_min_interval_s` (default `MIN_INTERVAL_S = 30` s, system time) old, or
+   - the row is `pending`, `requested_at` is at least `min_interval_s` old, AND its `task_id` is no longer `pending` or
+     `running` in the task queue (`_task_alive`).
+   A `yes` row is never re-claimed. On claim, `request` submits task `quest_judgement` to the task queue (`queue_name="quests"`,
+   `priority=30`, `agent_name=ctx.avatar`, `max_retries=0`) and records `task_id` via `quests.note_judgement_task`
+   (a failed submit records `state='error'` preserving the previous `judged_through`).
+4. **What the judge reads (`perception_store.get_character_stream_since`).** Reads the avatar's subjective stream from
+   `perceptions.content` (never `utterances.content`) across all rooms and locations, newest `TRANSCRIPT_LINES = 40`
+   rows in chronological order. Excludes `CONTENTLESS_KINDS` (`whisper_meta`, `inattentive_meta`, so third-party
+   whispers never leak), `display_only` lines, and blank content — `newest_perception_id` shares the exact same SQL
+   predicate (`_transcript_predicate`), so foreign whispers and display-only lines never trigger a job. `since_ts`
+   (`run["step_started_at"]`, system time) is truncated to whole UTC seconds and compared strictly (`u.ts > since_sec`),
+   excluding lines spoken in the same wall-clock second that completed the previous step. Lines are formatted as
+   `speaker -> addr1, addr2: content` or `speaker: content`.
+5. **Verdict, errors and re-evaluation (`quest_judgement.handle`).** Re-reads the run and skips if it is no longer
+   `open` at `step`. With an empty transcript, stores `state='no'`, `reason="Nothing has been said since this step began"`
+   without an LLM call. Otherwise renders `tasks/quest_judgement.md` and calls `llm_call("quest_judgement", ..., max_tokens=300)`.
+   `parse_verdict` extracts `{"passed": bool, "reason": str}` from a ```` ```json:verdict ```` fence (or bare JSON
+   object). Any exception (`ValueError`, `RefusalError`, runtime error) records `state='error'`, `reason=str(e)[:200]`,
+   and **preserves the previous `judged_through`** so the step can retry after `min_interval_s` without requiring a new
+   utterance. `quests.set_judgement` writes only while the run is still `open` at `current_step == step` and then calls
+   `quest_engine.notify("quest.judged", avatar)` so the engine worker re-evaluates immediately.
+6. **Cleanup and visibility.** Advancing or finishing a step (`quests.record_step_done`) deletes `quest_judgements` rows
+   with `run_id = ? AND step <= ?` in the same transaction; `quests.delete_run` deletes all rows for the run; and
+   `quest_engine.on_character_deleted(name)` deletes rows for `mind = name`. In Game-Admin → **Quests** → **Runs**, an
+   `open` run's row includes `judgements: [{mind, avatar, state, reason, judged_at}]` for its `current_step` (`[]` once
+   ended). The player's `GET /play/quests` never exposes verdict states, criteria, or reasons.
+
+## Authoring with the LLM
+
+`app/core/quest_context.py` and `app/core/quest_authoring.py` turn a short brief into a validated quest template and
+proposed bindings without writing to storage inside `generate`:
+
+- **World context (`quest_context.build(giver=None, brief="")`, `render(ctx)`).** Gathers read-only facts (never raises):
+  the optional `giver` (`name`, `location_id`, `location_name`, `room_id`, `room_name`, `activity`) and player-text
+  `language` (from the giver's `profile["language"]` via `LANGUAGE_MAP`); up to 12 locations (giver's location first,
+  then nearest in metres when coordinates exist, else alphabetical, with up to 8 non-`__` rooms each); up to 30
+  characters (at the giver's location when known, else `list_available_characters()`, tagged `(giver)`, `(avatar)`,
+  `(asleep)`); up to 40 catalog items; up to 40 library props excluding quest-tagged props (`not prop.get("quest_run")`);
+  and `capped_catalog_lines` (`MAX_CATALOG_CHARS = 5000` character budget, shared with World Dev's `list_catalog`).
+- **Pipeline (`quest_authoring.generate`, `PHASES = ("draft", "structure", "validate", "repair", "done")`).**
+  1. `draft` — renders `tasks/quest_draft.md` and calls `llm_call("quest_draft", ..., max_tokens=1500)` for a short
+     prose outline (`empty_draft` on blank output, `llm_failed` on `RuntimeError`).
+  2. `structure` — renders `tasks/quest_structure.md` and calls `llm_call("quest_structure", ..., max_tokens=4000)`,
+     expecting one ```` ```json:quest ```` block with `{"template": {...}, "bindings": {...}}` (`no_block`, `bad_json`).
+  3. `validate` — strips unknown top-level keys (`unknown_key`), checks field types (`check_template_fields`, `shape`)
+     and the 256 KiB cap (`MAX_TEMPLATE_BYTES`, `too_large`), runs `quest_engine.validate_template`, and pins
+     `bindings[giver_role] = {"name": giver}` when both `giver` and `giver_role` are set.
+     - **`mode="admin"`:** invalid proposed bindings are silently dropped (`check_binding`); `ok` is `True` when no
+       issue is blocking (`quest_engine.blocking_issue`: any issue in `setup_effects`, `steps[].on_done`, `rewards`, at
+       `giver_role`, or with code `unknown_target` / `wrong_kind` / `not_yet_created`; plus `no_block`, `bad_json`,
+       `shape`, `too_large`, `unknown_key`). Non-blocking authoring issues stay as draft warnings.
+     - **`mode="auto"`:** requires both `giver` and `avatar`, requires a non-empty `giver_role` (`giver_required`),
+       forbids `start_condition` and `create_prop` (`not_allowed_auto`), checks all `bindings` with
+       `quest_engine.check_bindings`, and runs `quest_engine.dry_check(template, bindings, avatar)` — a read-only
+       evaluation on a synthetic run (`id=""`) that reports `already_true` when step 0 is already fulfilled for `avatar`
+       and `unavailable` when a step evaluates unavailable without targeting an effect key. `ok` requires zero issues.
+  4. `repair` (at most **one** round) — when step 3 produced any issues (up to `MAX_GAP_LINES = 30` formatted lines),
+     renders `tasks/quest_structure_repair.md` and calls `llm_call("quest_structure", ..., label="quest structure repair",
+     max_tokens=4000)`. A `RuntimeError` keeps the prior template/issues and appends `llm_failed` (`ok=False`); an
+     unparseable repair when a prior template dict exists keeps that template and appends `repair_unparsed`
+     (non-blocking in `admin` mode).
+- **Job `quest_generate` and Game-Admin "Generate with LLM".** `quest_authoring.submit(brief, giver=None)` checks
+  `brief` (1..2000 chars, `MAX_BRIEF_CHARS`) and `giver` (`character_exists` when non-empty), allows at most one
+  pending/running `quest_generate` task (`GenerateBusy` → HTTP 409 `busy`), and submits `quest_generate`
+  (`queue_name="quest_generate"`, `max_retries=0`). The handler updates task progress per phase and — whenever the
+  resulting template has valid field types, a non-blank `title`, and fits in 256 KiB — saves it as an ordinary `draft`
+  of `origin="admin"`, `kept=True` (`quests.create_template`), never starting a run on its own. A job interrupted by a
+  server restart fails cleanly so the admin can start a fresh one. In Game-Admin → **Quests** → **Templates**,
+  **✨ Generate with LLM** (`GenerateDialog`) posts to `POST /quests/generate`, polls `GET /quests/generate/jobs` every
+  2 s showing phase status, opens the saved draft in the editor on completion, and pre-fills **Start run**
+  (`StartRunDialog`) with the job's proposed `bindings` as initial defaults.
+
+## Generated templates
+
+- **`origin` and `kept`.** `origin` is `'admin'` (hand-authored or "Generate with LLM"), `'auto'` (automatic NPC quest),
+  `'story'` or `'import'` (reserved in the schema `CHECK` for stages 4–5). `quests.GENERATED_ORIGINS` is
+  `("auto", "story")`: an **unkept generated** template has `origin in GENERATED_ORIGINS` and `kept == False`.
+  Admin templates always start with `kept=True`; automatic quests start with `origin="auto"`, `kept=False`.
+- **Template list filter (`GET /quests/templates?generated=0|1|all`).** `0` (default, UI filter **Library**) hides
+  unkept generated templates; `1` (UI filter **Generated**) lists only unkept generated templates; `all` (UI filter
+  **All**) lists both.
+- **Keep button.** Opening a stored template with `kept == False` in `TemplatesView` shows **Keep** in the toolbar
+  (enabled when clean), sending `PUT /quests/templates/{id}` with `{"kept": true, "base_revision": ...}`. Once kept,
+  the template moves into **Library** permanently (retaining its `Auto` / `Story` origin tag) and is never auto-deleted.
+- **Cleanup rule (D7, `quest_effects._drop_generated_templates`).** Phase (5) of `pass_once()` scans unkept generated
+  templates (`quests.list_templates(generated=True)`). Templates with zero runs are skipped. When a template has at
+  least one run and **every** run has ended (`RUN_ENDED_STATES`), is outside the `CHRONICLE_SIZE = 10` player chronicle
+  window (`quests.list_chronicle(CHRONICLE_SIZE)`), has no `pending` payout (and, if `done`, no `failed` payout that
+  could still be retried), and has finished non-permanent object cleanup and permanent prop untagging, `pass_once()`
+  deletes each ended run (`quests.delete_run`: objects, payouts, judgements and run row) and then deletes the template.
+- **Origin badge in Runs.** `GET /quests/runs` carries `template_id` and `origin` (from `template_snapshot.origin`,
+  default `"admin"`), and `RunsView` displays an origin tag (`Auto`, `Story`, `Imported`) beside non-admin runs.
+
+## Automatic quests
+
+When `quests.auto_enabled` is `true` (default `false`), awake NPCs standing near a player avatar can offer small,
+time-limited quests (`app/core/quest_auto.py`):
+
+1. **Periodic check (`periodic_jobs._sub_auto_quests`, every 300 s).** Calls `quest_auto.tick()` (paused like other
+   world-admin sub-tasks while the world is frozen or the default queue is paused; never calls an LLM itself):
+   - skips when `not auto_enabled()` (`"disabled"`) or `open_auto_count() >= max_open()` (`quests.count_runs(RUN_OPEN_STATES, origin="auto")` against `quests.max_open_auto_quests`, default `2` → `"cap"`);
+   - `pick_giver()` iterates active avatars (`account.get_all_avatars()`) in sorted order and picks the first awake
+     non-avatar character (`list_available_characters()`, excluding avatars and `live_givers()` — characters already
+     bound to `giver_role` of any run in `RUN_OPEN_STATES`) in the **same room**, else in the **same location** (sorted
+     by name; `None` → `"no_giver"`);
+   - submits at most one deduplicated job (`task_type="quest_auto"`, `queue_name="background"`, `priority=30`,
+     `agent_name="auto_quest"`, `deduplicate=True`, `max_retries=0`).
+2. **Worker (`quest_auto._handle`).** Re-checks every gate before calling the LLM: `auto_enabled()`,
+   `not is_world_frozen()`, `open_auto_count() < max_open()`, giver still in `list_available_characters()` and not an
+   avatar, giver awake (`not is_character_sleeping`), giver not in `live_givers()`, avatar still active, and giver and
+   avatar still sharing the same non-empty `location_id`. Then calls
+   `quest_authoring.generate(..., giver=giver, avatar=avatar, mode="auto")` (which enforces `giver_role`, empty
+   `start_condition`, no `create_prop`, valid bindings, and clean `dry_check`).
+3. **Storage, refusal cleanup, and how the NPC offers it.** Sets `time_limit_s = expiry_game_hours() * 3600`
+   (`quests.auto_expiry_game_hours`, default `48` → `172800` game seconds), creates the template with `origin="auto"`,
+   `state="ready"`, `kept=False`, and calls `quest_engine.start_run(..., started_by="auto")`. If `generate` fails,
+   nothing is written; if `start_run` raises `QuestRefused` (or any error), `_handle` deletes the newly created
+   template immediately so nothing orphaned remains. Once open, `quest_prompt.lines_for(giver)` injects
+   `You want an adventurer to: <summary> — next: <step 0 text>` into the giver's per-turn prompt block so the NPC can
+   pitch the quest in conversation; if unfulfilled when `expires_at` passes on the game clock, the tick ends it
+   `failed`, freeing the cap slot and giver.
+
+## Settings
+
+Section `quests` in `app/core/config_schema.py` (`scope: "world"`, `world_group: "story"` — edited in Game-Admin →
+**Setup** → **Story & events**; `/admin/settings` shows only instance-scope sections):
+
+| Key | Type | Default | Bounds | Meaning |
+|---|---|---|---|---|
+| `quests.judgement_min_interval_s` | `int` | `30` | `5..3600` | Minimum SYSTEM-time seconds before an open `llm_judgement` step may ask the judge again after new perception lines arrive |
+| `quests.judgement_max_per_minute` | `int` | `6` | `1..120` | In-process cap across all open runs on `llm_judgement` task submissions per rolling 60 seconds |
+| `quests.auto_enabled` | `bool` | `false` | — | Allow awake NPCs near an avatar to offer automatic LLM-written quests (checked every 300 s) |
+| `quests.max_open_auto_quests` | `int` | `2` | `0..20` | Maximum number of open `origin="auto"` runs at once (`0` = none) |
+| `quests.auto_expiry_game_hours` | `int` | `48` | `1..720` | GAME hours after which an automatic quest expires and ends `failed` |
+
+## LLM tasks
+
+Registered in `app/core/llm_tasks.py` and resolved via `app/core/llm_router.py::fallback_parent` (thinking off on all
+three; templates under `shared/templates/llm/tasks/`):
+
+| Task | Category / Priority | Fallback parent | Template(s) | Purpose |
+|---|---|---|---|---|
+| `quest_judgement` | `tool` / `LOW` (`cache_class: "bg"`) | `intent` | `tasks/quest_judgement.md` | Judges an avatar's subjective transcript since `step_started_at` against a step criterion (`json:verdict`, `max_tokens=300`) |
+| `quest_draft` | `chat` / `LOW` (`bg`) | `chat_stream` | `tasks/quest_draft.md` | Writes a short creative prose draft from a brief and world context (`max_tokens=1500`) |
+| `quest_structure` | `tool` / `LOW` (`cache_class: "bg"`) | `intent` | `tasks/quest_structure.md`, `tasks/quest_structure_repair.md` | Converts the prose draft (and runs at most one validator repair round) into `{"template", "bindings"}` in a `json:quest` fence (`max_tokens=4000`) |
+
 ## Admin routes
 
 `/quests` is admin-only for reads AND writes (templates carry GM notes): the prefix is on the auth gate's
@@ -553,22 +748,25 @@ task queue paused (`tick()` itself has no freeze check). Order:
 | Route | Does |
 |---|---|
 | `GET /quests/catalog` | Public type descriptors `{conditions, prerequisites, effects, role_kinds}` |
-| `GET /quests/templates` | List rows with `open_runs` |
+| `GET /quests/templates?generated=0\|1\|all` | List rows (`id`, `title`, `state`, `origin`, `kept`, `revision`, `updated_at`, `open_runs`): `0` (default) = library (hides unkept generated), `1` = unkept generated only, `all` = every template |
 | `GET /quests/templates/{id}` | The full template plus its `issues` |
-| `POST /quests/templates` | Create; always a `draft` of origin `admin` |
-| `PUT /quests/templates/{id}` | Edit with `base_revision` |
+| `POST /quests/templates` | Create; always a `draft` of origin `admin` (`kept=true`) |
+| `PUT /quests/templates/{id}` | Edit content fields, `state`, and/or `kept` with `base_revision` |
 | `DELETE /quests/templates/{id}` | Refused with 409 `has_open_runs` while a run has not ended |
 | `POST /quests/templates/{id}/start` | `{"bindings": {role: binding}}` → the run |
-| `GET /quests/runs?state=` | Not-yet-ended runs first, then the newest 50 ended ones; each row carries `binding_labels`, `game_label` per step-log entry, `objects: [{kind, label, permanent, status}]` (markers excluded), and `payouts: [{position, state, issues}]` |
+| `GET /quests/runs?state=&lang=` | Not-yet-ended runs first, then the newest 50 ended ones; each row carries `template_id`, `origin`, `binding_labels`, `game_label` per step-log entry, `objects: [{kind, label, permanent, status}]` (markers excluded), `payouts: [{position, state, issues}]`, and `judgements: [{mind, avatar, state, reason, judged_at}]` (current step while `state == "open"`, else `[]`) |
 | `POST /quests/runs/{id}/cancel` | `{"ok": bool}` (false when it had ended or is unknown) |
 | `POST /quests/runs/{id}/retry` | `{"ok": bool}` — re-arms failed payouts of a not-ended (or `done`) run, clears `preparing` issues, and wakes the effects worker |
+| `POST /quests/generate` | `{"brief": str, "giver"?: str}` → `202 {"task_id": str}` (enqueues `quest_generate`; `409 busy` if one is already pending or running) |
+| `GET /quests/generate/jobs?limit=` | Recent `quest_generate` jobs (`limit` 1..50, default 10): `{task_id, status, phase, state, ok, template_id, title, bindings, issues, error, created_at, completed_at, request}` |
 
 Every error detail is an object with a `code`: `{code, message}`, `stale` adds the stored `current` revision, and the
 two refusals with an issue list answer `{code, issues}`. Codes: `bad_json` (400, also a body nested too deep to
-parse), `bad_request` (400: a text field that is not text, a `time_limit_s` outside 0..2⁶³−1, anything the store
-cannot write), `not_found` (404), `revision_required` (428), `stale` (409), `invalid` (422), `has_open_runs` (409),
-`refused` (422 at start), `too_large` (413, a body over 256 KiB). The Game-Admin translates the code; issue messages
-are translated on display where keys exist.
+parse), `bad_request` (400: a text field that is not text, an invalid `generated` or `limit` query parameter, an empty /
+over-2000-character `brief`, an unknown `giver`, a `time_limit_s` outside 0..2⁶³−1, anything the store cannot write),
+`busy` (409, a `quest_generate` job is already pending or running), `not_found` (404), `revision_required` (428),
+`stale` (409), `invalid` (422), `has_open_runs` (409), `refused` (422 at start), `too_large` (413, a body over
+256 KiB). The Game-Admin translates the code; issue messages are translated on display where keys exist.
 
 **The ready rule.** `PUT` checks the RESULTING template (stored fields merged with the body): whenever its state would
 be `ready` with issues it answers 422 `invalid` and writes nothing — also when the body does not name `state`, so a
@@ -578,13 +776,14 @@ are gone.
 
 ## What later stages add
 
-Not yet in stages 1–2: LLM authoring, `llm_judgement`, automatic quests and their caps, a `quests` config section,
-repeat modes, dependencies, stories, import/export, reward bounds / media budget settings, and a `secret` role kind.
+Not yet in stages 1–3: stories (frames, chapters generated during play, summaries, approval mode), repeat modes,
+dependencies, role binding on import, `quest` / `story` pack types, reward bounds / media budget settings, and a
+`secret` role kind.
 
 | Stage | Adds |
 |---|---|
 | 1 | Hand-made quests are playable (built) |
 | 2 | Quests put things into the world: object effects, run objects with lifetimes and cleanup, rewards, hints as secrets, `share_secret`, prompt block, media generation (built) |
-| 3 | The LLM writes quests: authoring pipeline, "Generate with LLM", `llm_judgement`, automatic NPC-giver quests with caps |
+| 3 | The LLM writes quests: authoring pipeline, "Generate with LLM", `llm_judgement`, automatic NPC-giver quests with caps, unkept generated template cleanup (built) |
 | 4 | Stories: a frame, chapters generated during play, summaries, approval mode |
 | 5 | Reuse across worlds: repeat modes, dependencies, role binding on import, `quest` / `story` pack types |

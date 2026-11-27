@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Smoke: the acceptance play-through of quest stages 1 and 2 — "Errand" (stage 1) and
-"The big rock" (stage 2) played end to end over the REAL routes.
+"""Smoke: the four-part acceptance play-through of quest stages 1 to 3 — "Errand" (stage 1),
+"The big rock" (stage 2), "A mug for the guard" (conversation quest under a frozen clock), and
+stage 3 (admin LLM generation, automatic NPC quest, and llm_judgement) played end to end over the
+REAL routes and the real task queue.
 
 PART 1 — Quest system stage 1, Task 13. The REAL `app.server` app through a `TestClient` without `with` (no lifespan: the
 smoke calls `init_schema()`, `quest_types.register()` and `quest_engine.register()` itself, as
@@ -146,6 +148,85 @@ WHAT FOLLOWS BY HAND (PART 3)
  4. W speaks to A -> run state "done"; pass_once() -> A holds 0 Ale, W holds 1 Ale.
  5. GET /play/quests as player -> 200; neither "role_notes" nor "step_started_at" appears in resp.text.
  6. Game clock stayed frozen at Y0001-D010T12:00:00 throughout PART 3.
+
+PART 4 — Quest system stage 3, Task 7: admin LLM generation (4a), automatic NPC quest (4b), and
+llm_judgement under a frozen clock (4c) played end to end over the REAL routes and the real
+TaskQueue, with `llm_router.llm_call` stubbed and every unexpected LLM task failing the check.
+Without FastAPI lifespan, the smoke calls `quest_authoring.register()`, `quest_auto.register()`,
+and `quest_judgement.register()` itself.
+
+FIXTURE (PART 4)
+    Location L4 ("Courtyard", entry_room "r1") with rooms "r1" ("Gate") and "r2" ("Well").
+    Avatar A is moved to L4/r1; awake non-avatar NPC G4 is created in L4/r1 (language "en").
+    Active avatars in `account.get_all_avatars()` are {"A", "A2"} (from "demo" and "demo2").
+    `quest_auto.pick_giver()` iterates `sorted(avatars)` -> "A" first ("A" < "A2"); A is at
+    L4/r1, and among non-avatar characters not in `live_givers()`, only G4 stands at L4 (in the
+    same room r1, awake), so `pick_giver()` deterministically answers `("G4", "A")`.
+
+WHAT FOLLOWS BY HAND (PART 4)
+ 4a. Admin generates a quest (Decision 4 — stored as an ordinary draft, starts nothing):
+     - POST /quests/generate {"brief": "Check the courtyard well", "giver": "G4"} -> 202 with
+       non-empty task_id.
+     - Poll GET /quests/generate/jobs until finished -> status "completed", state "done", ok True,
+       issues [], bindings == {"giver": {"name": "G4"}, "place": {"location_id": "L4", "room_id": "r2"}}.
+       LLM tasks invoked: ["quest_draft", "quest_structure"].
+     - GET /quests/templates/<tpl4a_id> -> 200, state "draft", origin "admin", kept True, rev 1,
+       issues []. Before starting, 0 runs exist for <tpl4a_id>.
+     - PUT {"state": "ready", "base_revision": 1} -> 200, state "ready", rev 2, issues [].
+     - POST /quests/templates/<tpl4a_id>/start {"bindings": job["bindings"]} -> 200, state "open",
+       current_step 0 (step 0 is at_place L4/r2 while A stands in L4/r1).
+     - POST /quests/runs/<run4a_id>/cancel -> 200 {"ok": True}, freeing G4 from `live_givers()`
+       before 4b.
+ 4b. Automatic quest offered by an NPC beside the avatar (Decision 5):
+     - Default expiry from config_schema: `field_default("quests", "auto_expiry_game_hours")` == 48
+       -> `time_limit_s` == 48 * 3600 == 172800 game seconds.
+     - World briefly unfrozen (`world.set_world_frozen(False)`), `quest_auto.auto_enabled` patched
+       to True; `quest_auto.pick_giver()` == `("G4", "A")`.
+     - `quest_auto.tick()` -> `{"queued": <task_id>, "giver": "G4", "avatar": "A"}` on the real
+       task queue; LLM stub returns prose on `quest_draft` and a valid auto `json:quest` block on
+       `quest_structure` (title "Water from {place}", summary "Water from {place} for {giver}.",
+       giver_role "giver" -> G4, step 0 at_place -> L4/r2 so dry_check sees step 0 false for A in
+       L4/r1, start_condition {}, no create_prop). LLM tasks invoked: ["quest_draft", "quest_structure"].
+     - Exactly 1 template with origin "auto": state "ready", kept False, time_limit_s == 172800;
+       hidden from default `GET /quests/templates` (generated=0) and listed in `?generated=1`.
+     - Exactly 1 run of that template: state "open", started_by "auto", giver bound to {"name": "G4"},
+       non-empty `expires_at`; `quest_auto.open_auto_count()` == 1.
+     - `quest_prompt.lines_for("G4")` ==
+       `["You want an adventurer to: Water from Well for G4. \u2014 next: Check Well for G4."]`
+       (`quest_prompt` renders `summary`, falling back to `title` when `summary` is empty; here the
+       rendered line also contains the rendered quest title "Water from Well").
+     - GET /play/quests as player -> 200, lists the open run with title "Water from Well", and
+       resp.text contains none of "origin", "kept", "gm_notes".
+     - Cancel the auto run via POST /quests/runs/<run4b_id>/cancel -> 200 {"ok": True}, and
+       re-freeze the world (`world.set_world_frozen(True)`).
+ 4c. `llm_judgement` step passes on a stubbed "yes" verdict under a frozen game clock (Decisions 1–3):
+     - World is frozen (`world.is_world_frozen()` is True); record `t4c_start_game = game_time().canonical()`
+       (within <= 5 s of PART 3's frozen stamp after 4b's brief thaw).
+     - Admin POST /quests/templates with role `giver` (character) and step 0
+       `{"type": "llm_judgement", "params": {"criterion": "{giver} was asked about the lost lamp"}}`
+       -> 200 draft; PUT ready -> 200 ready; POST .../start with giver -> G4 -> 200 state "open",
+       current_step 0. (`start_run` emits no signal and does not evaluate, so 0 judgements exist yet;
+       `quest_judgement.min_interval_s` is patched to 0.0 so no 30 s cooldown can gate a claim.)
+     - `perception_store.get_character_stream_since` truncates `step_started_at` to whole UTC seconds
+       and filters strictly (`u.ts > since_sec`), so A's line is recorded at
+       `ts = (parse_iso(step_started_at) + 1 s)` in L4/r1:
+       `record_utterance(speaker="A", content="G4, have you seen my lost lamp?", addressees=["G4"], ...)`.
+     - `utterance.heard` -> `quest_engine._heard` sees `speaker_is_avatar=True` and evaluates A on
+       `utterance.spoken` -> `_llm_judgement` claims the slot and submits `quest_judgement` to the
+       real task queue -> `quest_judgement.handle` calls `llm_call("quest_judgement", ...)` -> stub
+       returns fenced `{"passed": true, "reason": "A asked G4 about the lamp."}` -> `set_judgement`
+       stores state "yes" and notifies `quest.judged` -> engine worker evaluates A, `record_step_done`
+       completes the 1-step run (`state == "done"`, `current_step == 1`, `step_log` [(0, "A", "A")])
+       and in the SAME transaction deletes `quest_judgements` rows with `step <= 0`.
+     - Therefore, once the run is "done":
+       * LLM tasks invoked in 4c: `["quest_judgement"]`; `user_prompt` contains both
+         `"G4 was asked about the lost lamp"` and `"A -> G4: G4, have you seen my lost lamp?"`.
+       * `quests.list_judgements(run4c_id)` == `[]`, and `GET /quests/runs` shows the run with
+         `state == "done"`, `step_log` step 0 by "A", and `judgements == []` (`record_step_done`
+         purged `step <= 0`, and `_run_row` only populates `judgements` while `state == "open"`).
+       * GET /play/quests as player -> 200, run state "done", and resp.text contains neither the
+         verdict reason `"A asked G4 about the lamp."` nor `"judgements"` nor `"criterion"`.
+       * `game_time().canonical()` == `t4c_start_game` and `world.is_world_frozen()` is True.
 """
 import json
 import os
@@ -787,6 +868,375 @@ def main() -> int:
         check("p3 no role_notes in response text", "role_notes" in resp_book3.text, False)
         check("p3 no step_started_at in response text", "step_started_at" in resp_book3.text, False)
         check("p3 game clock stayed frozen throughout PART 3", game_time().canonical(), t3_start_game)
+
+        # ══════════════════════════════════════════════════════════════════════════════════════════
+        # PART 4 — Stage 3: admin LLM authoring (4a), automatic quest (4b), llm_judgement (4c)
+        # ══════════════════════════════════════════════════════════════════════════════════════════
+        from datetime import timedelta, timezone
+        from types import SimpleNamespace
+        from app.core import llm_router, quest_authoring, quest_auto, quest_judgement, task_queue
+        from app.core.timeutils import parse_iso
+
+        quest_authoring.register()
+        quest_auto.register()
+        quest_judgement.register()
+
+        world.upsert_location(
+            {
+                "id": "L4",
+                "name": "Courtyard",
+                "entry_room": "r1",
+                "rooms": [
+                    {"id": "r1", "name": "Gate"},
+                    {"id": "r2", "name": "Well"},
+                ],
+            },
+            sync_world=False,
+        )
+        with keyed_lock("character_profile", "A"):
+            prof_a = chars.get_character_profile("A") or {}
+            prof_a["current_location"] = "L4"
+            prof_a["current_room"] = "r1"
+            assert chars.save_character_profile("A", prof_a)
+        assert chars.save_character_profile(
+            "G4", {"current_location": "L4", "current_room": "r1", "language": "en"}, create_new=True
+        ), "G4"
+        check("p4 drain after moving A to L4/r1", quest_engine.drain(), True)
+
+        admin_quest_obj = {
+            "template": {
+                "title": "Inspect the well",
+                "summary": "Help {giver} check {place}.",
+                "gm_notes": "Admin generated GM note",
+                "giver_role": "giver",
+                "roles": [
+                    {"key": "giver", "kind": "character", "description": "Who asks"},
+                    {"key": "place", "kind": "room", "description": "Where to look"},
+                ],
+                "steps": [{
+                    "id": "s1",
+                    "text": "Walk to {place}.",
+                    "hint": "",
+                    "condition": {"type": "at_place", "params": {"place": "place"}},
+                }],
+                "start_condition": {},
+                "prerequisites": {},
+                "setup_effects": [],
+                "rewards": [],
+                "time_limit_s": 0,
+            },
+            "bindings": {
+                "giver": {"name": "G4"},
+                "place": {"location_id": "L4", "room_id": "r2"},
+            },
+        }
+        auto_quest_obj = {
+            "template": {
+                "title": "Water from {place}",
+                "summary": "Water from {place} for {giver}.",
+                "gm_notes": "Auto generated GM note",
+                "giver_role": "giver",
+                "roles": [
+                    {"key": "giver", "kind": "character", "description": "Quest giver"},
+                    {"key": "place", "kind": "room", "description": "Target room"},
+                ],
+                "steps": [{
+                    "id": "s1",
+                    "text": "Check {place} for {giver}.",
+                    "hint": "",
+                    "condition": {"type": "at_place", "params": {"place": "place"}},
+                }],
+                "start_condition": {},
+                "prerequisites": {},
+                "setup_effects": [],
+                "rewards": [],
+                "time_limit_s": 0,
+            },
+            "bindings": {
+                "giver": {"name": "G4"},
+                "place": {"location_id": "L4", "room_id": "r2"},
+            },
+        }
+        verdict_reason_4c = "A asked G4 about the lamp."
+
+        llm_calls_p4: list[dict] = []
+        unexpected_tasks_p4: list[str] = []
+        struct_mode_holder = ["admin"]
+
+        def stub_llm_p4(task, system_prompt, user_prompt, **kwargs):
+            llm_calls_p4.append({
+                "task": task,
+                "system": system_prompt,
+                "user": user_prompt,
+                "kwargs": dict(kwargs),
+            })
+            if task == "quest_draft":
+                return SimpleNamespace(content="G4 asks A to inspect the courtyard well.")
+            if task == "quest_structure":
+                obj = admin_quest_obj if struct_mode_holder[0] == "admin" else auto_quest_obj
+                return SimpleNamespace(content="```json:quest\n" + json.dumps(obj) + "\n```")
+            if task == "quest_judgement":
+                verdict = {"passed": True, "reason": verdict_reason_4c}
+                return SimpleNamespace(content="```json:verdict\n" + json.dumps(verdict) + "\n```")
+            unexpected_tasks_p4.append(str(task))
+            FAILURES.append(f"p4 unexpected llm_call task: {task!r}")
+            raise AssertionError(f"unexpected llm_call task: {task!r}")
+
+        def wait_generate_job(task_id: str) -> dict:
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline:
+                jobs_resp = call("GET", "/quests/generate/jobs")
+                if jobs_resp.status_code == 200:
+                    for j in jobs_resp.json().get("jobs", []):
+                        if j.get("task_id") == task_id and j.get("status") not in ("pending", "running"):
+                            return j
+                time.sleep(0.05)
+            return {}
+
+        # ── 4a: Admin generates a quest (Decision 4) ───────────────────────────────────────────
+        print("[P4.a] admin generates a quest via POST /quests/generate")
+        struct_mode_holder[0] = "admin"
+        llm_calls_p4.clear()
+        with patch.object(llm_router, "llm_call", side_effect=stub_llm_p4):
+            resp_gen = call("POST", "/quests/generate", {"brief": "Check the courtyard well", "giver": "G4"})
+            gen_tid = resp_gen.json().get("task_id", "") if resp_gen.status_code == 202 else ""
+            check("p4a POST /quests/generate -> 202 with task_id",
+                  (resp_gen.status_code, bool(gen_tid)), (202, True))
+            job4a = wait_generate_job(gen_tid)
+
+        check("p4a job completed, state done, ok True, no issues",
+              (job4a.get("status"), job4a.get("state"), job4a.get("ok"), job4a.get("issues")),
+              ("completed", "done", True, []))
+        check("p4a llm tasks invoked", [c["task"] for c in llm_calls_p4], ["quest_draft", "quest_structure"])
+        want_bindings_4a = {"giver": {"name": "G4"}, "place": {"location_id": "L4", "room_id": "r2"}}
+        check("p4a job carries proposed bindings", job4a.get("bindings"), want_bindings_4a)
+
+        tpl4a_id = job4a.get("template_id") or ""
+        resp_tpl4a = call("GET", f"/quests/templates/{tpl4a_id}")
+        tpl4a = resp_tpl4a.json() if resp_tpl4a.status_code == 200 else {}
+        check("p4a template saved as admin draft rev 1 with no issues",
+              (resp_tpl4a.status_code, tpl4a.get("state"), tpl4a.get("origin"),
+               tpl4a.get("kept"), tpl4a.get("revision"), tpl4a.get("issues")),
+              (200, "draft", "admin", True, 1, []))
+        runs_before_4a = [
+            r for r in (call("GET", "/quests/runs").json().get("runs") or [])
+            if r.get("template_id") == tpl4a_id
+        ]
+        check("p4a generation started no run automatically",
+              (runs_before_4a, quests_mod.list_runs(template_id=tpl4a_id)), ([], []))
+
+        resp_ready4a = call("PUT", f"/quests/templates/{tpl4a_id}", {"state": "ready", "base_revision": 1})
+        tpl4a_ready = resp_ready4a.json() if resp_ready4a.status_code == 200 else {}
+        check("p4a PUT ready 200 with empty issues",
+              (resp_ready4a.status_code, tpl4a_ready.get("state"),
+               tpl4a_ready.get("revision"), tpl4a_ready.get("issues")),
+              (200, "ready", 2, []))
+        resp_start4a = call("POST", f"/quests/templates/{tpl4a_id}/start", {"bindings": job4a.get("bindings") or {}})
+        run4a = resp_start4a.json() if resp_start4a.status_code == 200 else {}
+        run4a_id = run4a.get("id") or ""
+        check("p4a start with proposed bindings -> open at step 0",
+              (resp_start4a.status_code, run4a.get("state"), run4a.get("current_step")),
+              (200, "open", 0))
+        resp_cancel4a = call("POST", f"/quests/runs/{run4a_id}/cancel")
+        check("p4a cancel run before 4b -> 200 ok",
+              (resp_cancel4a.status_code, resp_cancel4a.json()), (200, {"ok": True}))
+        check("p4a drain after cancel", quest_engine.drain(), True)
+
+        # ── 4b: Automatic quest offered by nearby NPC (Decision 5) ─────────────────────────────
+        print("[P4.b] automatic quest offered by G4 beside A")
+        auto_hours_default = field_default("quests", "auto_expiry_game_hours")
+        check("p4b schema default auto_expiry_game_hours == 48", auto_hours_default, 48)
+        want_auto_limit_s = auto_hours_default * 3600
+        check("p4b hand-derived auto time_limit_s == 172800", want_auto_limit_s, 172800)
+
+        struct_mode_holder[0] = "auto"
+        llm_calls_p4.clear()
+        tq = task_queue.get_task_queue()
+        world.set_world_frozen(False)
+        try:
+            with (
+                patch.object(quest_auto, "auto_enabled", return_value=True),
+                patch.object(llm_router, "llm_call", side_effect=stub_llm_p4),
+            ):
+                check("p4b pick_giver == ('G4', 'A')", quest_auto.pick_giver(), ("G4", "A"))
+                tick_res = quest_auto.tick()
+                auto_tid = str(tick_res.get("queued") or "")
+                check("p4b tick queues quest_auto for G4 and A",
+                      (bool(auto_tid), tick_res.get("giver"), tick_res.get("avatar")),
+                      (True, "G4", "A"))
+
+                deadline = time.monotonic() + 30.0
+                while time.monotonic() < deadline:
+                    if auto_tid and tq.task_status(auto_tid) not in ("pending", "running"):
+                        break
+                    time.sleep(0.05)
+                check("p4b quest_auto task completed", tq.task_status(auto_tid), "completed")
+
+                check("p4b llm tasks invoked",
+                      [c["task"] for c in llm_calls_p4], ["quest_draft", "quest_structure"])
+                auto_tpls = quests_mod.list_templates(origin="auto")
+                check("p4b exactly one auto template stored", len(auto_tpls), 1)
+                tpl4b = auto_tpls[0] if auto_tpls else {}
+                tpl4b_id = tpl4b.get("id") or ""
+                check("p4b auto template origin/state/kept/time_limit_s",
+                      (tpl4b.get("origin"), tpl4b.get("state"), tpl4b.get("kept"), tpl4b.get("time_limit_s")),
+                      ("auto", "ready", False, want_auto_limit_s))
+                lib_ids = {t["id"] for t in (call("GET", "/quests/templates").json().get("templates") or [])}
+                gen_ids = [t["id"] for t in (call("GET", "/quests/templates?generated=1").json().get("templates") or [])]
+                check("p4b unkept auto hidden from default library and shown in generated=1",
+                      (tpl4b_id in lib_ids, gen_ids), (False, [tpl4b_id]))
+
+                auto_runs = quests_mod.list_runs(template_id=tpl4b_id) if tpl4b_id else []
+                check("p4b exactly one run of the auto template", len(auto_runs), 1)
+                run4b = auto_runs[0] if auto_runs else {}
+                run4b_id = run4b.get("id") or ""
+                check("p4b auto run open, giver bound to G4, expires_at set",
+                      (run4b.get("state"), run4b.get("started_by"),
+                       (run4b.get("bindings") or {}).get("giver"), bool(run4b.get("expires_at"))),
+                      ("open", "auto", {"name": "G4"}, True))
+                check("p4b open_auto_count == 1", quest_auto.open_auto_count(), 1)
+
+                want_g4_line = "You want an adventurer to: Water from Well for G4. \u2014 next: Check Well for G4."
+                g4_lines = qp.lines_for("G4")
+                check("p4b G4 prompt line offers the quest with rendered title",
+                      (g4_lines, any("Water from Well" in ln for ln in g4_lines)),
+                      ([want_g4_line], True))
+
+                resp_book4b = call("GET", "/play/quests", role="player")
+                check("p4b GET /play/quests 200", resp_book4b.status_code, 200)
+                book4b_quests = (resp_book4b.json() if resp_book4b.status_code == 200 else {}).get("quests") or []
+                entry4b = next((q for q in book4b_quests if q.get("id") == run4b_id), {})
+                check("p4b player quest book lists open auto quest title",
+                      (entry4b.get("state"), entry4b.get("title")), ("open", "Water from Well"))
+                check("p4b player quest book leaks none of origin, kept, gm_notes",
+                      ("origin" in resp_book4b.text, "kept" in resp_book4b.text, "gm_notes" in resp_book4b.text),
+                      (False, False, False))
+
+                resp_cancel4b = call("POST", f"/quests/runs/{run4b_id}/cancel")
+                check("p4b cancel auto run before 4c -> 200 ok",
+                      (resp_cancel4b.status_code, resp_cancel4b.json()), (200, {"ok": True}))
+        finally:
+            world.set_world_frozen(True)
+        check("p4b world re-frozen after auto quest", world.is_world_frozen(), True)
+        check("p4b drain after auto quest cancel", quest_engine.drain(), True)
+
+        # ── 4c: llm_judgement passes after stubbed "yes" verdict under frozen clock ────────────
+        print("[P4.c] llm_judgement step passes under frozen game clock")
+        t4c_start_game = game_time().canonical()
+        drift_s = abs((GameTime.parse(t4c_start_game) - GameTime.parse(t3_start_game)).total_seconds)
+        check("p4c world frozen and game clock barely moved during 4b thaw (<= 5 s)",
+              (world.is_world_frozen(), drift_s <= 5), (True, True))
+
+        tpl4c_body = {
+            "title": "The lost lamp",
+            "summary": "Ask {giver} about the lost lamp.",
+            "gm_notes": "GM ONLY 4c",
+            "giver_role": "giver",
+            "roles": [{"key": "giver", "kind": "character", "description": "Who to ask"}],
+            "steps": [{
+                "id": "s1",
+                "text": "Ask {giver} about the lost lamp.",
+                "hint": "",
+                "condition": {
+                    "type": "llm_judgement",
+                    "params": {"criterion": "{giver} was asked about the lost lamp"},
+                },
+            }],
+            "start_condition": {},
+            "prerequisites": {},
+            "time_limit_s": 0,
+        }
+        resp_tpl4c = call("POST", "/quests/templates", tpl4c_body)
+        tpl4c = resp_tpl4c.json() if resp_tpl4c.status_code == 200 else {}
+        tpl4c_id = tpl4c.get("id") or ""
+        check("p4c POST llm_judgement template -> 200 draft with no issues",
+              (resp_tpl4c.status_code, tpl4c.get("state"), tpl4c.get("issues")),
+              (200, "draft", []))
+        resp_ready4c = call("PUT", f"/quests/templates/{tpl4c_id}", {"state": "ready", "base_revision": 1})
+        check("p4c PUT ready 200", resp_ready4c.status_code, 200)
+        resp_start4c = call("POST", f"/quests/templates/{tpl4c_id}/start",
+                            {"bindings": {"giver": {"name": "G4"}}})
+        run4c = resp_start4c.json() if resp_start4c.status_code == 200 else {}
+        run4c_id = run4c.get("id") or ""
+        check("p4c start -> open at step 0",
+              (resp_start4c.status_code, run4c.get("state"), run4c.get("current_step")),
+              (200, "open", 0))
+        check("p4c drain after start", quest_engine.drain(), True)
+        check("p4c start_run does not pre-submit a judgement", quests_mod.list_judgements(run4c_id), [])
+
+        with quest_judgement._rate_lock:
+            quest_judgement._recent_submits.clear()
+        llm_calls_p4.clear()
+
+        # get_character_stream_since truncates step_started_at to whole UTC seconds and compares
+        # strictly (u.ts > since_sec), so record A's utterance 1 second after step_started_at.
+        after_step_ts = (
+            parse_iso(run4c["step_started_at"]) + timedelta(seconds=1)
+        ).astimezone(timezone.utc).isoformat(timespec="seconds")
+
+        with (
+            patch.object(quest_judgement, "min_interval_s", return_value=0.0),
+            patch.object(llm_router, "llm_call", side_effect=stub_llm_p4),
+        ):
+            uid_4c = record_utterance(
+                speaker="A",
+                content="G4, have you seen my lost lamp?",
+                addressees=["G4"],
+                location_id="L4",
+                room_id="r1",
+                source="play",
+                ts=after_step_ts,
+            )
+            check("p4c avatar utterance recorded", uid_4c is not None, True)
+
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline:
+                quest_engine.drain()
+                cur_4c = quests_mod.get_run(run4c_id) or {}
+                if cur_4c.get("state") == "done":
+                    break
+                time.sleep(0.05)
+            quest_engine.drain()
+
+        run4c_done = quests_mod.get_run(run4c_id) or {}
+        check("p4c run reached state done at step 1",
+              (run4c_done.get("state"), run4c_done.get("current_step")), ("done", 1))
+        check("p4c llm_call invoked once with task quest_judgement",
+              [c["task"] for c in llm_calls_p4], ["quest_judgement"])
+        judge_user_prompt = llm_calls_p4[0]["user"] if llm_calls_p4 else ""
+        check("p4c judge prompt contains rendered criterion and avatar utterance",
+              ("G4 was asked about the lost lamp" in judge_user_prompt,
+               "A -> G4: G4, have you seen my lost lamp?" in judge_user_prompt),
+              (True, True))
+
+        # record_step_done deletes quest_judgements with step <= idx in the same transaction, and
+        # _run_row only populates judgements while state == "open".
+        check("p4c step completion purged step 0 judgement rows",
+              quests_mod.list_judgements(run4c_id), [])
+        admin_runs_4c = call("GET", "/quests/runs").json().get("runs") or []
+        admin_row_4c = next((r for r in admin_runs_4c if r.get("id") == run4c_id), {})
+        check("p4c admin run row shows done, step_log by A, and empty judgements",
+              (admin_row_4c.get("state"),
+               [(e.get("step"), e.get("avatar"), e.get("mind")) for e in (admin_row_4c.get("step_log") or [])],
+               admin_row_4c.get("judgements")),
+              ("done", [(0, "A", "A")], []))
+
+        resp_book4c = call("GET", "/play/quests", role="player")
+        check("p4c GET /play/quests 200", resp_book4c.status_code, 200)
+        entry4c = next(
+            (q for q in (resp_book4c.json().get("quests") or []) if q.get("id") == run4c_id),
+            {},
+        )
+        check("p4c player quest book shows run done", entry4c.get("state"), "done")
+        check("p4c player quest book leaks neither verdict reason nor judgements/criterion",
+              (verdict_reason_4c in resp_book4c.text,
+               "judgements" in resp_book4c.text,
+               "criterion" in resp_book4c.text),
+              (False, False, False))
+        check("p4c game clock unchanged and world still frozen",
+              (game_time().canonical(), world.is_world_frozen()),
+              (t4c_start_game, True))
+        check("p4 no unexpected LLM tasks called", unexpected_tasks_p4, [])
 
     quest_engine.drain()
     if FAILURES:
