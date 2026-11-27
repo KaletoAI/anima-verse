@@ -542,13 +542,17 @@ def _untag_permanent_props() -> None:
 
 def _drop_generated_templates() -> int:
     """Delete unkept generated templates whose runs have all ended, finished cleanup, and left
-    the ``CHRONICLE_SIZE`` ended-run window (stage 3, D7). Never raises."""
+    the ``CHRONICLE_SIZE`` ended-run window (stage 3, D7). Never raises.
+
+    A ``done`` run with a ``failed`` payout can still be retried, so it holds its template.
+    """
     from app.core.quest_book import CHRONICLE_SIZE
     from app.models import quests
 
     try:
         protected = {r["id"] for r in quests.list_chronicle(CHRONICLE_SIZE)}
         waiting = {p.get("run_id") for p in quests.list_payouts(states=("pending",))}
+        failed_runs = {p.get("run_id") for p in quests.list_payouts(states=("failed",))}
         templates = quests.list_templates(generated=True)
     except Exception:  # noqa: BLE001
         logger.exception("quest effects: generated template drop scan failed")
@@ -569,7 +573,8 @@ def _drop_generated_templates() -> int:
                 if (not rid
                         or r.get("state") not in quests.RUN_ENDED_STATES
                         or rid in protected
-                        or rid in waiting):
+                        or rid in waiting
+                        or (r.get("state") == "done" and rid in failed_runs)):
                     eligible = False
                     break
                 for obj in quests.list_objects(rid):

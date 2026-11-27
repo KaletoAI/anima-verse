@@ -86,6 +86,18 @@ WHAT IS CHECKED, and where every expected value comes from
         is not in `_untagged_props` -> pass 4 has `dropped == 0` and `M`+`rM` survive.
         When `props.set_quest_run` returns `True`, step (4) untags `"prop_perm_1"` and
         step (5) in the same pass drops `M` and `rM` (`dropped == 1`).
+      - Retryable failed payout gate:
+        * `F` (`origin="auto", kept=False`) has 1 run `rF` with payout `"step:0"` set to
+          `"failed"` and run state `"done"` (accepted by `quest_effects.retry()`).
+        * Counter-case `FC` (`origin="auto", kept=False`) has 1 run `rFC` with payout
+          `"step:0"` set to `"failed"` and run state `"failed"` (`in RUN_ENDED_STATES`,
+          `!= "done"`, refused by `quest_effects.retry()`).
+        * 10 more ended admin runs push both `rF` and `rFC` outside `list_chronicle(10)`.
+        * Pass 6 -> `dropped == 1`: `FC` and `rFC` (and `rFC`'s payout) are deleted
+          because a non-`done` ended run with a failed payout cannot be retried, whereas
+          `F` and `rF` survive (`get_template(F)` and `get_run(rF)` are not `None`).
+        * `set_payout(rF, "step:0", "applied")` clears the failed payout; pass 7 ->
+          `dropped == 1`, and `F`, `rF`, and `rF`'s payout row are deleted.
 
 Usage:
     ./.venv/bin/python scripts/smoke_quest_generated.py
@@ -384,6 +396,53 @@ def main() -> int:
               (res5["dropped"], quests.get_template(tpl_m["id"]), quests.get_run(r_m["id"]),
                quests.list_objects(r_m["id"])),
               (1, None, None, []))
+
+        # Retryable failed payout gate: done + failed payout holds template; non-done ended + failed payout does not.
+        step_fx_steps = [
+            {"id": "s0", "on_done": [{"key": "e0", "type": "narrate", "params": {}}]},
+            {"id": "s1"},
+        ]
+        tpl_f = quests.create_template(title="Done Failed Payout", origin="auto", kept=False, steps=step_fx_steps)
+        r_f = quests.create_run(template=tpl_f, bindings={}, state="open")
+        quests.record_step_done(r_f["id"], 0, avatar="Ava", mind="Ava")
+        assert quests.set_payout(r_f["id"], "step:0", "failed")
+        assert quests.set_run_state(r_f["id"], "done")
+
+        tpl_fc = quests.create_template(title="Failed Run Failed Payout", origin="auto", kept=False, steps=step_fx_steps)
+        r_fc = quests.create_run(template=tpl_fc, bindings={}, state="open")
+        quests.record_step_done(r_fc["id"], 0, avatar="Ava", mind="Ava")
+        assert quests.set_payout(r_fc["id"], "step:0", "failed")
+        assert quests.set_run_state(r_fc["id"], "failed")
+
+        for _ in range(CHRONICLE_SIZE):
+            end_one(tpl_adm)
+        chron6 = {r["id"] for r in quests.list_chronicle(CHRONICLE_SIZE)}
+        check("r_f and r_fc both outside chronicle",
+              (r_f["id"] in chron6, r_fc["id"] in chron6),
+              (False, False))
+
+        res6 = quest_effects.pass_once()
+        check("pass 6: dropped == 1 (only non-done FC dropped; done F held by failed payout)",
+              res6["dropped"], 1)
+        check("pass 6: FC template, run, and payout deleted",
+              (quests.get_template(tpl_fc["id"]),
+               quests.get_run(r_fc["id"]),
+               quests.list_payouts(states=(), run_id=r_fc["id"])),
+              (None, None, []))
+        check("pass 6: F template, run, and failed payout survive",
+              (quests.get_template(tpl_f["id"]) is not None,
+               quests.get_run(r_f["id"]) is not None,
+               len(quests.list_payouts(states=("failed",), run_id=r_f["id"]))),
+              (True, True, 1))
+
+        assert quests.set_payout(r_f["id"], "step:0", "applied")
+        res7 = quest_effects.pass_once()
+        check("pass 7: dropped == 1 after F payout is applied", res7["dropped"], 1)
+        check("pass 7: F template, run, and payout deleted",
+              (quests.get_template(tpl_f["id"]),
+               quests.get_run(r_f["id"]),
+               quests.list_payouts(states=(), run_id=r_f["id"])),
+              (None, None, []))
     finally:
         quest_effects._reset_for_tests()
         quest_objects._KINDS.pop("t_hold", None)
