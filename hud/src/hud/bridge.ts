@@ -30,6 +30,7 @@ import { onPropActionChanged, notifyPropActionChanged, setPropActionPreparation,
 // Older pages omit the flag and keep CEF key input; older hosts ignore the extra field.
 // Task 93 adds a scene -> HUD ui name; no existing payload changes, so this remains v4.
 // Task 9 (items-in-world) adds scene-owned itemMenu and game action names; no existing payload changes, so this remains v4.
+// Task 10 (items-in-world) adds scene -> HUD ui action openItemReader; no existing payload changes, so this remains v4.
 export const HUD_BRIDGE_VERSION = 4;
 type V = typeof HUD_BRIDGE_VERSION;
 export type ToHud =
@@ -57,7 +58,7 @@ const gameNames = ['avatarChanging', 'pairFacing', 'infoAction', 'closeInfo', 'c
   'enterEmbodied', 'takeControl', 'exitEmbodied', 'rideElevator', 'rideStairs',
   'enterLocation', 'backToTitle', 'setShowAll', 'applyAudioPrefs', 'applyScatterPrefs',
   'applyGraphicsPrefs', 'clearClientCache', 'setChatBox'] as const satisfies readonly (keyof HudGameActions)[];
-const uiNames = ['openChat', 'openScreenshotPhoto', 'toast', 'propReason', 'toggleMenu', 'closeMenu'] as const satisfies readonly (keyof HudUiActions)[];
+const uiNames = ['openChat', 'openScreenshotPhoto', 'openItemReader', 'toast', 'propReason', 'toggleMenu', 'closeMenu'] as const satisfies readonly (keyof HudUiActions)[];
 function reject(msg: unknown): void { console.warn('[hud bridge] Dropped invalid message', msg); }
 function valid(msg: unknown): msg is ToHud | FromHud {
   return !!msg && typeof msg === 'object' && 'v' in msg && msg.v === HUD_BRIDGE_VERSION && 'kind' in msg;

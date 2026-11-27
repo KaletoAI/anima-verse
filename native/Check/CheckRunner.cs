@@ -114,6 +114,11 @@ public static class CheckRunner
                 GD.Print($"CHECK ok {await PropActionsCheck.RunAsync(host, dir)}");
                 return 0;
             }
+            if (only == "items")
+            {
+                GD.Print($"CHECK ok {await ItemsCheck.RunAsync(host, dir)}");
+                return 0;
+            }
             if (only == "minimap")
             {
                 GD.Print($"CHECK ok {await MinimapCheck.RunAsync(host, dir)}");
@@ -408,10 +413,11 @@ public static class CheckRunner
             var matrixLine = await MatrixCheck.RunAsync(host, dir);
             var shadowLine = await ShadowCheck.RunAsync(host, dir);
             var cacheLine = await CacheCheck.RunAsync(host, dir, cacheDir);
+            var itemsLine = await ItemsCheck.RunAsync(host, dir);
 
             GD.Print($"CHECK ok terrain_pieces={stats.TerrainPieces} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {resume} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | {graphics} | hud {hud} | {ground} | {s3c} | {launcher} | {loginLook} | {update} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {nav} | {orders} | {travel} | {residency} | {embody} | {photo} | {minimap} | {audio} | {propactions} | {bridges} | {pairs} | {clipFit} | {secondary} | {animals} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine} | {cacheLine}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | {graphics} | hud {hud} | {ground} | {s3c} | {launcher} | {loginLook} | {update} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {nav} | {orders} | {travel} | {residency} | {embody} | {photo} | {minimap} | {audio} | {propactions} | {bridges} | {pairs} | {clipFit} | {secondary} | {animals} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine} | {cacheLine} | {itemsLine}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;

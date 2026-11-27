@@ -178,6 +178,8 @@ public sealed class LocationSlot
     public Figures.FigureStands Stands { get; } = new();
     /// <summary>The swapped (active) navigation of the near mount (plan E2 Task 4); null outside the near ring.</summary>
     public LocationNav? Nav { get; internal set; }
+    /// <summary>Task 10: world-placeable room items mounted under <see cref="Group"/> while in the near ring.</summary>
+    public ItemsLayer? Items { get; internal set; }
     /// <summary>The world boxes of every placed prop, measured once per <see cref="WorldBuilder.DeriveStands"/>.</summary>
     internal IReadOnlyList<MeasuredPropBox> PropBoxes { get; set; } = Array.Empty<MeasuredPropBox>();
     /// <summary>The navigation outlines of the furniture, measured once per <see cref="WorldBuilder.DeriveStands"/>.</summary>
@@ -995,6 +997,7 @@ public sealed partial class WorldBuilder
             }
             // applyLevelDisplay / applyWallCulling (openable, fade > 0.03), applyRoomVisibility and the door marks (all).
             slot.Storeys.Apply(slot.LevelFilter, slot.Openable ? slot.Fade.Fade : 0, slot.Openable, slot.Fade);
+            slot.Items?.SyncVisibility();
         }
         Ground?.SetHole(basement is null ? null : BasementHoleOf(basement, camera));
         var cam = new Scatter.P2(camera.X, camera.Z);

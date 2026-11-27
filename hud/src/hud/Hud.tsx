@@ -31,7 +31,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import {
   SYNC_ENDPOINTS, apiGet, apiPost, usePoll, useI18n, useToast, Icon, ErrorBoundary,
   ScenePanel, ActionsTree, SelfPanel, OthersPanel,
-  BelongingsPanel, MindPanel, PhonePanel, NewsPanel, TaskPanel, QuestsPanel,
+  BelongingsPanel, ReadingModal, MindPanel, PhonePanel, NewsPanel, TaskPanel, QuestsPanel,
   AvatarSettingsPanel, GalleryPanel, InstagramPanel, NoticeBanner, useOpenTopics,
   PlayerPhotoDialog, PlayerRegenDialog, PlayerAnimateDialog, PlayerProfileImageDialog,
   CharacterFormHostContext, type CharacterFormHost, SCENE_ROW_ID_ATTR,
@@ -698,6 +698,7 @@ export function Hud({ avatar, username, role }: {
 
   const [travelPick, setTravelPick] = useState<TravelPick | null>(null);
   const [lookItem, setLookItem] = useState<string | null>(null);
+  const [readingItem, setReadingItem] = useState<string | null>(null);
   useEffect(() => {
     if (data?.travel || (travelPick && data?.location_id === travelPick.id)) setTravelPick(null);
   }, [data?.travel, data?.location_id, travelPick]);
@@ -878,6 +879,10 @@ export function Hud({ avatar, username, role }: {
       else setChatShown(true);
     };
     return () => { uiActions.openChat = undefined; };
+  }, []);
+  useEffect(() => {
+    uiActions.openItemReader = (id) => setReadingItem(id);
+    return () => { uiActions.openItemReader = undefined; };
   }, []);
   useEffect(() => {
     if (!chatHail) return;               // nothing pressed yet, no flash on mount
@@ -1314,6 +1319,7 @@ export function Hud({ avatar, username, role }: {
       {game.placeMenu && <PlaceMenu menu={game.placeMenu} />}
       {game.itemMenu && <ItemMenu menu={game.itemMenu} onLook={setLookItem} />}
       {lookItem && <ItemLookModal itemId={lookItem} onClose={() => setLookItem(null)} />}
+      {readingItem && <ReadingModal key={readingItem} itemId={readingItem} onClose={() => setReadingItem(null)} />}
       {/* Performance readout (stage 5): shown while the menu switch is on,
           top-left and read-only — see PerfOverlay.tsx. */}
       {perfOn && <PerfOverlay />}

@@ -205,6 +205,7 @@ export interface HudGameActions {
 export interface HudUiActions {
   openChat?: () => void;
   openScreenshotPhoto?: (shot: ScreenshotPhoto) => void;
+  openItemReader?: (itemId: string) => void;
   /** show a short message to the player (Hud.tsx wires the package toast) —
    *  the vanilla side renders no text of its own (E3-T3). ``translate`` marks
    *  an ENGLISH source string that still needs the HUD's i18n (a finding of

@@ -13,9 +13,9 @@
  * [3] Neither file calls native browser dialogs (window.alert / window.confirm /
  *     window.prompt or bare alert( / confirm( / prompt( — expected 0 hits).
  * [4] No bare English text in JSX: />[A-Za-z][^<{]*</ matches 0 times in both files.
- * [5] hud/src/hud/bus.ts declares itemMenu and pickItemAction (plus closeItemMenu).
- * [6] hud/src/hud/bridge.ts gameNames includes 'pickItemAction' and 'closeItemMenu'.
- * [7] hud/src/hud/Hud.tsx renders <ItemMenu and <ItemLookModal.
+ * [5] hud/src/hud/bus.ts declares itemMenu, pickItemAction, closeItemMenu and openItemReader.
+ * [6] hud/src/hud/bridge.ts gameNames includes 'pickItemAction' and 'closeItemMenu', and uiNames includes 'openItemReader'.
+ * [7] hud/src/hud/Hud.tsx renders <ItemMenu, <ItemLookModal and <ReadingModal.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -87,11 +87,14 @@ const busSrc = readFileSync(BUS_PATH, 'utf8');
 check('[5] bus.ts declares itemMenu', /\bitemMenu\s*:/.test(busSrc));
 check('[5] bus.ts declares pickItemAction', /\bpickItemAction\?\s*:/.test(busSrc));
 check('[5] bus.ts declares closeItemMenu', /\bcloseItemMenu\?\s*:/.test(busSrc));
+check('[5] bus.ts declares openItemReader', /\bopenItemReader\?\s*:/.test(busSrc));
 
-// [6] bridge.ts gameNames contains 'pickItemAction' and 'closeItemMenu'
+// [6] bridge.ts gameNames contains 'pickItemAction' and 'closeItemMenu', and uiNames contains 'openItemReader'
 const bridgeSrc = readFileSync(BRIDGE_PATH, 'utf8');
 const gameNamesMatch = bridgeSrc.match(/const\s+gameNames\s*=\s*\[([\s\S]*?)\]\s*as\s+const/);
 const gameNamesBlock = gameNamesMatch ? gameNamesMatch[1] : '';
+const uiNamesMatch = bridgeSrc.match(/const\s+uiNames\s*=\s*\[([\s\S]*?)\]\s*as\s+const/);
+const uiNamesBlock = uiNamesMatch ? uiNamesMatch[1] : '';
 check(
   "[6] bridge.ts gameNames contains 'pickItemAction'",
   /['"]pickItemAction['"]/.test(gameNamesBlock),
@@ -100,11 +103,16 @@ check(
   "[6] bridge.ts gameNames contains 'closeItemMenu'",
   /['"]closeItemMenu['"]/.test(gameNamesBlock),
 );
+check(
+  "[6] bridge.ts uiNames contains 'openItemReader'",
+  /['"]openItemReader['"]/.test(uiNamesBlock),
+);
 
-// [7] Hud.tsx renders <ItemMenu and <ItemLookModal
+// [7] Hud.tsx renders <ItemMenu, <ItemLookModal and <ReadingModal
 const hudSrc = readFileSync(HUD_PATH, 'utf8');
 check('[7] Hud.tsx renders <ItemMenu', hudSrc.includes('<ItemMenu'));
 check('[7] Hud.tsx renders <ItemLookModal', hudSrc.includes('<ItemLookModal'));
+check('[7] Hud.tsx renders <ReadingModal', hudSrc.includes('<ReadingModal'));
 
 if (failures.length > 0) {
   console.error(`\nFAILED (${failures.length}): ${failures.join('; ')}`);
