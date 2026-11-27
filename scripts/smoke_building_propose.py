@@ -26,8 +26,10 @@ from app.core.world_ops import update_location_with_extras
 FIXTURE = {'id': 'fixture-building', 'name': 'Bakery', 'description': 'Stone bakery.',
            'rooms': [{'id': 'shop', 'name': 'Shop', 'description': 'Bread.'}],
            'map3d': {'boundary': [[0, 0], [12, 0], [12, 10], [0, 10]], 'storey_height_m': 3}}
-# BASE 2a6be06a: rendered before moving helpers out of world_dev.py.
-PROMPT_SHA256 = '3dbf182e2e913582ba0ba9551a0da971e18660efe1a5453a49935dfc54eca04c'
+# Re-pinned 2026-11-27: shared/world_dev_schemas/layout.md changed on purpose
+# (boundary_openings are fence gates; the building example has an outside
+# door instead). Before: 3dbf182e (BASE 2a6be06a).
+PROMPT_SHA256 = 'ed74b006fc4c0dcd60ec9257326177434801db7c43fbdadb86e2a1d9e0cafe5a'
 
 
 def main():

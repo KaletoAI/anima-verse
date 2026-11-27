@@ -286,7 +286,9 @@ res = call("set_room_layout", {"location_id": LID, "layout": {
              {"edge": 0, "at": 0.5, "width_m": 1.2, "height_m": 1.4,
               "sill_m": 0.9, "type": "window"},
          ]},
-        {"id": ISOLATED, "x": 14, "y": 0, "w": 3, "d": 3, "level": 0},
+        # Touches KAMMER's east wall (x = 13) so the place stays ONE building
+        # (the contour rule refuses a detached room); it has no door at all.
+        {"id": ISOLATED, "x": 13, "y": 0, "w": 3, "d": 3, "level": 0},
     ],
 }}, turn=3)
 check("(d2) oversized bedroom succeeds with warning",
