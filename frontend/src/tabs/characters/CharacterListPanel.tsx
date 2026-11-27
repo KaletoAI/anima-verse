@@ -6,6 +6,7 @@ import { ListPane } from '../../components/ListPane'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import type { CharacterRef } from '../../lib/refs'
 import { BuildAllOpenButton } from './BuildAllOpenButton'
+import { HairstyleCleanupButton } from './HairstyleCleanup'
 import { OpenStepsBadges } from './OpenStepsBadges'
 import { useOpenSteps } from './useOpenSteps'
 
@@ -223,6 +224,7 @@ export function CharacterListPanel({
         </div>
       </div>
       <BuildAllOpenButton onRunning={onBatchRunning} />
+      <HairstyleCleanupButton rosterKey={characters.map((c) => c.name).join('\n')} />
       <ul className="ga-list">
         {regular.length === 0 ? (
           <li className="ga-list-empty">{t('No characters')}</li>

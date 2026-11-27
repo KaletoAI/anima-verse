@@ -608,7 +608,7 @@ export function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, on
           >
             {CATEGORIES.map((c) => (
               <option key={c} value={c}>
-                {c === 'document' ? t('Document') : c === 'garment' ? t('Garment (own mesh)') : c}
+                {c === 'document' ? t('Document') : c}
               </option>
             ))}
           </select>

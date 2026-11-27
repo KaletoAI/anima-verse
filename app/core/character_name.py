@@ -76,7 +76,7 @@ RESERVED_NAMES: Set[str] = RESERVED_LOGIN_NAMES | JS_NULL_NAMES
 RESERVED_ROUTE_SEGMENTS: Set[str] = {
     "list", "chatbots", "at-location", "animate", "available-models",
     "outfit-rules", "outfit-lora-options", "skills", "create", "import",
-    "graph", "migrate", "backfill", "open-steps", "build-all", "",
+    "graph", "migrate", "backfill", "open-steps", "build-all", "hairstyle-cleanup", "",
 }
 
 #: Everything a new character may NOT be called, case-folded.

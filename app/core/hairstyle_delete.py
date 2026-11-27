@@ -35,6 +35,11 @@ hairstyle went — the Build is requested (``figure_build.request(name, "outfit_
 automatically" decides; else it stays a pending change). ``delete_estimate`` says before the click what that Build
 costs (``figure_build.plan`` of the profile without the hairstyle — like ``garment_hair.wear_estimate``).
 
+Two narrower deletes share steps 2 and 3: ``delete_orphan`` removes a hairstyle whose owner is no stored character
+(``hairstyle_sweep``'s orphan: its files when the owner's folder still exists, then the item), and
+``delete_owned_items`` removes the items of every hairstyle a character owns for ``delete_character`` (the
+character's rows and its directory take the references and files with them).
+
 Refused (``HairstyleBusy``, a 409) while a run of the hairstyle works or waits (``artefact_graph.running_state``,
 ``garment_store.run_item_lock``), while what is running cannot be read at all (``running_state``'s unknown — its
 ``artefact_graph.RUNNING_UNKNOWN`` text is the refusal), or while a Build of the character runs
@@ -421,7 +426,6 @@ def delete_hairstyle(character_name: str, item_id: str) -> Dict[str, Any]:
     kept, build_requested}``."""
     from app.core import artefact_graph, figure, figure_build, garment_hair, garment_store
     from app.core.keyed_lock import keyed_lock
-    from app.models import inventory
     item = _checked(character_name, item_id)
     text = garment_hair.hairstyle_description(item)
     build = figure_build.build_lock(character_name)
@@ -442,13 +446,7 @@ def delete_hairstyle(character_name: str, item_id: str) -> Dict[str, Any]:
                 _checked(character_name, item_id)
                 worn, plain = _unclaim(character_name, item_id)
                 sets = _clear_outfit_sets(character_name, item_id)
-                try:
-                    from app.core.expression_regen import invalidate_variants_for_item
-                    invalidate_variants_for_item(item_id)
-                except Exception as e:  # noqa: BLE001 — the delete route treats it the same way
-                    logger.debug("Variant invalidation failed: %s", e)
-                if not inventory.delete_item(item_id):
-                    raise RuntimeError(f"Could not delete the item {item_id}")
+                _delete_item(item_id)
             files, freed, kept = _remove_files(character_name, item_id)
             assembled = _remove_assemblies(character_name, item_id)
         finally:
@@ -475,3 +473,75 @@ def delete_hairstyle(character_name: str, item_id: str) -> Dict[str, Any]:
     return {"item_id": item_id, "worn": worn, "plain": plain, "outfit_sets": sets, "deleted_files": files,
             "freed_bytes": freed, "assembled": assembled, "shapes_deleted": shapes_deleted,
             "kept": kept + [f"{s['key']} ({s['why']})" for s in shapes_kept], "build_requested": build_requested}
+
+
+def _delete_item(item_id: str) -> None:
+    """Step 2: the item (its row, inventory rows, media folder) — the cached variant images first. RuntimeError
+    when it cannot be deleted."""
+    from app.models import inventory
+    try:
+        from app.core.expression_regen import invalidate_variants_for_item
+        invalidate_variants_for_item(item_id)
+    except Exception as e:  # noqa: BLE001 — the delete route treats it the same way
+        logger.debug("Variant invalidation failed: %s", e)
+    if not inventory.delete_item(item_id):
+        raise RuntimeError(f"Could not delete the item {item_id}")
+
+
+def delete_orphan(owner: str, item_id: str) -> Dict[str, Any]:
+    """Delete a hairstyle whose ``owner`` is no stored character (``hairstyle_sweep``'s orphan): its own files under
+    ``characters/<owner>/garments/`` when that folder still exists (step 3, the same contained removal), then the
+    item (step 2). No references to clear, nothing to re-assemble, no Build. ValueError for an invalid id, an item
+    that is no hair item of ``owner`` or a shared library item; RuntimeError when the item cannot be deleted.
+    ``{item_id, deleted_files, freed_bytes, kept}``."""
+    from app.core import garment_hair
+    from app.models import inventory
+    from app.models.character import get_character_dir
+    iid = inventory.safe_item_id(item_id)
+    if not iid or iid != item_id:
+        raise ValueError(f"invalid item id {str(item_id)[:80]!r}")
+    item = inventory.get_item(iid)
+    owner = str(owner or "").strip()
+    if not garment_hair.is_hair_item(item) or str(item.get("owner") or "").strip() != owner:
+        raise ValueError(f"{iid} is no hairstyle of {owner or 'nobody'}")
+    if inventory.is_shared_item(iid):
+        raise ValueError(f"{iid} is a shared library item")
+    files = freed = 0
+    kept: List[str] = []
+    if owner and get_character_dir(owner).is_dir():
+        files, freed, kept = _remove_files(owner, iid)
+    _delete_item(iid)
+    logger.info("Orphan hairstyle %s (owner %s) deleted: %d file(s), %.1f MB%s", iid, owner or "-", files,
+                freed / 1e6, f", kept: {'; '.join(kept)}" if kept else "")
+    return {"item_id": iid, "deleted_files": files, "freed_bytes": freed, "kept": kept}
+
+
+def delete_owned_items(character_name: str) -> Dict[str, Any]:
+    """For ``delete_character``: delete the item of every hairstyle ``character_name`` owns (step 2 per hairstyle,
+    ``garment_hair.hairstyles``; a shared library item is never deleted). Its references, outfit sets and
+    generated files live in the character's own rows and directory and go with them, so nothing else is touched and
+    no Build or assembly is asked for. ``{deleted: [item ids], failed: [{item_id, why}]}`` — a failed one stays as
+    an orphan for Characters → "Clean up hairstyles"."""
+    from app.core import garment_hair, garment_store
+    from app.models import inventory
+    deleted: List[str] = []
+    failed: List[Dict[str, str]] = []
+    for item in garment_hair.hairstyles(character_name):
+        iid = str(item.get("id") or "")
+        if not iid or inventory.is_shared_item(iid):
+            continue
+        try:
+            _delete_item(iid)
+        except Exception as e:  # noqa: BLE001 — the next one still goes
+            logger.warning("Hairstyle %s of the deleted character %s kept: %s", iid, character_name, e)
+            failed.append({"item_id": iid, "why": str(e)})
+            continue
+        deleted.append(iid)
+        with garment_store._status_lock:
+            garment_store._failed.pop((character_name, iid), None)
+            garment_store._item_locks.pop((character_name, iid), None)
+    if deleted or failed:
+        logger.info("Hairstyles of the deleted character %s: %d deleted (%s)%s", character_name, len(deleted),
+                    ", ".join(deleted) or "-",
+                    f", {len(failed)} kept: " + "; ".join(f["item_id"] for f in failed) if failed else "")
+    return {"deleted": deleted, "failed": failed}

@@ -3017,7 +3017,6 @@
     "Pages source": "Seitenquelle",
     "Portable": "Tragbar",
     "Document": "Dokument",
-    "Garment (own mesh)": "Kleidungsstück (eigenes Mesh)",
     "Read": "Lesen",
     "‹ Previous": "‹ Zurück",
     "Next ›": "Weiter ›",
@@ -7516,6 +7515,23 @@
     "A reward can only use a permanent object: this one is removed when the quest ends": "Eine Belohnung kann nur ein dauerhaftes Objekt verwenden: dieses wird entfernt, wenn die Quest endet",
     "Read aloud": "Vorlesen",
     "Stop reading aloud": "Vorlesen beenden",
-    "World Dev writes long nested tool calls — use a strong model (e.g. Claude Opus). Small or flash models often break the JSON.": "World-Dev schreibt lange, verschachtelte Tool-Aufrufe — nutze ein starkes Modell (z. B. Claude Opus). Kleine oder Flash-Modelle zerstören oft das JSON."
+    "World Dev writes long nested tool calls — use a strong model (e.g. Claude Opus). Small or flash models often break the JSON.": "World-Dev schreibt lange, verschachtelte Tool-Aufrufe — nutze ein starkes Modell (z. B. Claude Opus). Kleine oder Flash-Modelle zerstören oft das JSON.",
+    "Clean up hairstyles": "Frisuren aufräumen",
+    "These hairstyles are not worn, in no outfit set and are exact copies (same text, mode and settings) of another hairstyle:": "Diese Frisuren werden nicht getragen, stehen in keinem Outfit-Set und sind exakte Kopien (gleicher Text, Modus und Einstellungen) einer anderen Frisur:",
+    "copy of “{name}”": "Kopie von „{name}“",
+    "Each goes with its files, like its Delete. Runs no job and no Build. This cannot be undone.": "Jede wird mit ihren Dateien entfernt, wie beim Löschen. Es startet kein Job und kein Build. Das lässt sich nicht rückgängig machen.",
+    "Clean up": "Aufräumen",
+    "Removes the hairstyles that are exact copies of another one — asks first": "Entfernt die Frisuren, die exakte Kopien einer anderen sind – fragt vorher",
+    "Clean up ({n})": "Aufräumen ({n})",
+    "Unneeded copy": "Unnötige Kopie",
+    "{n} hairstyle(s) removed, {files} file(s).": "{n} Frisur(en) entfernt, {files} Datei(en).",
+    "Kept for now: {list}": "Vorerst behalten: {list}",
+    "Hairstyles are managed in Characters → Figure → Hairstyles": "Frisuren werden unter Charaktere → Figur → Frisuren verwaltet",
+    "Clean up hairstyles ({n})": "Frisuren aufräumen ({n})",
+    "Removes hairstyles nobody needs: ones of deleted characters and exact copies — asks first": "Entfernt Frisuren, die niemand braucht: die gelöschter Charaktere und exakte Kopien – fragt vorher",
+    "These hairstyles are worn by nobody, in no outfit set and referenced nowhere:": "Diese Frisuren trägt niemand, sie stehen in keinem Outfit-Set und werden nirgends verwendet:",
+    "owner {name} no longer exists": "Besitzer {name} gibt es nicht mehr",
+    "no owner": "kein Besitzer",
+    "{owner}: copy of “{name}”": "{owner}: Kopie von „{name}“"
   }
 }

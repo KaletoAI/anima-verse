@@ -27,11 +27,14 @@ router = APIRouter(prefix="/inventory", tags=["inventory"])
 def list_items_route(include_shared: int = Query(0, description="Include shared items (1)")) -> Dict[str, Any]:
     """List all item definitions."""
     from app.core.accessory_parts import is_part
-    items = list_items()
+    from app.core.garment_hair import is_hair_item
+    # Hairstyles are items too, but they are managed in Characters → Figure → Hairstyles: no item list shows them.
+    items = [i for i in list_items() if not is_hair_item(i)]
     if include_shared:
         from app.models.inventory import list_shared_items
         for s in list_shared_items():
-            items.append({**s, "_shared": True})
+            if not is_hair_item(s):
+                items.append({**s, "_shared": True})
     # design G: a part item (buckle / pendant / charm) is marked, so pickers that put items in an inventory or on a
     # slot can leave it out
     return {"items": [{**i, "part": True} if is_part(i) else i for i in items]}
@@ -39,9 +42,23 @@ def list_items_route(include_shared: int = Query(0, description="Include shared 
 
 @router.get("/items-shared")
 def list_shared_items_route() -> Dict[str, Any]:
-    """List all cross-world shared-library items."""
+    """List all cross-world shared-library items (hairstyles left out, like ``GET /items``)."""
+    from app.core.garment_hair import is_hair_item
     from app.models.inventory import list_shared_items
-    return {"items": list_shared_items()}
+    return {"items": [i for i in list_shared_items() if not is_hair_item(i)]}
+
+
+#: The 409 of every item write on a hairstyle (translated through ``t(en, lang)``).
+HAIRSTYLE_ELSEWHERE = "Hairstyles are managed in Characters → Figure → Hairstyles"
+
+
+def _refuse_hairstyle(item: Any, lang: str) -> None:
+    """409 when ``item`` is a hair item (``garment_hair.is_hair_item``): the item routes neither create, change nor
+    delete a hairstyle — its tab does that with its references and files (``hairstyle_delete``)."""
+    from app.core.garment_hair import is_hair_item
+    from app.core.i18n import t
+    if isinstance(item, dict) and is_hair_item(item):
+        raise HTTPException(status_code=409, detail=t(HAIRSTYLE_ELSEWHERE, lang))
 
 
 # ── Item Import / Export ──
@@ -88,13 +105,33 @@ def _export_items_bundle_route_sync(body: Any) -> StreamingResponse:
     )
 
 
+def _refuse_hairstyles_in_pack(content: bytes, lang: str) -> None:
+    """409 when a row of the pack's ``db/items.json`` is a hair item, or names the id of a stored one. A pack whose
+    rows cannot be read passes here: the import itself answers 400 for it."""
+    import zipfile, json as _json
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            rows = _json.loads(zf.read("db/items.json"))
+    except Exception:  # noqa: BLE001 — the importer's own check reports it
+        return
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        _refuse_hairstyle(row, lang)
+        rid = str(row.get("id") or "").strip()
+        if rid:
+            _refuse_hairstyle(get_item(rid), lang)
+
+
 @router.post("/items/import")
 async def import_item_route(
     file: UploadFile = File(...),
     overwrite: bool = Query(False, description="Replace items with the same id"),
     target: str = Query("auto", description="Target store: auto / world / shared"),
+    lang: str = "en",
 ) -> Dict[str, Any]:
-    """Import a single-item or bundle ZIP. Accepts both formats."""
+    """Import a single-item or bundle ZIP. Accepts both formats. 409 when the pack holds a hairstyle or names the
+    id of one (with ``overwrite`` it would replace it)."""
     from app.core.content_io import import_item_from_zip, import_bundle_from_zip
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
@@ -109,6 +146,7 @@ async def import_item_route(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"invalid pack: {e}")
     pack_type = manifest.get("type")
+    _refuse_hairstyles_in_pack(content, lang)
     try:
         if pack_type == "item_bundle":
             return import_bundle_from_zip(content, target=target, overwrite=overwrite)
@@ -122,18 +160,20 @@ async def import_item_route(
 
 
 @router.post("/items/{item_id}/move-to-shared")
-async def move_item_to_shared_route(item_id: str, request: Request) -> Dict[str, Any]:
+async def move_item_to_shared_route(item_id: str, request: Request, lang: str = "en") -> Dict[str, Any]:
+    """409 for a hairstyle: it belongs to its character, never to a store of its own."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_move_item_to_shared_route_sync, item_id,
-                                   body)
+                                   body, lang)
 
 
-def _move_item_to_shared_route_sync(item_id: str, body: Any) -> Dict[str, Any]:
+def _move_item_to_shared_route_sync(item_id: str, body: Any, lang: str = "en") -> Dict[str, Any]:
     """The blocking body of ``move_item_to_shared_route`` — runs in the
     threadpool."""
     from app.core import accessory_parts
     from app.models.inventory import get_item, is_shared_item, move_item_to_shared
+    _refuse_hairstyle(get_item(item_id), lang)
     user_id = (body.get("user_id") or "").strip()
     # A chain or belt takes its world-local part items along, before itself (design G): a library item never links
     # a part only one world has. Each move runs under that item's own locks.
@@ -150,16 +190,18 @@ def _move_item_to_shared_route_sync(item_id: str, body: Any) -> Dict[str, Any]:
 
 
 @router.post("/items/{item_id}/move-to-world")
-async def move_item_to_world_route(item_id: str, request: Request) -> Dict[str, Any]:
+async def move_item_to_world_route(item_id: str, request: Request, lang: str = "en") -> Dict[str, Any]:
+    """409 for a hairstyle: it belongs to its character, never to a store of its own."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_move_item_to_world_route_sync, item_id,
-                                   body)
+                                   body, lang)
 
 
-def _move_item_to_world_route_sync(item_id: str, body: Any) -> Dict[str, Any]:
+def _move_item_to_world_route_sync(item_id: str, body: Any, lang: str = "en") -> Dict[str, Any]:
     """The blocking body of ``move_item_to_world_route`` — runs in the
     threadpool."""
+    _refuse_hairstyle(get_item(item_id), lang)
     from fastapi.responses import JSONResponse
     from app.core import accessory_parts
     from app.core.keyed_lock import keyed_lock
@@ -190,15 +232,16 @@ def get_item_route(
 
 
 @router.post("/items")
-async def create_item_route(request: Request) -> Dict[str, Any]:
-    """Create a new item."""
+async def create_item_route(request: Request, lang: str = "en") -> Dict[str, Any]:
+    """Create a new item. 409 for a hairstyle (category ``garment`` with ``garment.kind`` hair)."""
     import asyncio
     body = await request.json()
-    return await asyncio.to_thread(_create_item_route_sync, body)
+    return await asyncio.to_thread(_create_item_route_sync, body, lang)
 
 
-def _create_item_route_sync(body: Any) -> Dict[str, Any]:
+def _create_item_route_sync(body: Any, lang: str = "en") -> Dict[str, Any]:
     """The blocking body of ``create_item_route`` — runs in the threadpool."""
+    _refuse_hairstyle(body, lang)
     user_id = body.get("user_id", "")
     name = body.get("name", "").strip()
 
@@ -264,14 +307,14 @@ def suggest_back_text_route(body: Dict[str, Any], _admin=Depends(require_admin))
 
 
 @router.put("/items/{item_id}")
-async def update_item_route(item_id: str, request: Request) -> Dict[str, Any]:
-    """Update an item."""
+async def update_item_route(item_id: str, request: Request, lang: str = "en") -> Dict[str, Any]:
+    """Update an item. 409 for a hairstyle, and for a change that would make the item one."""
     import asyncio
     body = await request.json()
-    return await asyncio.to_thread(_update_item_route_sync, item_id, body)
+    return await asyncio.to_thread(_update_item_route_sync, item_id, body, lang)
 
 
-def _update_item_route_sync(item_id: str, body: Any) -> Dict[str, Any]:
+def _update_item_route_sync(item_id: str, body: Any, lang: str = "en") -> Dict[str, Any]:
     """The blocking body of ``update_item_route`` — runs in the threadpool."""
     user_id = body.get("user_id", "")
 
@@ -279,6 +322,8 @@ def _update_item_route_sync(item_id: str, body: Any) -> Dict[str, Any]:
     # changes. Their cache depends on the prompt, not the name or image.
     updates = {k: v for k, v in body.items() if k != "user_id"}
     prev = get_item(item_id) or {}
+    _refuse_hairstyle(prev, lang)
+    _refuse_hairstyle({**prev, **updates}, lang)
     prev_fragment = (prev.get("prompt_fragment") or "").strip()
     try:
         updated = update_item(item_id, updates)
@@ -299,15 +344,18 @@ def _update_item_route_sync(item_id: str, body: Any) -> Dict[str, Any]:
 
 @router.delete("/items/{item_id}")
 def delete_item_route(
-    item_id: str) -> Dict[str, Any]:
+    item_id: str, lang: str = "en") -> Dict[str, Any]:
     """Delete an item — and, through the artefact GC, every derived file of
     it in every character that held it (fits on every body, its outfit
     bodies and textures, its outfit renders), and its jewellery mesh store
     (``<world>/jewellery/<item>/``). A part item still linked by a chain or a
-    belt is a 409 naming them (design G) — unlink it there first."""
+    belt is a 409 naming them (design G) — unlink it there first. A hairstyle
+    is a 409 too: its tab deletes it with its references and files
+    (``hairstyle_delete``)."""
     from fastapi.responses import JSONResponse
     from app.core import accessory_parts
     from app.core.keyed_lock import keyed_lock
+    _refuse_hairstyle(get_item(item_id), lang)
     with keyed_lock("accessory_part", item_id):
         users_of = accessory_parts.used_by(item_id) if accessory_parts.is_part_id(item_id) else []
         if users_of:

@@ -9,8 +9,6 @@ export type Category =
   | 'quest'
   | 'decoration'
   | 'document'
-  // Mesh-only item worn through equipped_mesh_pieces (hair as its own mesh).
-  | 'garment'
 export type Rarity = 'common' | 'rare' | 'unique'
 
 export interface OutfitPieceMeta {
@@ -258,7 +256,6 @@ export const CATEGORIES: Category[] = [
   'quest',
   'decoration',
   'document',
-  'garment',
 ]
 
 export const RARITIES: Rarity[] = ['common', 'rare', 'unique']

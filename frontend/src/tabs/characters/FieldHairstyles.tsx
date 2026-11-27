@@ -31,6 +31,11 @@
  * only its hair), the worn note with what the Build after it costs, and that it cannot be undone
  * (GET …/hairstyles/{id}/delete-preview, DELETE …/hairstyles/{id}); afterwards the list reloads and the selection
  * moves to the worn hairstyle, else to none.
+ * "Clean up (n)" beside "New hairstyle" appears when hairstyles are exact copies of another one (`unneeded` of the
+ * list: not worn, in no outfit set, referenced nowhere, the same text, mode and settings as a kept hairstyle —
+ * `hairstyle_sweep`; a hairstyle in another mode or with other settings is an alternative and never listed); its
+ * confirmation names them and the one each copies, then POST …/hairstyles/cleanup removes them with their files. Such a row says "Unneeded copy". "New hairstyle" always makes a new one,
+ * also for a text and mode that exist: its settings make it an alternative.
  * A temporary NPC has no figure: the list and the settings stay, no step runs.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -76,7 +81,11 @@ type HairstylesList = Omit<HairstylesPayload, 'hairstyles'> & {
   hairstyles: HairstyleEntry[]
   pipeline?: boolean
   auto_build?: boolean
+  /** The hairstyles "Clean up" removes (`hairstyle_sweep.unneeded`). */
+  unneeded?: UnneededHairstyle[]
 }
+/** One unneeded hairstyle: `kept` is the hairstyle it is an exact copy of (same text, mode and settings). */
+type UnneededHairstyle = { item_id: string; name: string; mode: string; reason: string; kept: string }
 /** GET …/hair with the Task UI4 additions. */
 type HairDetail = HairInfo & {
   step_jobs?: Record<string, number>
@@ -235,6 +244,59 @@ function DeleteHairstyleDialog({ character, entry, onClose, onDeleted }: {
           <button type="button" className="ga-btn" disabled={posting} onClick={onClose}>{t('Cancel')}</button>
           <button type="button" className="ga-btn ga-btn-danger" disabled={!preview || posting}
             onClick={() => { void remove() }}>{posting ? t('Deleting…') : t('Delete')}</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+/** The "Clean up" confirmation: names every unneeded hairstyle (not worn, in no outfit set, referenced nowhere, and
+ *  an exact copy — same text, mode and settings — of a hairstyle that is kept) and the one it copies. Clean up runs
+ *  POST …/hairstyles/cleanup (`hairstyle_sweep.sweep`): each goes with its files, like its Delete. */
+function CleanupHairstylesDialog({ character, entries, names, onClose, onDone }: {
+  character: string
+  entries: UnneededHairstyle[]
+  names: Record<string, string>
+  onClose: () => void
+  onDone: (report: { removed: Array<{ deleted_files: number }>; skipped: Array<{ item_id: string; why: string }> }) => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [posting, setPosting] = useState(false)
+  const run = async () => {
+    if (posting) return
+    setPosting(true)
+    try {
+      onDone(await apiPost(`/characters/${encodeURIComponent(character)}/hairstyles/cleanup`, {}))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      setPosting(false)
+    }
+  }
+  return createPortal(
+    <div className="ga-modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget && !posting) onClose() }}>
+      <div className="ga-modal" role="dialog" aria-modal="true" aria-label={t('Clean up hairstyles')}
+        style={{ maxWidth: 560 }}>
+        <div className="ga-modal-header"><h3>{t('Clean up hairstyles')}</h3></div>
+        <div className="ga-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>
+          <div>{t('These hairstyles are not worn, in no outfit set and are exact copies (same text, mode and settings) of another hairstyle:')}</div>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {entries.map((e) => (
+              <li key={e.item_id}>
+                {e.name} <span className="ga-hint">({e.mode})</span>
+                {e.kept ? <span className="ga-hint"> — {t('copy of “{name}”').replace('{name}', names[e.kept] || e.kept)}</span> : null}
+              </li>
+            ))}
+          </ul>
+          <div className="ga-hint" style={WARN_STYLE}>
+            {t('Each goes with its files, like its Delete. Runs no job and no Build. This cannot be undone.')}
+          </div>
+        </div>
+        <div className="ga-modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
+          <button type="button" className="ga-btn" disabled={posting} onClick={onClose}>{t('Cancel')}</button>
+          <button type="button" className="ga-btn ga-btn-danger" disabled={posting}
+            onClick={() => { void run() }}>{posting ? t('Deleting…') : t('Clean up')}</button>
         </div>
       </div>
     </div>,
@@ -838,6 +900,7 @@ export function FieldHairstyles({ character, onOpenFigure }: {
   const [selected, setSelected] = useState('')
   const [dialog, setDialog] = useState(false)
   const [deleting, setDeleting] = useState<{ id: string; label: string } | null>(null)
+  const [cleaning, setCleaning] = useState(false)
   const [posting, setPosting] = useState(false)
   // Bumped by every Wear / mode change: the Build line shows (and reloads).
   const [changed, setChanged] = useState(0)
@@ -876,6 +939,9 @@ export function FieldHairstyles({ character, onOpenFigure }: {
   const wornId = list.hairstyles.find((h) => h.worn)?.id || ''
   const rows = hairstyleRows(list.hairstyles, wornId, t) as Array<HairstyleEntry & { label: string }>
   const current = selected === NONE_SELECTED ? null : rows.find((h) => h.id === selected) || rows[0] || null
+  const unneeded = list.unneeded || []
+  const unneededIds = new Set(unneeded.map((u) => u.item_id))
+  const rowNames = Object.fromEntries(rows.map((h) => [h.id, h.label]))
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '230px minmax(0, 1fr)', gap: 16, alignItems: 'start',
@@ -883,7 +949,14 @@ export function FieldHairstyles({ character, onOpenFigure }: {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span className="ga-fieldset-title" style={{ margin: 0 }}>{t('Hairstyles')}</span>
-          <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" style={{ marginLeft: 'auto' }}
+          {unneeded.length ? (
+            <button type="button" className="ga-btn ga-btn-sm" style={{ marginLeft: 'auto' }} disabled={posting}
+              title={t('Removes the hairstyles that are exact copies of another one — asks first')}
+              onClick={() => setCleaning(true)}>
+              {t('Clean up ({n})').replace('{n}', String(unneeded.length))}
+            </button>
+          ) : null}
+          <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" style={unneeded.length ? undefined : { marginLeft: 'auto' }}
             title={t('Creating runs nothing and wears nothing — Wear it, then the Build makes it.')}
             onClick={() => setDialog(true)}>
             {t('New hairstyle')}
@@ -922,7 +995,8 @@ export function FieldHairstyles({ character, onOpenFigure }: {
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8em' }}>
                 <span className="ga-hint" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap' }}>
-                  {[h.worn ? t('Worn') : '', h.plain ? t('Plain body') : '', reason].filter(Boolean).join(' · ')}
+                  {[h.worn ? t('Worn') : '', h.plain ? t('Plain body') : '', unneededIds.has(h.id) ? t('Unneeded copy') : '',
+                    reason].filter(Boolean).join(' · ')}
                 </span>
                 {!h.worn ? (
                   <button type="button" className="ga-btn ga-btn-sm" disabled={posting}
@@ -953,6 +1027,21 @@ export function FieldHairstyles({ character, onOpenFigure }: {
         <NewHairstyleDialog character={character} defaultMode={list.default_mode} built={list.built_modes || HAIR_MODES}
           standard={standardHairText(list)} onClose={() => setDialog(false)}
           onCreated={(id) => { setDialog(false); setSelected(id); void load() }} />
+      ) : null}
+      {cleaning ? (
+        <CleanupHairstylesDialog character={character} entries={unneeded} names={rowNames}
+          onClose={() => setCleaning(false)}
+          onDone={(report) => {
+            setCleaning(false)
+            const files = report.removed.reduce((n, r) => n + (r.deleted_files || 0), 0)
+            toast(t('{n} hairstyle(s) removed, {files} file(s).').replace('{n}', String(report.removed.length))
+              .replace('{files}', String(files)), 'success')
+            if (report.skipped.length) {
+              toast(t('Kept for now: {list}').replace('{list}',
+                report.skipped.map((s) => `${rowNames[s.item_id] || s.item_id} (${s.why})`).join('; ')), 'info')
+            }
+            void load().then((next) => setSelected(afterDeleteSelection(next)))
+          }} />
       ) : null}
       {deleting ? (
         <DeleteHairstyleDialog character={character} entry={deleting} onClose={() => setDeleting(null)}

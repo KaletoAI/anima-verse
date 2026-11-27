@@ -1072,6 +1072,9 @@ def delete_character(character_name: str) -> bool:
     which is why the trace cleanup runs first (it needs the name to still
     resolve to a profile).
 
+    Step 2b deletes the hairstyle items the character owns
+    (``hairstyle_delete.delete_owned_items``).
+
     Step 0b detaches the character from the running mechanics that key on
     OTHER columns than ``character_name`` — the same sequence
     ``npc_pool.pool_npc`` runs when it retires an NPC. It has to happen
@@ -1234,6 +1237,16 @@ def delete_character(character_name: str) -> bool:
                            character_name, e)
 
         logger.info("Character '%s' deleted (DB + storage)", character_name)
+
+    # 2b) Its hairstyles: items (garment of kind hair, owner = the character) that no item list shows and nothing
+    #     else removes — their references and files went with the rows and the directory above. Only after the
+    #     sweep stored (a failed delete keeps the character AND its hairstyles), outside the profile and publication
+    #     locks.
+    try:
+        from app.core import hairstyle_delete
+        hairstyle_delete.delete_owned_items(character_name)
+    except Exception as e:  # noqa: BLE001 — what is left is an orphan for Characters → "Clean up hairstyles"
+        logger.warning("delete_character: hairstyles of %s not deleted: %s", character_name, e)
 
     # 3) A quest run that binds this character can never be fulfilled: broken now, not at the next tick. Only
     #    after the DB sweep stored (a failed delete keeps the character AND its runs) and outside the profile and

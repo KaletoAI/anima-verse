@@ -658,10 +658,22 @@ def fsig_inputs(character_name: str, item_id: str, *, profile: Optional[Dict[str
             "pronouns": list(pronouns(profile))}
 
 
-def _is_own_hair(item: Optional[Dict[str, Any]], character_name: str) -> bool:
+def is_hair_item(item: Optional[Dict[str, Any]]) -> bool:
+    """Whether ``item`` is a hair item — a garment of kind hair, whoever owns it. Hair items are hairstyles: they
+    are managed in Characters → Figure → Hairstyles and never listed, written or carried as world items
+    (``GET /inventory/items`` leaves them out, its writes refuse them, an inventory or a room never holds one)."""
     return bool(item and item.get("category") == "garment"
-                and (item.get("owner") or "").strip() == character_name
                 and (item.get("garment") or {}).get("kind") == HAIR_KIND)
+
+
+def hairstyle_key(item: Optional[Dict[str, Any]]) -> str:
+    """What makes two hairstyles of one character the same hairstyle: the text (``hairstyle_description``),
+    case-folded. "" without a text."""
+    return hairstyle_description(item).casefold()
+
+
+def _is_own_hair(item: Optional[Dict[str, Any]], character_name: str) -> bool:
+    return bool(is_hair_item(item) and (item.get("owner") or "").strip() == character_name)
 
 
 def worn_hair_id(character_name: str, profile: Optional[Dict[str, Any]] = None) -> str:
@@ -766,7 +778,11 @@ def create_hairstyle(character_name: str, description: str, mode: str = "") -> s
     world's ``default_mode``). ValueError for an unknown mode, a non-humanoid, a species without a hair slot, or no
     text at all. Starts nothing; the new hairstyle is not worn — except the
     character's FIRST one, which is worn and becomes the plain body's
-    hairstyle (``BASE_HAIRSTYLE_KEY``)."""
+    hairstyle (``BASE_HAIRSTYLE_KEY``).
+
+    Every call mints a new item, also for a text and mode another hairstyle of the character has: an alternative
+    differs in its settings, which are set after creation. Exact copies (text, mode and settings) are what
+    "Clean up" removes (``hairstyle_sweep``)."""
     from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile
     mode = _checked_mode(mode)

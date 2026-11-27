@@ -458,6 +458,12 @@ def _is_part_item(item: Optional[Dict[str, Any]]) -> bool:
             and _is_part_piece(item.get("outfit_piece")))
 
 
+def _is_hair_item(item: Optional[Dict[str, Any]]) -> bool:
+    """A hairstyle (``garment_hair.is_hair_item``) — never carried, never placed in a room."""
+    from app.core.garment_hair import is_hair_item
+    return is_hair_item(item)
+
+
 def _clean_mesh_mode(raw) -> Optional[str]:
     """``outfit_piece.mesh_mode``: how the piece reaches a base-body
     character's 3D model — ``own_mesh`` / ``shell`` / ``template`` / ``in_body`` / ``accessory``
@@ -1463,6 +1469,9 @@ def add_item_to_room(location_id: str,
     if _is_part_item(item):
         logger.warning("part item %s is worn through its host, not placed in a room", item_id)
         return False
+    if _is_hair_item(item):
+        logger.warning("hairstyle %s is worn through Figure → Hairstyles, not placed in a room", item_id)
+        return False
 
     with world_write_lock:
         for loc in _load_world_data().get("locations", []):
@@ -1935,6 +1944,9 @@ def add_to_inventory(character_name: str,
         return False
     if _is_part_item(item):
         logger.warning("part item %s is worn through its host, not carried", item_id)
+        return False
+    if _is_hair_item(item):
+        logger.warning("hairstyle %s is worn through Figure → Hairstyles, not carried", item_id)
         return False
 
     if obtained_method not in VALID_OBTAIN_METHODS:

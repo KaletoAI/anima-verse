@@ -64,7 +64,7 @@ EXPECTED, BY HAND FROM THE BRIEF (D1-D5) AND THE HUMAN MANIFEST
 [5] create_hairstyle(Kai, "a bun", "bogus") -> ValueError "hair mode must be one of"; nothing created.
     GET /characters/Kai/hairstyles (get_character_hairstyles): keys {hairstyles, default_mode "body", modes
     ["hairdeck", "haar", "body"] (HAIR_MODES), built_modes ["hairdeck", "haar", "body"] (BUILT_MODES, HAAR
-    built since strand-hair Task 13), pipeline, auto_build (Task UI4), appearance_hair_text (Ruling A54)};
+    built since strand-hair Task 13), pipeline, auto_build (Task UI4), appearance_hair_text (Ruling A54), unneeded (the "Clean up" list, hairstyle_sweep)};
     three entries,
     the worn S first, each {id, name, description, mode, worn, plain, freshness, wear, due (Task UI4)}; the first
     hairstyle plain + "current", S "missing" (its body shape is made by a Build), D (HairDeck, no fit) "missing".
@@ -362,7 +362,7 @@ def main() -> int:
         check("payload keys", (sorted(payload), payload.get("default_mode"), payload.get("modes"),
                                payload.get("built_modes")),
               (["appearance_hair_text", "auto_build", "built_modes", "default_mode", "hairstyles", "modes",
-                "pipeline"], "body", ["hairdeck", "haar", "body"], ["hairdeck", "haar", "body"]))
+                "pipeline", "unneeded"], "body", ["hairdeck", "haar", "body"], ["hairdeck", "haar", "body"]))
         rows = payload.get("hairstyles") or []
         check("entry keys", [sorted(r) for r in rows][:1],
               [["description", "due", "freshness", "id", "mode", "name", "plain", "wear", "worn"]])

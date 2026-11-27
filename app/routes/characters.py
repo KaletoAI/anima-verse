@@ -575,6 +575,33 @@ def get_outfit_rules_route() -> Dict[str, Any]:
     return {"outfit_types": {}}
 
 
+@router.get("/hairstyle-cleanup")
+def list_unneeded_hairstyles_route(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The world's unneeded hairstyles (``hairstyle_sweep.unneeded()``: orphans — their owner is no stored
+    character — and exact copies of a kept hairstyle of the same owner; referenced nowhere, past the grace).
+    ``{unneeded: [{item_id, owner, name, mode, reason, kept, kept_name}]}``. Read-only: the character list's
+    "Clean up hairstyles" confirmation names them."""
+    from app.core import hairstyle_sweep
+    try:
+        return {"unneeded": hairstyle_sweep.unneeded()}
+    except Exception as e:  # noqa: BLE001 — an unreadable store offers nothing
+        logger.exception("Unneeded hairstyles unreadable")
+        raise HTTPException(status_code=500, detail=f"Unneeded hairstyles unreadable: {e}")
+
+
+@router.post("/hairstyle-cleanup")
+def cleanup_hairstyles_route(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Remove the world's unneeded hairstyles with their files (``hairstyle_sweep.sweep()``) — run only by the
+    character list's "Clean up hairstyles" after its confirmation. ``{removed: [...], skipped: [{item_id, why}]}``;
+    a busy one (a run or a Build works) is skipped."""
+    from app.core import hairstyle_sweep
+    try:
+        return hairstyle_sweep.sweep()
+    except Exception as e:  # noqa: BLE001 — an unreadable store removes nothing
+        logger.exception("Hairstyle cleanup of the world failed")
+        raise HTTPException(status_code=500, detail=f"Nothing removed: {e}")
+
+
 @router.post("/{character_name}/clear-expression-cache")
 def clear_expression_cache_route(character_name: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Deletes every cached expression image of this character. They are
@@ -2500,7 +2527,15 @@ def get_character_hairstyles(character_name: str,
             except Exception:  # noqa: BLE001 — a list light, never a failure of the list
                 logger.exception("Hairstyles GET: no run estimate for %s/%s", character_name, row["id"])
         row["due"] = due
+    try:
+        from app.core import hairstyle_sweep
+        unneeded = hairstyle_sweep.unneeded(character_name)
+    except Exception:  # noqa: BLE001 — the list stands without the cleanup offer
+        logger.exception("Hairstyles GET: unneeded hairstyles of %s unreadable", character_name)
+        unneeded = []
     return {"hairstyles": rows,
+            # The hairstyles "Clean up" removes (``hairstyle_sweep.unneeded``): [{item_id, name, reason, kept}].
+            "unneeded": unneeded,
             "default_mode": garment_hair.default_mode(),
             "modes": list(garment_hair.HAIR_MODES), "built_modes": list(garment_hair.BUILT_MODES),
             "pipeline": bool(pipeline),
@@ -2525,6 +2560,22 @@ def create_character_hairstyle(character_name: str, body: HairstyleCreateRequest
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
     return {"item_id": item_id}
+
+
+@router.post("/{character_name}/hairstyles/cleanup")
+def cleanup_character_hairstyles(character_name: str,
+                                 _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Remove the character's unneeded hairstyles with their files (``hairstyle_sweep.sweep``: not worn, in no
+    outfit set, referenced nowhere, and an exact copy — same text, mode and settings — of a hairstyle that is kept).
+    The list the button names is the ``unneeded`` of ``GET …/hairstyles``. ``{removed: [{item_id, name, reason,
+    kept, deleted_files}], skipped: [{item_id, why}]}``; a busy one (a run or a Build works) is skipped."""
+    from app.core import hairstyle_sweep
+    _require_character(character_name)
+    try:
+        return hairstyle_sweep.sweep(character_name)
+    except Exception as e:  # noqa: BLE001 — an unreadable store removes nothing
+        logger.exception("Hairstyle cleanup of %s failed", character_name)
+        raise HTTPException(status_code=500, detail=f"Nothing removed: {e}")
 
 
 @router.post("/{character_name}/hairstyles/{item_id}/wear")

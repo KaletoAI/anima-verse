@@ -4946,8 +4946,10 @@ def _item_line(item: Dict[str, Any], shared: bool = False) -> str:
 def _catalog_items() -> List[Tuple[Dict[str, Any], bool]]:
     """(item, shared) of the world catalog and the shared library (a world
     item shadows a library item of the same id, as get_item reads them); part
-    items are left out — they are worn through their host only."""
+    items are left out — they are worn through their host only — and so are
+    hairstyles (managed in Characters → Figure → Hairstyles)."""
     from app.core.accessory_parts import is_part
+    from app.core.garment_hair import is_hair_item
     from app.models.inventory import list_items, list_shared_items
     out: List[Tuple[Dict[str, Any], bool]] = []
     seen: set = set()
@@ -4957,7 +4959,7 @@ def _catalog_items() -> List[Tuple[Dict[str, Any], bool]]:
     for item in list_shared_items():
         if str(item.get("id") or "") not in seen:
             out.append((item, True))
-    return [(i, s) for i, s in out if i.get("id") and not is_part(i)]
+    return [(i, s) for i, s in out if i.get("id") and not is_part(i) and not is_hair_item(i)]
 
 
 @_tool("find_items", False, "find_items{query?, category?, slot?}",
@@ -5051,10 +5053,13 @@ def _create_item(step: _Step, args: Dict[str, Any]) -> str:
     elif max_stack is not None:
         raise ToolRefusal("'max_stack' needs stackable true — leave it out for a single item")
     # Every catalog item counts here, part items included (find_items hides
-    # them; a name may still not be taken twice).
+    # them; a name may still not be taken twice). Hairstyles are no catalog
+    # items: their names never block one.
+    from app.core.garment_hair import is_hair_item
     from app.models.inventory import list_items, list_shared_items
     taken = next((i for i in list(list_items()) + list(list_shared_items())
-                  if str(i.get("name") or "").strip().casefold() == name.casefold()), None)
+                  if not is_hair_item(i)
+                  and str(i.get("name") or "").strip().casefold() == name.casefold()), None)
     if taken is not None:
         from app.core.accessory_parts import is_part
         if is_part(taken):
@@ -8380,8 +8385,8 @@ def _character_delete_blockers(name: str) -> List[str]:
     """What an exact re-creation of a deleted character could not bring back
     — state delete_character changes OUTSIDE the character's own rows and
     directory (party, pair interaction, prop action, linked family, the
-    traces of a temporary NPC) or that other characters keep after it is
-    gone (chat rows with it, memories naming it)."""
+    traces of a temporary NPC, its hairstyle items) or that other characters
+    keep after it is gone (chat rows with it, memories naming it)."""
     from app.core import linked_characters
     from app.core.interaction_engine import get_interaction
     from app.core.party_engine import is_in_party
@@ -8407,6 +8412,11 @@ def _character_delete_blockers(name: str) -> List[str]:
     mems = count_other_memories_naming(name)
     if mems:
         out.append(f"{mems} memory rows of other characters name it")
+    from app.core.garment_hair import hairstyles
+    owned = len(hairstyles(name))
+    if owned:
+        # delete_character deletes them as items, which the character snapshot does not hold.
+        out.append(f"owns {owned} hairstyles")
     return out
 
 
