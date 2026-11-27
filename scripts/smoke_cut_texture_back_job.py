@@ -22,6 +22,13 @@ flat (40, 40, 150) block on transparent — no L* gradient anywhere, so its deta
     "|back_job:render" — so an unforced key is byte-for-byte the one made before the flag existed, and the forced key
     differs. ``csig_for``: back_job "auto" -> the unforced key; "render" -> the forced key; "render" on a pattern
     WITHOUT a back panel -> the unforced no-back key (back sha "", no flag: nothing to force).
+[F] The count of "Render back job…" (``plan.force_back``, review finding 2026-11-27: the button said "1 image job"
+    and "the front answer is kept" although nothing was made yet). ``force_back`` = ``_plan_one`` with only="back"
+    under the FORCED key, offered only while the back is plain. Before anything is made: no record under either key,
+    so no front answer to keep -> front 1, back 1, upscale 0 (item 1200 px), total 2, reused []; with an item picture
+    of 800 px (< ``MIN_ITEM_SIDE`` 1024) and the front to render -> upscale 1, total 3. After [B] made the front:
+    the unforced record fits the forced key "cross" -> front 0, back 1, total 1, reused ["front"]. While forced [C]
+    the back is not plain -> force_back None. Back to "auto" [D] -> again front 0, back 1, total 1, reused ["front"].
 [B] Without a back job (back_job "auto", plain back view): ``generate`` renders ["front"] (1 job); the route payload
     (``_template_cut_body``): csig = the unforced key; back_plain True, back_measured_plain True, back_forced False,
     back_detail 0.0, plain_back_limit 0.20; files template_back False, raw_back False, back_ref True (the back view is
@@ -180,6 +187,19 @@ def main() -> int:
     PARAMS["back_job"] = "auto"
 
     # [B] without a back job
+    print("[F] the count of Render back job… before anything is made")
+    p = fr._template_cut_body(CHAR, ITEM)
+    fb = p["plan"]["force_back"]
+    check("[F] nothing made: front + back, no reuse", (fb["upscale"], fb["front"], fb["back"], fb["total"], fb["reused"]),
+          (0, 1, 1, 2, []))
+    real_side = gct._item_side
+    gct._item_side = lambda iid: 800
+    try:
+        fb = gct.job_plan(CHAR, ITEM)["force_back"]
+    finally:
+        gct._item_side = real_side
+    check("[F] small item picture: + upscale", (fb["upscale"], fb["front"], fb["back"], fb["total"]), (1, 1, 1, 3))
+
     print("[B] the payload without a back job")
     rec = gct.generate(CHAR, ITEM, apply_after=False)
     check("[B] plain: 1 render (front), ready, the unforced key", (renders, rec.get("state"), rec.get("csig")),
@@ -194,6 +214,9 @@ def main() -> int:
           ("", "", f"/characters/{CHAR}/figure/template/{ITEM}/cut/back_ref.png?v={want_plain}"))
     check("[B] plan: back 0, redo front only", (p["plan"]["back"], sorted(p["plan"]["redo"])), (0, ["front"]))
     check("[B] current", p["current"], True)
+    fb = p["plan"]["force_back"]
+    check("[F] front made: Render back job… keeps it", (fb["upscale"], fb["front"], fb["back"], fb["total"], fb["reused"]),
+          (0, 0, 1, 1, ["front"]))
 
     # [C] Render back job…
     print("[C] Render back job…")
@@ -224,6 +247,7 @@ def main() -> int:
           (f"/characters/{CHAR}/figure/template/{ITEM}/cut/template_back.png?v={want_forced}",
            f"/characters/{CHAR}/figure/template/{ITEM}/cut/raw_back.png?v={want_forced}"))
     check("[C] current", p["current"], True)
+    check("[F] forced: no Render back job count", p["plan"]["force_back"], None)
     redo_back = p["plan"]["redo"]["back"]
     check("[C] Redo back job: back 1, front kept", (redo_back["back"], redo_back["front"], redo_back["reused"]),
           (1, 0, ["front"]))
@@ -239,6 +263,9 @@ def main() -> int:
     check("[D] no start, param auto", (started, PARAMS["back_job"]), ([], "auto"))
     check("[D] the unforced key and its ready record", (p["csig"], p["record"].get("state"), p["current"]),
           (want_plain, "ready", True))
+    fb = p["plan"]["force_back"]
+    check("[F] back to auto: the front is kept again", (fb["front"], fb["back"], fb["total"], fb["reused"]),
+          (0, 1, 1, ["front"]))
     check("[D] the forced record stays", gct.read_record(CHAR, ITEM, want_forced).get("state"), "ready")
 
     # [E] across the flag

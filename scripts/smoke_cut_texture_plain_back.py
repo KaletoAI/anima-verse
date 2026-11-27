@@ -202,7 +202,7 @@ def section_counts(plain: Path, printed: Path):
     real_islands_of, real_item_sha, real_csig_for = gct._islands_of, gct.item_sha, gct.csig_for
     gct._islands_of = lambda pattern: isl2
     gct.item_sha = lambda iid: "itemsha"
-    gct.csig_for = lambda c, i, sha, islands=None, has_back_panel=None: None
+    gct.csig_for = lambda c, i, sha, islands=None, has_back_panel=None, **kw: None
     try:
         st = gct.build_state(CHAR, ITEM)
         check("[2] build_state due 2", (st["state"], st["jobs"], st["estimate"]), ("due", 2, False))

@@ -939,7 +939,10 @@ hold, so:
   atlas key: `csig` appends `|back_job:render` only when forced, so every unforced key stays the key it was, and the
   plain record and the rendered one both stay on disk — switching back ("Use the front fabric for the back") brings the
   plain atlas back with 0 jobs. The front answer is the same request under both keys: `predecessor_fit` "cross" lets
-  `reused_jobs` take a record of the other flag's FRONT answer (never its back), so forcing renders the back job alone.
+  `reused_jobs` take a record of the other flag's FRONT answer (never its back), so forcing renders the back job alone
+  — when a front answer exists. The button's count and its confirmation come from `job_plan`'s **`force_back`** (the
+  plan of `only="back"` under the forced key, None unless the back is plain): before the texture was made it renders
+  the front job (and an upscale) too, and the confirmation says there is no front answer to keep.
   The record keeps `back_forced` and `back_plain.forced`. Without a back job the dialog's back template and back answer
   thumbnails say "No back job — plain back"; the back view (`back_ref`, Picture 2) is written whenever there is a back
   panel.

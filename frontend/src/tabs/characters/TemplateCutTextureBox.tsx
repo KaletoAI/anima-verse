@@ -79,6 +79,9 @@ export interface CutJobPlan {
 export interface CutPlan extends CutJobPlan {
   /** The same per Redo button. */
   redo?: { front?: CutJobPlan; back?: CutJobPlan }
+  /** "Render back job…" under the forced key (null unless the back is plain): the front job too when no front answer
+   *  can be kept ("front" not in `reused`). */
+  force_back?: CutJobPlan | null
 }
 
 /** `GET …/figure/template/{item}/cut` (`figure._template_cut_payload`). */
@@ -401,6 +404,10 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
   const u = state.urls || {}
   // a Redo is offered once there is something to redo; its label carries the server's count (`plan.redo`), which is 2
   // image jobs when the other job's answer did not pass (then nothing can be kept)
+  // "Render back job…" carries the server's count too (`plan.force_back`): without a front answer to keep it renders
+  // the front job (and an upscale) as well
+  const forceBack = plan?.force_back
+  const forceKeepsFront = !!forceBack?.reused?.includes('front')
   const redoFront = plan?.redo?.front
   const redoBack = plan?.redo?.back
   const canRedoFront = !!r.state && !!redoFront
@@ -465,7 +472,7 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
                 <button type="button" className="ga-btn ga-btn-sm" disabled={off} data-cut-force-back=""
                   title={offTip || t('Renders a back job from the back view although it measures plain; kept for this piece')}
                   onClick={() => setConfirmBack(true)}>
-                  {`${t('Render back job…')} — ${t('{n} image job').replace('{n}', '1')}`}
+                  {`${t('Render back job…')}${forceBack ? ` — ${planCost(forceBack, t)}` : ''}`}
                 </button>
               </div>
               {confirmBack ? (
@@ -473,7 +480,10 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
                   style={{ marginLeft: 16, padding: '6px 8px', border: '1px solid var(--warning, #d29922)', borderRadius: 4,
                     display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
                   <span style={{ flex: '1 1 220px' }}>
-                    {t('The back view measures plain. Render a back job from it anyway? This piece keeps rendering its back job; the front answer is kept.')}
+                    {forceKeepsFront
+                      ? t('The back view measures plain. Render a back job from it anyway? This piece keeps rendering its back job; the front answer is kept.')
+                      : t('The back view measures plain. Render a back job from it anyway? This piece keeps rendering its back job; there is no front answer to keep, so the front job is rendered too.')}
+                    {forceBack ? ` ${t('Cost: {cost}.').replace('{cost}', planCost(forceBack, t))}` : ''}
                   </span>
                   <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" onClick={() => { void setBackJob('render', true) }}>
                     {t('Render back job')}

@@ -6824,6 +6824,8 @@
     "Render back job…": "Rückseiten-Job rendern…",
     "Render back job": "Rückseiten-Job rendern",
     "The back view measures plain. Render a back job from it anyway? This piece keeps rendering its back job; the front answer is kept.": "Die Rückansicht wird als schlicht gemessen. Trotzdem einen Rückseiten-Job daraus rendern? Dieses Teil rendert seinen Rückseiten-Job ab jetzt immer; die Antwort der Vorderseite bleibt.",
+    "The back view measures plain. Render a back job from it anyway? This piece keeps rendering its back job; there is no front answer to keep, so the front job is rendered too.": "Die Rückansicht wird als schlicht gemessen. Trotzdem einen Rückseiten-Job daraus rendern? Dieses Teil rendert seinen Rückseiten-Job ab jetzt immer; es gibt noch keine Antwort der Vorderseite, deshalb wird auch der Vorderseiten-Job gerendert.",
+    "Cost: {cost}.": "Kosten: {cost}.",
     "Back job started": "Rückseiten-Job gestartet",
     "Back job forced — the back view measures plain (detail {d} ≤ {l})": "Rückseiten-Job erzwungen — die Rückansicht wird als schlicht gemessen (Detail {d} ≤ {l})",
     "The back gets the front panel’s fabric again; an atlas made that way before comes back": "Der Rücken bekommt wieder den Stoff des Vorderteils; ein so gemachter Atlas kommt zurück",

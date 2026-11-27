@@ -1192,9 +1192,11 @@ def item_kind(item_id: str) -> str:
 
 
 def csig_for(character_name: str, item_id: str, islands_sha: str, islands: dict | None = None,
-             *, has_back_panel: bool | None = None, kind: str | None = None) -> str | None:
+             *, has_back_panel: bool | None = None, kind: str | None = None,
+             back_forced: bool | None = None) -> str | None:
     """The csig of the piece for these islands with the CURRENT item picture and back view; None without a
-    picture. ``has_back_panel`` None = read it from ``islands``; ``kind`` None = the item's (``item_kind``)."""
+    picture. ``has_back_panel`` None = read it from ``islands``; ``kind`` None = the item's (``item_kind``);
+    ``back_forced`` None = the piece's own ``back_job`` (``back_forced_of``), a bool = the key with that choice."""
     isha = item_sha(item_id)
     if isha is None:
         return None
@@ -1202,7 +1204,7 @@ def csig_for(character_name: str, item_id: str, islands_sha: str, islands: dict 
         has_back_panel = has_back(islands or {})
     kind = item_kind(item_id) if kind is None else kind
     return csig(islands_sha, isha, back_sha(character_name, item_id) if has_back_panel else "", prompt_sha_of(kind),
-                back_forced=bool(has_back_panel and back_forced_of(item_id)))
+                back_forced=bool(has_back_panel and (back_forced_of(item_id) if back_forced is None else back_forced)))
 
 
 def atlas_path(character_name: str, item_id: str, sig: str) -> Path:
@@ -1651,15 +1653,18 @@ def _item_png_for(character_name: str, item_id: str, sig: str, reuse: dict) -> P
 
 
 def _plan_one(character_name: str, item_id: str, islands: dict, islands_sha: str, side: int,
-              only: str | None) -> dict:
+              only: str | None, *, force_back: bool = False) -> dict:
+    """One button's count (``job_plan``). ``force_back``: as if the piece's ``back_job`` were "render" — the key and
+    the plain-back rule of the forced back job ("Render back job…" asks for it before the setting is stored)."""
     from app.core import garment_template_views as tv
     parts = [j for j in JOBS if j == "front" or has_back(islands)]
     view = 1 if "back" in parts and back_view(character_name, item_id) is None else 0
-    plain = bool("back" in parts and not view and back_plain(character_name, item_id))
+    plain = bool("back" in parts and not view and not force_back and back_plain(character_name, item_id))
     reuse = {}
     sig = None
     if not view and islands_sha:
-        sig = csig_for(character_name, item_id, islands_sha, islands, has_back_panel="back" in parts)
+        sig = csig_for(character_name, item_id, islands_sha, islands, has_back_panel="back" in parts,
+                       back_forced=True if force_back else None)
         if sig:
             reuse = reused_jobs(character_name, item_id, sig, parts, only=only)
     todo = [j for j in parts if j not in reuse]
@@ -1679,7 +1684,9 @@ def job_plan(character_name: str, item_id: str, islands: dict | None = None, isl
     "total", "max", "reused" (the jobs whose answer is kept), "back_plain"}`` (``max``: a refused back-view attempt is
     made once more, and each texture job may render ``CUT_ATTEMPTS`` times — attempt 2 after a gate rejection; ``back_plain``: the back view is plain (``back_plain``) — the back is the front's fabric, "back" 0;
     while the back view is missing the back job is counted) and ``redo`` = the same per Redo button (``{"front":
-    {...}, "back": {...}}``, "back" only with a back panel that is not plain)."""
+    {...}, "back": {...}}``, "back" only with a back panel that is not plain); ``force_back`` = the count of "Render
+    back job…" (``set_back_job`` "render" + ``start`` ``only="back"`` under the forced key: the front job too when
+    no front answer can be kept — "front" not in its ``reused``), only while the back is plain, else None."""
     if islands is None or not islands_sha:
         try:
             pattern = _ready_pattern(character_name, item_id)
@@ -1690,6 +1697,8 @@ def job_plan(character_name: str, item_id: str, islands: dict | None = None, isl
     out = _plan_one(character_name, item_id, islands, islands_sha, side, None)
     out["redo"] = {job: _plan_one(character_name, item_id, islands, islands_sha, side, job)
                    for job in JOBS if job == "front" or (has_back(islands) and not out["back_plain"])}
+    out["force_back"] = (_plan_one(character_name, item_id, islands, islands_sha, side, "back", force_back=True)
+                         if out["back_plain"] else None)
     return out
 
 

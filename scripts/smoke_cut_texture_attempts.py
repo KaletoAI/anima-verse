@@ -171,7 +171,7 @@ def main() -> int:
     gct._item_matte = lambda: None
     gct.piece_name = lambda iid: "T-shirt"
     gct.sleeve_print_of = lambda iid: "plain"
-    gct.csig_for = lambda c, i, sha, islands=None, has_back_panel=None: gct.csig(sha, gct._item_sha(i), "")
+    gct.csig_for = lambda c, i, sha, islands=None, has_back_panel=None, **kw: gct.csig(sha, gct._item_sha(i), "")
     gct.current_csig = lambda c, i: gct.csig("isl000", gct._item_sha(i), "")
     figure.invalidate = lambda *a, **k: None
 
