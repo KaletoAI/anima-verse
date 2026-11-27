@@ -1184,6 +1184,7 @@ SCHEMA_STATEMENTS = [
         issues            TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(issues)),
         started_by        TEXT NOT NULL DEFAULT '',
         started_game_ts   TEXT NOT NULL DEFAULT '',
+        step_started_at   TEXT NOT NULL DEFAULT '',
         ended_game_ts     TEXT NOT NULL DEFAULT '',
         expires_at        TEXT NOT NULL DEFAULT '',
         news_event_id     TEXT NOT NULL DEFAULT '',
@@ -1198,12 +1199,13 @@ SCHEMA_STATEMENTS = [
     # once (UNIQUE + INSERT OR IGNORE); delete_character clears the rows
     # where the character is the mind OR the subject.
     """CREATE TABLE IF NOT EXISTS quest_facts (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        mind       TEXT NOT NULL,
-        kind       TEXT NOT NULL,
-        subject    TEXT NOT NULL,
-        game_ts    TEXT NOT NULL DEFAULT '',
-        created_at TEXT NOT NULL,
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        mind         TEXT NOT NULL,
+        kind         TEXT NOT NULL,
+        subject      TEXT NOT NULL,
+        game_ts      TEXT NOT NULL DEFAULT '',
+        last_at      TEXT NOT NULL DEFAULT '',
+        created_at   TEXT NOT NULL,
         UNIQUE(mind, kind, subject)
     )""",
     # Run objects and payouts (quest stage 2, app/models/quests.py).
@@ -1452,6 +1454,13 @@ ALTER_MIGRATIONS = [
     # quest_templates: the quest giver's role key ('' = none); worlds created
     # before v14 get it here, a fresh DB already has it from the CREATE.
     ("quest_templates", "giver_role", "TEXT NOT NULL DEFAULT ''"),
+    # quest_facts: UTC system time (microseconds) when the fact was last
+    # observed (for spoke_with since_step; uses system time so a frozen game
+    # clock never stalls a quest). Existing rows are backfilled from created_at.
+    ("quest_facts", "last_at", "TEXT NOT NULL DEFAULT ''"),
+    # quest_runs: UTC system time (microseconds) when the current step began
+    # (set on entering 'open' and on advancing a step; no backfill).
+    ("quest_runs", "step_started_at", "TEXT NOT NULL DEFAULT ''"),
 ]
 
 
@@ -1459,6 +1468,7 @@ ALTER_MIGRATIONS = [
 # CREATE INDEX fails on old DBs ("no such column: agent_name").
 POST_MIGRATION_STATEMENTS = [
     "UPDATE item_reading_sessions SET session_id=lower(hex(randomblob(16))) WHERE session_id=''",
+    "UPDATE quest_facts SET last_at=created_at WHERE last_at=''",
     "CREATE INDEX IF NOT EXISTS idx_llm_call_stats_agent_ts ON llm_call_stats (agent_name, ts DESC)",
     "CREATE INDEX IF NOT EXISTS idx_llm_call_stats_ts ON llm_call_stats (ts DESC)",
 ]

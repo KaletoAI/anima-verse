@@ -734,6 +734,63 @@ check("set_payout(unknown position) → False", quests.set_payout(pr_id, "nope",
 check("set_payout(applied) → True", quests.set_payout(pr_id, "setup", "applied") is True)
 check("rearm_payout(applied) → False", quests.rearm_payout(pr_id, "setup") is False)
 
+print("(s) quest_facts last_at, quest_runs step_started_at, and migrations")
+import time  # noqa: E402
+from app.core.game_time import GameTime  # noqa: E402
+from app.core.timeutils import set_game_time  # noqa: E402
+
+t_frozen = "Y0002-D010T08:00:00"
+set_game_time(GameTime.parse(t_frozen))
+check("fact_last_at unknown -> ''", quests.fact_last_at("Zed", "spoke_with", "Yve") == "")
+check("first add_fact -> True", quests.add_fact("Zed", "spoke_with", "Yve") is True)
+at1 = quests.fact_last_at("Zed", "spoke_with", "Yve")
+check("fact_last_at after first is non-empty UTC ISO", bool(at1) and at1.endswith("+00:00"), at1)
+time.sleep(0.002)
+# Game time stays identical (frozen); last_at still advances in system time.
+check("second add_fact -> False", quests.add_fact("Zed", "spoke_with", "Yve") is False)
+at2 = quests.fact_last_at("Zed", "spoke_with", "Yve")
+check("fact_last_at after second strictly greater under frozen game time", at2 > at1, f"{at1} -> {at2}")
+row_f = db.get_connection().execute(
+    "SELECT game_ts, last_at, created_at FROM quest_facts WHERE mind='Zed' AND kind='spoke_with' AND subject='Yve'"
+).fetchone()
+check("game_ts stayed t_frozen while last_at == at2",
+      row_f is not None and row_f[0] == t_frozen and row_f[1] == at2,
+      str(tuple(row_f) if row_f else None))
+orig_created_at = row_f[2]
+# Migration: drop last_at & step_started_at, re-run init_schema() -> re-added and last_at backfilled from created_at
+with db.transaction() as _c:
+    _c.execute("ALTER TABLE quest_facts DROP COLUMN last_at")
+    _c.execute("ALTER TABLE quest_runs DROP COLUMN step_started_at")
+db.init_schema()
+fact_cols_after = {c[1]: (c[2], c[3], c[4]) for c in db.get_connection().execute("PRAGMA table_info(quest_facts)")}
+run_cols_after = {c[1]: (c[2], c[3], c[4]) for c in db.get_connection().execute("PRAGMA table_info(quest_runs)")}
+check("ALTER migration re-adds quest_facts.last_at",
+      fact_cols_after.get("last_at") == ("TEXT", 1, "''"), str(fact_cols_after.get("last_at")))
+check("ALTER migration re-adds quest_runs.step_started_at",
+      run_cols_after.get("step_started_at") == ("TEXT", 1, "''"), str(run_cols_after.get("step_started_at")))
+check("migration backfilled last_at from created_at",
+      quests.fact_last_at("Zed", "spoke_with", "Yve") == orig_created_at,
+      quests.fact_last_at("Zed", "spoke_with", "Yve"))
+# step_started_at lifecycle: open on create, empty on hidden/preparing, set on open_run/finish_preparing/record_step_done
+r_open_ts = quests.create_run(template={"id": "ts", "steps": [{"id": "s0"}, {"id": "s1"}]}, bindings={}, state="open")
+check("create_run(open) stamps step_started_at", bool(r_open_ts["step_started_at"]), r_open_ts["step_started_at"])
+s0_at = r_open_ts["step_started_at"]
+time.sleep(0.002)
+r_s1_ts = quests.record_step_done(r_open_ts["id"], 0, avatar="Ava", mind="Ava")
+check("record_step_done advances step_started_at",
+      r_s1_ts is not None and r_s1_ts["step_started_at"] > s0_at,
+      f"{s0_at} -> {r_s1_ts['step_started_at'] if r_s1_ts else None}")
+r_hid_ts = quests.create_run(template={"id": "ts", "steps": [{"id": "s0"}]}, bindings={}, state="hidden")
+check("create_run(hidden) leaves step_started_at empty", r_hid_ts["step_started_at"] == "")
+check("open_run stamps step_started_at",
+      quests.open_run(r_hid_ts["id"], started_game_ts=t_frozen) is True
+      and bool(quests.get_run(r_hid_ts["id"])["step_started_at"]))
+r_prep_ts = quests.create_run(template=SETUP_T, bindings={}, state="open")
+check("create_run(preparing) leaves step_started_at empty", r_prep_ts["step_started_at"] == "")
+check("finish_preparing(open) stamps step_started_at",
+      quests.finish_preparing(r_prep_ts["id"], to_state="open", started_game_ts=t_frozen, expires_at="") is True
+      and bool(quests.get_run(r_prep_ts["id"])["step_started_at"]))
+
 print()
 if failures:
     print(f"FAIL — {len(failures)} check(s): {failures}")

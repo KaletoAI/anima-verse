@@ -308,7 +308,7 @@ def main() -> int:
     # (h) Cap at MAX_LINES
     section("(h)", "cap at MAX_LINES")
     cap_runs = []
-    for n in range(1, 5):
+    for n in range(1, 6):
         t_cap = quests.create_template(
             title=f"Cap {n}",
             summary=f"Task {n}.",
@@ -322,8 +322,8 @@ def main() -> int:
             {"giver": {"name": "Giver"}, "glade": {"location_id": "L_wood", "room_id": "r_glade"}},
         )
         cap_runs.append(r_cap)
-    check("4 open runs capped to 3", len(qp.lines_for("Giver")), 3)
-    check("MAX_LINES is 3", qp.MAX_LINES, 3)
+    check("5 open runs capped to 4", len(qp.lines_for("Giver")), 4)
+    check("MAX_LINES is 4", qp.MAX_LINES, 4)
 
     # (i) Never raises
     section("(i)", "never raises")
@@ -343,6 +343,68 @@ def main() -> int:
     out_vars = npc_actions._with_action_context("Giver", {})
     check("quest_block matches block_for", out_vars.get("quest_block", ""), qp.block_for("Giver"))
     check("extension_prompt stays empty", out_vars.get("extension_prompt", ""), "")
+
+    # (k) Step role_notes
+    for r_cap in cap_runs:
+        qe.cancel_run(r_cap["id"])
+    section("(k)", "step role_notes")
+    from app.core import quest_book
+    rn_roles = [
+        {"key": "giver", "kind": "character", "description": "Quest giver"},
+        {"key": "helper", "kind": "character", "description": "Helper NPC"},
+        {"key": "glade", "kind": "room", "description": "The mossy glade"},
+    ]
+    tpl_rn = quests.create_template(
+        title="Help {giver}",
+        summary="{giver} needs help.",
+        giver_role="giver",
+        roles=rn_roles,
+        steps=[
+            {"id": "s1", "text": "Talk to {helper}.", "hint": "", "condition": cond_glade,
+             "role_notes": [{"role": "helper", "text": "Tell them {giver} waits at {glade}."}]},
+            {"id": "s2", "text": "Return to {giver}.", "hint": "", "condition": cond_glade,
+             "role_notes": [{"role": "giver", "text": "Thank them warmly."}]},
+        ],
+        state="ready",
+    )
+    run_rn = qe.start_run(
+        tpl_rn["id"],
+        {"giver": {"name": "Giver"}, "helper": {"name": "Sage"},
+         "glade": {"location_id": "L_wood", "room_id": "r_glade"}},
+    )
+    check("Sage sees step 0 role note", qp.lines_for("Sage"),
+          ['Quest "Help Giver": Tell them Giver waits at Glade.'])
+    check("Other sees no role note", qp.lines_for("Other"), [])
+    check("Giver sees only giver line on step 0", qp.lines_for("Giver"),
+          ["You want an adventurer to: Giver needs help. \u2014 next: Talk to Sage."])
+    # Player quest book never leaks role_notes
+    book_rn = next(q for q in quest_book.build_player_quests("Hero")["quests"] if q["id"] == run_rn["id"])
+    check("quest book step has no role_notes key", all("role_notes" not in s for s in book_rn["steps"]), True)
+    # Advance to step 1: Sage loses step 0 note, Giver gains step 1 note after giver line
+    quests.record_step_done(run_rn["id"], 0, avatar="Hero", mind="Hero")
+    check("Sage has no note on step 1", qp.lines_for("Sage"), [])
+    check("Giver has giver line then step 1 role note", qp.lines_for("Giver"), [
+        "You want an adventurer to: Giver needs help. \u2014 next: Return to Giver.",
+        'Quest "Help Giver": Thank them warmly.',
+    ])
+    qe.cancel_run(run_rn["id"])
+    # Hidden run never shows role_notes
+    tpl_rn_h = quests.create_template(
+        title="Secret errand",
+        summary="Hidden.",
+        roles=rn_roles,
+        start_condition=cond_glade,
+        steps=[{"id": "s1", "text": "Go.", "hint": "", "condition": cond_glade,
+                "role_notes": [{"role": "helper", "text": "Do not reveal yet."}]}],
+        state="ready",
+    )
+    run_rn_h = qe.start_run(
+        tpl_rn_h["id"],
+        {"giver": {"name": "Giver"}, "helper": {"name": "Sage"},
+         "glade": {"location_id": "L_wood", "room_id": "r_glade"}},
+    )
+    check("hidden run shows no role_notes", qp.lines_for("Sage"), [])
+    qe.cancel_run(run_rn_h["id"])
 
     if FAILURES:
         print(f"\nFAILED ({len(FAILURES)}): {', '.join(FAILURES)}")

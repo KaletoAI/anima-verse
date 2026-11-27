@@ -230,12 +230,53 @@ export function TemplateForm({
                 onStructureChange={onStructureChange}
               />
             </Field>
+            <Field label={t('Role notes')}
+              hint={t('What a character of this quest knows or should do while this step is current. Only that character sees it, never the player.')}>
+              <Alerts issues={issues.filter((i) => i.path === `steps.${index}.role_notes`)} />
+              {step.role_notes.map((note, j) => (
+                <div key={j} className="ga-form-row ga-quest-role-note">
+                  <Field label={t('Character')} compact>
+                    <select className="ga-input" value={note.role}
+                      onChange={(e) => setStep(index, {
+                        role_notes: step.role_notes.map((n, k) => (k === j ? { ...n, role: e.target.value } : n)),
+                      })}>
+                      <option value="">{t('— none —')}</option>
+                      {note.role && !characterRoles.some((r) => r.key === note.role) ? (
+                        <option value={note.role}>{note.role} ({t('not a fitting role')})</option>
+                      ) : null}
+                      {characterRoles.map((r) => <option key={r.key} value={r.key}>{r.key}</option>)}
+                    </select>
+                    <Alerts issues={issuesAt(issues, `steps.${index}.role_notes.${j}.role`)} />
+                  </Field>
+                  <Field label={t('Text')} hint={placeholderHint}>
+                    <textarea className="ga-textarea" rows={2} value={note.text}
+                      onChange={(e) => setStep(index, {
+                        role_notes: step.role_notes.map((n, k) => (k === j ? { ...n, text: e.target.value } : n)),
+                      })} />
+                    <Alerts issues={issuesAt(issues, `steps.${index}.role_notes.${j}.text`)} />
+                  </Field>
+                  <button type="button" className="ga-btn ga-btn-sm ga-btn-danger ga-quest-remove"
+                    onClick={() => {
+                      onStructureChange()
+                      setStep(index, { role_notes: step.role_notes.filter((_, k) => k !== j) })
+                    }}>
+                    {t('Remove')}
+                  </button>
+                </div>
+              ))}
+              <div>
+                <button type="button" className="ga-btn ga-btn-sm"
+                  onClick={() => setStep(index, { role_notes: [...step.role_notes, { role: '', text: '' }] })}>
+                  {t('+ Add role note')}
+                </button>
+              </div>
+            </Field>
           </div>
         )}
       />
       <div>
         <button type="button" className="ga-btn ga-btn-sm"
-          onClick={() => set('steps', [...draft.steps, { id: newStepId(draft.steps), text: '', hint: '', condition: {}, on_done: [] }])}>
+          onClick={() => set('steps', [...draft.steps, { id: newStepId(draft.steps), text: '', hint: '', condition: {}, on_done: [], role_notes: [] }])}>
           {t('+ Add step')}
         </button>
       </div>

@@ -324,4 +324,26 @@ const bigRock = {"title": "The big rock", "summary": "{giver} lost something nea
   draft.roles.push({ key: 'e1', kind: 'item', description: '' });
   assert.equal(newEffectKey(draft), 'e2');
 }
+{
+  // role_notes: missing -> [], empty omitted on serialize, non-empty round-trips and deep-copies.
+  const d0 = rowToDraft(errand);
+  assert.deepEqual(d0.steps[0].role_notes, []);
+  assert.equal('role_notes' in draftToRow(d0).steps[0], false);
+  const withNotes = {
+    ...errand,
+    steps: [
+      { ...errand.steps[0], role_notes: [{ role: 'giver', text: 'Ask for {thing}.' }] },
+      errand.steps[1],
+      errand.steps[2],
+    ],
+  };
+  const d1 = rowToDraft(withNotes);
+  assert.deepEqual(d1.steps[0].role_notes, [{ role: 'giver', text: 'Ask for {thing}.' }]);
+  assert.deepEqual(d1.steps[1].role_notes, []);
+  const r1 = draftToRow(d1);
+  assert.deepEqual(r1.steps[0].role_notes, [{ role: 'giver', text: 'Ask for {thing}.' }]);
+  assert.equal('role_notes' in r1.steps[1], false);
+  d1.steps[0].role_notes[0].text = 'mutated';
+  assert.equal(withNotes.steps[0].role_notes[0].text, 'Ask for {thing}.');
+}
 console.log('questsModel: all checks passed');

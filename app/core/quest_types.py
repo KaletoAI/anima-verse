@@ -229,12 +229,23 @@ def _stat_compare(params: dict, ctx: QuestContext) -> ConditionResult:
 
 def _spoke_with(params: dict, ctx: QuestContext) -> ConditionResult:
     from app.core.linked_characters import mind_of
-    from app.models.quests import has_fact
+    from app.models.quests import fact_last_at, has_fact
     binding, missing = _bound(ctx, params, "character", "name")
     if missing:
         return missing
+    target_mind = mind_of(binding["name"])
+    if params.get("since_step"):
+        since = str((ctx.run or {}).get("step_started_at") or "")
+        if since:
+            try:
+                last_at = fact_last_at(ctx.mind, FACT_SPOKE_WITH, target_mind)
+            except Exception as e:  # noqa: BLE001
+                return ConditionResult(False, False, f"Facts unavailable: {e}")
+            if last_at and last_at > since:
+                return ConditionResult(True, True, "")
+            return ConditionResult(True, False, f"Has not spoken with {binding['name']} since this step began")
     try:
-        spoke = has_fact(ctx.mind, FACT_SPOKE_WITH, mind_of(binding["name"]))
+        spoke = has_fact(ctx.mind, FACT_SPOKE_WITH, target_mind)
     except Exception as e:  # noqa: BLE001
         return ConditionResult(False, False, f"Facts unavailable: {e}")
     if spoke:
@@ -401,7 +412,9 @@ def _builtin_types() -> list:
         QuestType(
             id="spoke_with", kind="condition", label="Has spoken with",
             description="The avatar has spoken with the bound character (remembered by the mind).",
-            params=(_role("character", "Character", ["character"], "Who the avatar must speak with"),),
+            params=(_role("character", "Character", ["character"], "Who the avatar must speak with"),
+                    {"key": "since_step", "type": "bool", "label": "Only since this step began",
+                     "description": "Count only a talk after the current step started", "default": False}),
             signals=("utterance.heard",), evaluate=_spoke_with),
         QuestType(
             id="time_elapsed", kind="condition", label="Time has passed",

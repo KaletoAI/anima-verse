@@ -1145,6 +1145,68 @@ def main() -> int:
         qfx.pass_once()
         check("g row gone after cancel cleanup",
               {o["effect_key"]: o["status"] for o in quests.list_objects(rv["id"])}.get("g"), "gone")
+
+        # (w) ----------------------------------------------------------------------------------
+        section("(w)", "take_item removes, transfers, clamps quantity, and handles zero held")
+        coin_id = inventory.add_item("Coin", stackable=True, max_stack=99)["id"]
+        # Case 1: A holds 3 -> take 1 (no to) -> 2 remain, notification, never undone on cancel
+        inventory.add_to_inventory("A", coin_id, 3)
+        tpl_w1 = mk_tpl(
+            "Take W1",
+            steps=[{"id": "s1", "text": "Go back.", "condition": AT_PLACE,
+                    "on_done": [{"key": "tk", "type": "take_item",
+                                 "params": {"item": "thing", "quantity": 1}}]}],
+        )
+        rw1 = qe.start_run(tpl_w1["id"], mk_bindings(place=("L1", "r2"), thing=coin_id))
+        move_a("L1", "r2")
+        qe.evaluate("A")
+        qfx.pass_once()
+        check("held 3, take 1 -> 2 remain", inventory.get_item_quantity("A", coin_id), 2)
+        notifs_w1 = [n["content"] for n in notifications.get_notifications(character_whitelist=["A"])
+                     if n.get("type") == "quest"
+                     and (n.get("metadata") or {}).get("run_id") == rw1["id"]
+                     and (n.get("metadata") or {}).get("effect") == "tk"]
+        check("handed over notification (1)", notifs_w1, ["You handed over Coin."])
+        move_a("L2", "s1")
+
+        # Case 2: A holds 2 -> take 5 with to=giver (N) -> takes 2, A has 0, N has 2
+        tpl_w2 = mk_tpl(
+            "Take W2",
+            steps=[{"id": "s1", "text": "Go back.", "condition": AT_PLACE,
+                    "on_done": [{"key": "tk", "type": "take_item",
+                                 "params": {"item": "thing", "to": "giver", "quantity": 5}}]}],
+        )
+        rw2 = qe.start_run(tpl_w2["id"], mk_bindings(place=("L1", "r2"), thing=coin_id, giver="N"))
+        move_a("L1", "r2")
+        qe.evaluate("A")
+        qfx.pass_once()
+        check("held 2, take 5 -> A has 0, N has 2",
+              (inventory.get_item_quantity("A", coin_id), inventory.get_item_quantity("N", coin_id)),
+              (0, 2))
+        notifs_w2 = [n["content"] for n in notifications.get_notifications(character_whitelist=["A"])
+                     if n.get("type") == "quest"
+                     and (n.get("metadata") or {}).get("run_id") == rw2["id"]
+                     and (n.get("metadata") or {}).get("effect") == "tk"]
+        check("handed over notification (2)", notifs_w2, ["You handed over 2 × Coin."])
+        move_a("L2", "s1")
+
+        # Case 3: A holds 0 -> take 1 -> no error, payout applied, N unchanged
+        tpl_w3 = mk_tpl(
+            "Take W3",
+            steps=[{"id": "s1", "text": "Go back.", "condition": AT_PLACE,
+                    "on_done": [{"key": "tk", "type": "take_item",
+                                 "params": {"item": "thing", "to": "giver", "quantity": 1}}]}],
+        )
+        rw3 = qe.start_run(tpl_w3["id"], mk_bindings(place=("L1", "r2"), thing=coin_id, giver="N"))
+        move_a("L1", "r2")
+        qe.evaluate("A")
+        qfx.pass_once()
+        pays_w3 = {p["position"]: p["state"] for p in quests.list_payouts(states=(), run_id=rw3["id"])}
+        check("held 0 -> applied with no error, counts unchanged",
+              (pays_w3.get("step:0"), inventory.get_item_quantity("A", coin_id),
+               inventory.get_item_quantity("N", coin_id)),
+              ("applied", 0, 2))
+        move_a("L2", "s1")
     finally:
         qfx._reset_for_tests()
         hooks.unregister_owned_providers("test")

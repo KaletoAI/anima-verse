@@ -367,7 +367,7 @@ HEADER_2 = (
     "its own list; a reward every effect key; a setup entry the earlier setup "
     "entries; start_condition and prerequisites setup keys only."
 )
-SPOKE_WITH_LINE = "spoke_with (condition) — Has spoken with: params character*:role[character]"
+SPOKE_WITH_LINE = "spoke_with (condition) — Has spoken with: params character*:role[character], since_step:bool"
 PLACE_ITEM_LINE = (
     "place_item (effect, makes room_item) — Place an item: params "
     "item*:target[item role or item effect key], room*:role[room], "

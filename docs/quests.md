@@ -41,13 +41,16 @@ for later stages (`dependencies`, `repeat`, `kept`) exist; nothing reads them ye
 template at start (`template_snapshot`, D2): evaluation, effects and the quest book read only the snapshot, so editing
 or deleting the template never changes a running quest. Deleting a template while one of its runs has not ended is
 refused (409 `has_open_runs`). A run carries `current_step`, a `step_log` (`{step, avatar, mind, game_ts}` per done
-step), `issues` (why it broke or stalled in preparing), `started_game_ts` / `ended_game_ts` (GAME time), `expires_at`,
-the `news_event_id` of its announcement and `binding_labels` (role key → display label, frozen at start — see
-[Placeholders](#placeholders)).
+step), `issues` (why it broke or stalled in preparing), `started_game_ts` / `ended_game_ts` (GAME time),
+`step_started_at` (SYSTEM time, UTC microseconds, stamped when the run opens and whenever a step advances — used for
+`spoke_with` `since_step` ordering so a frozen world clock never blocks a quest), `expires_at`, the `news_event_id` of
+its announcement and `binding_labels` (role key → display label, frozen at start — see [Placeholders](#placeholders)).
 
-**Fact** — something a MIND did, written once: `(mind, kind, subject)`. Built-in kinds: `spoke_with` (subject =
-speaker's mind, written on `utterance.heard`) and `found` (subject = `<location_id>/<room_id>/<item_id>`, written on
-`item.discovered`).
+**Fact** — something a MIND did: `(mind, kind, subject)` with `game_ts` (first time, game clock), `created_at` (first
+time, system clock), and `last_at` (UTC system time in microseconds, updated on every repeat observation; read via
+`quests.fact_last_at`, falling back to `created_at` if empty). Ordering uses system time rather than game time so a
+frozen world does not stall `since_step` conditions. Built-in kinds: `spoke_with` (subject = speaker's mind, written on
+`utterance.heard`) and `found` (subject = `<location_id>/<room_id>/<item_id>`, written on `item.discovered`).
 
 ### Run states
 
@@ -130,10 +133,10 @@ legal for `start_condition` and `prerequisites.condition`.
 
 **Issue paths** are dot-joined, indices 0-based: `title`, `giver_role`, `roles.<i>.key`, `roles.<i>.kind`, `steps` (no
 step at all), `steps.<i>.id`, `steps.<i>.text`, `steps.<i>.condition<expr>`, `steps.<i>.on_done.<j>…`,
-`start_condition<expr>`, `prerequisites.condition<expr>`, `setup_effects.<i>…`, `rewards.<i>…`, `time_limit_s`; inside
-an expression `.all.<i>`, `.any.<i>`, `.not`; a leaf issue ends in `.type` or `.params.<key>`. At start the bindings
-add `bindings.<role key>`. At the tick, missing live objects report `objects.<effect_key>` with code `object_gone`. An
-issue is `{"path", "code", "message"}`.
+`steps.<i>.role_notes.<j>…`, `start_condition<expr>`, `prerequisites.condition<expr>`, `setup_effects.<i>…`,
+`rewards.<i>…`, `time_limit_s`; inside an expression `.all.<i>`, `.any.<i>`, `.not`; a leaf issue ends in `.type` or
+`.params.<key>`. At start the bindings add `bindings.<role key>`. At the tick, missing live objects report
+`objects.<effect_key>` with code `object_gone`. An issue is `{"path", "code", "message"}`.
 
 ### Effect lists
 
@@ -153,10 +156,10 @@ the shape:
 
 ### Placeholders
 
-A text the player reads may name a role: `{role_key}` in `title`, `summary`, a step's `text` and `hint`,
-`prerequisites.locked_text`, and effect `text` parameters without `"placeholders": False` (`gm_notes` is never
-substituted). `{{` and `}}` are literal braces. A placeholder naming an undeclared role is the issue `unknown_role` at
-that field's path; a single `{` or `}` is `bad_text`.
+A text the player reads may name a role: `{role_key}` in `title`, `summary`, a step's `text`, `hint` and
+`role_notes[].text`, `prerequisites.locked_text`, and effect `text` parameters without `"placeholders": False`
+(`gm_notes` is never substituted). `{{` and `}}` are literal braces. A placeholder naming an undeclared role is the
+issue `unknown_role` at that field's path; a single `{` or `}` is `bad_text`.
 
 The labels are frozen when the run starts (`binding_labels`): character → its name, location → the location's name,
 room → the room's name, item → the item's name (a label that cannot be read falls back to the id). Renaming the room
@@ -167,11 +170,14 @@ withheld.
 
 ### Steps and prerequisites
 
-A step is `{"id", "text", "hint", "condition": expr, "on_done"?: [effect, ...]}`. `prerequisites` is
-`{"condition": expr, "locked_text": str}`: an avatar that does not meet them is **locked** — its actions do not count,
-it does not open a hidden run either — and the quest book shows the author's `locked_text`, never an evaluator's reason
-(fallback "You do not meet the requirements.", translated). Prerequisite positions accept types of kind `condition` and
-`prerequisite`; steps and the start condition only `condition`; effect lists only `effect`.
+A step is `{"id", "text", "hint", "condition": expr, "on_done"?: [effect, ...], "role_notes"?: [{"role", "text"}, ...]}`.
+Each `role_notes` entry names a declared `character` role and a non-empty text of at most 500 characters; while that
+step is current on an `open` run, the bound character sees the note in its per-turn quest prompt block (never shown to
+the player). `prerequisites` is `{"condition": expr, "locked_text": str}`: an avatar that does not meet them is
+**locked** — its actions do not count, it does not open a hidden run either — and the quest book shows the author's
+`locked_text`, never an evaluator's reason (fallback "You do not meet the requirements.", translated). Prerequisite
+positions accept types of kind `condition` and `prerequisite`; steps and the start condition only `condition`; effect
+lists only `effect`.
 
 ### Built-in condition and prerequisite types (`app/core/quest_types.py`, owner `core`)
 
@@ -180,7 +186,7 @@ it does not open a hidden run either — and the quest book shows the author's `
 | `at_place` | condition | `place*` (role: location or room) | `character.entered_room` |
 | `holds_item` | condition | `item*` (target: item role or item object), `count` (int >= 1, default 1) | `inventory.changed` |
 | `stat_compare` | condition | `stat*` (str), `op` (`>=` `<=` `>` `<` `=`, default `>=`), `value*` (int) | `world_tick` |
-| `spoke_with` | condition | `character*` (role: character) | `utterance.heard` |
+| `spoke_with` | condition | `character*` (role: character), `since_step` (bool, default false: count only a talk strictly after the current step started) | `utterance.heard` |
 | `time_elapsed` | condition | `hours*` (int >= 1, game hours since the run opened); `needs_open_run=True` | `world_tick` |
 | `expression` | condition | `expression*` (text, activity condition grammar) | `world_tick`, `character.entered_room`, `inventory.changed` |
 | `knows_secret` | condition | `secret*` (target: secret object) | `secret.learned` |
@@ -201,6 +207,7 @@ in that room.
 | `create_item` | `name*` str, `description` text, `category` select (`tool`, `key`, `consumable`, `evidence`, `gift`, `quest`, `decoration`, `document`; default `quest`), `consumable` bool (false), `effects` text (JSON object, no placeholders), `stat_bonuses` text (JSON `{stat: int -100..100}`, no placeholders), `bonus_when` select (`equipped` / `carried`, default `equipped`), `image_prompt` text | `item` | Mints `item_q_<hex>`; starts background image render (D16) |
 | `place_item` | `item*` target[role: item / object: item], `room*` role[room], `quantity` int 1–20 (1), `hidden` bool (false), `difficulty` int 0–10 (0), `note` str | `room_item` | `discovery_difficulty = difficulty * 10` |
 | `give_item` | `item*` target[role: item / object: item], `to` role[character] (`avatar_default`), `quantity` int 1–20 (1) | `grant` | Empty `to` refused in setup; notifies recipient (reward grants to the fulfilling avatar are summarized once by the reward notice) |
+| `take_item` | `item*` target[role: item / object: item], `from` role[character] (`avatar_default`), `to` role[character] (empty = used up), `quantity` int 1–20 (1) | none (`marker`) | Takes up to `min(held, quantity)` under profile lock (0 held = no-op); if `to` is set, adds under a separate profile lock; never undone; notifies `from` and `to` |
 | `create_prop` | `name*` str, `prompt*` text, `width_m` / `depth_m` / `height_m` float 0.1–20, `room` role[room], `near` role[location], `offset_x` / `offset_z` float −200..200 (0), `yaw` int 0–359 (0) | `world_prop` or `room_prop` (first), then `prop` (second) | Exactly one of `room` / `near`; pre-checks media and `prop` / `mesh_object` routes; holds `preparing` until mesh lands; tags sidecar with `quest_run` (D17) |
 | `place_prop` | `prop_id*` str, `room` role[room], `near` role[location], `offset_x` / `offset_z` float −200..200 (0), `yaw` int 0–359 (0) | `world_prop` or `room_prop` | Exactly one of `room` / `near`; `prop_id` checked at start (`unknown_prop`) |
 | `give_hint` | `holder*` role[character], `text*` text | `secret` | Stores a secret on `holder`'s mind with `source="quest"`, `source_ref="quest_run:<id>"` |
@@ -335,11 +342,13 @@ quest props lose the `quest_run` sidecar key in phase (4) of `pass_once()` and j
   The verb calls `secrets.add_known_by(owner, secret_id, to)` and nothing else. Deletion test: removing
   `plugins/share_secret/` removes the verb cleanly; hints still reach avatars through `reveal_secret` effects.
 - **Quest prompt block (`app/core/quest_prompt.py`, D15).** `lines_for(character_name)` (no locks, never raises,
-  early-out on `quest_engine.has_live_runs()`) returns at most 3 lines (`MAX_LINES = 3`):
+  early-out on `quest_engine.has_live_runs()`) returns at most 4 lines (`MAX_LINES = 4`):
   - For each `hidden` or `open` run where `character_name` is bound to `giver_role`:
     - `open`: `You want an adventurer to: <summary> — next: <current step text>` (em dash U+2014; omits `— next: …` if
       the current step has no text);
     - `hidden`: `You want an adventurer to: <summary>` (never leaks step text or secret ids).
+  - For each `open` run whose current step has `role_notes` whose `role` is bound to `character_name`:
+    - `Quest "<title>": <rendered text>` (never for `hidden` or `preparing` runs).
   - For each `open` run's `live` `secret` object owned by `mind_of(character_name)`:
     - `You know something you may tell an adventurer who asks [secret <secret_id>]: <content>`.
   `block_for(character_name)` formats the lines as `- …` bullets. It is injected **only** into per-turn prompts —
@@ -521,8 +530,8 @@ task queue paused (`tick()` itself has no freeze check). Order:
 ```
 
 - Built up from whitelists (`quest_book.QUEST_FIELDS`, `STEP_FIELDS`, `OPTIONAL_FIELDS`) out of the snapshot:
-  `gm_notes`, roles, bindings, every `hint`, every condition, every effect definition and the text of every future step
-  are never sent.
+  `gm_notes`, roles, bindings, every `hint`, every `role_notes`, every condition, every effect definition and the text
+  of every future step are never sent.
 - Listed: every `open` run (newest first), then at most 10 ENDED runs that had opened (latest end first; the store
   query `list_chronicle` filters and cuts in SQL, so a poll decodes at most ten ended snapshots). `hidden` and
   `preparing` runs are not listed, and neither is an ended run that never opened — its title would be a spoiler.

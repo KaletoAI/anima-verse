@@ -888,6 +888,90 @@ def _apply_give_item(params: dict, ctx: EffectContext) -> List[CreatedObject]:
     return [CreatedObject("grant", {"character": to, "item_id": item_id, "quantity": quantity}, f"{name} -> {to}")]
 
 
+def _apply_take_item(params: dict, ctx: EffectContext) -> List[CreatedObject]:
+    from app.core.i18n import localized
+    from app.core.keyed_lock import keyed_lock
+    from app.models import inventory
+    from app.models.character import get_character_language
+
+    item_key = params.get("item")
+    ref = _target_ref(params, ctx, "item")
+    item_id = str((ref or {}).get("item_id") or "")
+    if not item_id:
+        raise EffectFailed(f"The item '{item_key}' does not exist yet")
+    item = inventory.get_item(item_id)
+    if item is None:
+        raise EffectFailed(f"The item '{item_key}' is gone")
+
+    from_key = params.get("from")
+    if isinstance(from_key, str) and from_key.strip():
+        giver = _role_value(params, ctx, "from", "name")
+        if not giver:
+            raise EffectFailed(f"Role '{from_key}' is not bound")
+    elif ctx.avatar:
+        giver = ctx.avatar
+    else:
+        raise EffectFailed("No character to take this from: the setup has no avatar")
+
+    to_key = params.get("to")
+    receiver = ""
+    if isinstance(to_key, str) and to_key.strip():
+        receiver = _role_value(params, ctx, "to", "name")
+        if not receiver:
+            raise EffectFailed(f"Role '{to_key}' is not bound")
+
+    quantity = int(params.get("quantity") or 1)
+    name = str(item.get("name") or "").strip() or item_id
+    with keyed_lock("character_profile", giver):
+        try:
+            held = inventory.get_item_quantity(giver, item_id, strict=True)
+        except Exception as e:  # noqa: BLE001
+            raise EffectFailed("The inventory could not be read", retryable=True) from e
+        n = min(held, quantity)
+        if n <= 0:
+            return []
+        ok = inventory.remove_from_inventory(giver, item_id, n)
+        if not ok:
+            raise EffectFailed(f"Could not take {name} from {giver}", retryable=True)
+
+    if receiver:
+        with keyed_lock("character_profile", receiver):
+            ok_add = inventory.add_to_inventory(
+                receiver,
+                item_id,
+                n,
+                obtained_from=f"quest:{ctx.run['id']}",
+                obtained_method="given",
+            )
+        if not ok_add:
+            raise EffectFailed(f"{receiver} could not receive {name}: the inventory is full or the write failed")
+
+    try:
+        from_lang = get_character_language(giver) or ""
+    except Exception:  # noqa: BLE001
+        from_lang = ""
+    from_label = localized(item, "name", from_lang) or item_id
+    if n == 1:
+        _notify(giver, "You handed over {item}.", ctx.run, ctx.effect_key, item=from_label)
+    else:
+        _notify(giver, "You handed over {quantity} × {item}.", ctx.run, ctx.effect_key,
+                quantity=n, item=from_label)
+
+    if receiver:
+        try:
+            to_lang = get_character_language(receiver) or ""
+        except Exception:  # noqa: BLE001
+            to_lang = ""
+        to_label = localized(item, "name", to_lang) or item_id
+        if n == 1:
+            _notify(receiver, "You received {item}.", ctx.run, ctx.effect_key, item=to_label)
+        else:
+            _notify(receiver, "You received {quantity} × {item}.", ctx.run, ctx.effect_key,
+                    quantity=n, item=to_label)
+
+    return []
+
+
 def _render_item_image(item_id: str) -> None:
     from app.core import item_images
     from app.imagegen.base import MediaGenerationDisabled
@@ -1573,6 +1657,27 @@ def builtin_effect_types() -> list:
             ),
             apply=_apply_give_item,
             object_kind="grant",
+        ),
+        QuestType(
+            id="take_item",
+            kind="effect",
+            label="Take an item",
+            description="Takes an item from a character, optionally handing it to another; never undone.",
+            params=(
+                {"key": "item", "type": "target", "label": "Item",
+                 "description": "An item role or the key of an item effect",
+                 "role_kinds": ["item"], "object_kinds": ["item"], "required": True},
+                {"key": "from", "type": "role", "label": "From",
+                 "description": "Who gives it up; empty = the avatar who did the step",
+                 "role_kinds": ["character"], "avatar_default": True},
+                {"key": "to", "type": "role", "label": "To",
+                 "description": "Who receives it; empty = it is used up",
+                 "role_kinds": ["character"]},
+                {"key": "quantity", "type": "int", "label": "Quantity",
+                 "min": 1, "max": 20, "step": 1, "default": 1},
+            ),
+            apply=_apply_take_item,
+            object_kind="",
         ),
         QuestType(
             id="create_item",

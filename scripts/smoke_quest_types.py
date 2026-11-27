@@ -453,10 +453,46 @@ def main() -> int:
     check("room_prop chair from inn/cellar", ev("near_object", ctx_cellar, object="chair"), (True, False))
     check("room_item spot in inn/cellar", ev("near_object", ctx_cellar, object="spot"), (True, True))
 
+    SECTION[0] = "[Q]"
+    print("[Q] spoke_with since_step (system time, frozen game clock)")
+    import time
+    from app.core.game_time import GameTime
+    from app.core.timeutils import set_game_time, utc_now_iso
+
+    # Freeze game clock at one fixed instant throughout — system time decides order.
+    set_game_time(GameTime.parse("Y0003-D001T10:00:00"))
+    add_fact("Ada", "spoke_with", "Nim")
+    fact_t0 = quests.fact_last_at("Ada", "spoke_with", "Nim")
+    time.sleep(0.002)
+    step_t1 = utc_now_iso(timespec="microseconds")
+    run_s0 = {"id": "qr_ss", "bindings": bindings, "current_step": 0, "step_started_at": step_t1}
+    ctx_s0 = dataclasses.replace(ctx, run=run_s0)
+    r_before = qc.evaluate_expression(
+        {"type": "spoke_with", "params": {"character": "giver", "since_step": True}}, ctx_s0)
+    check("fact before step start -> (T, F)", (r_before.available, r_before.passed), (True, False))
+    check("reason says since this step began", r_before.reason, "Has not spoken with Nim since this step began")
+    check("since_step=False -> old semantics (T, T)",
+          ev("spoke_with", ctx_s0, character="giver", since_step=False), (True, True))
+    # Exact same microsecond as step_started_at -> strictly greater required -> (T, F)
+    run_eq = {"id": "qr_ss", "bindings": bindings, "current_step": 0, "step_started_at": fact_t0}
+    check("fact at exact step_started_at -> (T, F)",
+          ev("spoke_with", dataclasses.replace(ctx, run=run_eq), character="giver", since_step=True),
+          (True, False))
+    # Speak again strictly after step_started_at (game clock unchanged) -> (T, T)
+    time.sleep(0.002)
+    add_fact("Ada", "spoke_with", "Nim")
+    check("fact after step start under frozen game clock -> (T, T)",
+          ev("spoke_with", ctx_s0, character="giver", since_step=True), (True, True))
+    # Empty step_started_at falls back to old semantics
+    run_empty = {"id": "qr_ss", "bindings": bindings, "current_step": 0, "step_started_at": ""}
+    check("empty step_started_at -> old semantics (T, T)",
+          ev("spoke_with", dataclasses.replace(ctx, run=run_empty), character="giver", since_step=True),
+          (True, True))
+
     if FAILURES:
         print(f"FAIL smoke_quest_types: {len(FAILURES)} failed: {FAILURES}")
         return 1
-    print("PASS smoke_quest_types: [0], [A]-[P]")
+    print("PASS smoke_quest_types: [0], [A]-[Q]")
     return 0
 
 
