@@ -24,6 +24,7 @@ Checks (expected values derived by hand):
   5. fallback_parent table:
        furnish -> intent, prop_mount_classify -> intent,
        room_description_sync -> intent, quest_judgement -> intent,
+       quest_structure -> intent, quest_draft -> chat_stream,
        npc_talk -> chat_stream, npc_generate -> chat_stream,
        extraction_chat_state -> extraction, intent_anything -> intent,
        chat_stream -> None, intent -> None, consolidation -> None.
@@ -73,6 +74,7 @@ for name, ids in PRESETS.items():
 
 EXPECT = {"furnish": "intent", "prop_mount_classify": "intent",
           "room_description_sync": "intent", "quest_judgement": "intent",
+          "quest_structure": "intent", "quest_draft": "chat_stream",
           "npc_talk": "chat_stream", "npc_generate": "chat_stream",
           "extraction_chat_state": "extraction", "intent_anything": "intent",
           "chat_stream": None, "intent": None, "consolidation": None}

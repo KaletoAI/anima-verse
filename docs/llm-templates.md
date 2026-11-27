@@ -131,6 +131,9 @@ into "what does the room need" and "what does the library already have";
 | Template | Task | Caller | Purpose |
 |---|---|---|---|
 | `quest_judgement.md` | `quest_judgement` | `quest_judgement.handle` | Judge from the avatar's subjective transcript whether a quest step's criterion is met (one `json:verdict` block) |
+| `quest_draft.md` | `quest_draft` | `quest_authoring.generate` | Write a short creative prose quest draft from a brief and world context |
+| `quest_structure.md` | `quest_structure` | `quest_authoring.generate` | Convert a prose quest draft into one `json:quest` block (`template` + `bindings`) |
+| `quest_structure_repair.md` | `quest_structure` | `quest_authoring.generate` | Repair validation gaps in a `json:quest` block and re-emit the complete object |
 
 ### Model test (`/admin/models`)
 

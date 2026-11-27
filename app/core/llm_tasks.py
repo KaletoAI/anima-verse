@@ -72,6 +72,8 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     "intent":             {"label": "Intent / tool calls",      "priority": Priority.NORMAL, "category": "tool",   "cache_class": "tool"},
     "spell_detect":       {"label": "Spell Cast Detection",      "priority": Priority.NORMAL, "category": "tool",   "cache_class": "tool"},
     "quest_judgement":    {"label": "Quest: Judge Conversation", "priority": Priority.LOW,    "category": "tool",   "cache_class": "bg"},
+    "quest_draft":        {"label": "Quest: Draft (prose)",      "priority": Priority.LOW,    "category": "chat"},
+    "quest_structure":    {"label": "Quest: Structure (JSON)",   "priority": Priority.LOW,    "category": "tool",   "cache_class": "bg"},
     # Pose consolidation: vector for the similarity match against existing
     # variants (the free-text normalizer is gone — poses come from the catalog,
     # plan-pose-katalog.md).
@@ -452,6 +454,20 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         # Judges from an avatar's subjective transcript whether a quest step's
         # criterion is fulfilled — strict json:verdict output, background lane.
         "tools": False, "vision": False, "json": True, "min_context": 8192,
+        "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
+        "creative": False, "language_de": True, "latency_sensitive": False,
+    },
+    "quest_draft": {
+        # Creative prose draft of a quest from a brief and world context — RP
+        # chat class, background job (no live conversation lane).
+        "tools": False, "vision": False, "json": False, "min_context": 8192,
+        "model_class": "large", "arch": "any", "hallucination_risk": "low",
+        "creative": True, "language_de": True, "latency_sensitive": False,
+    },
+    "quest_structure": {
+        # Converts a prose quest draft (or repairs gaps) into a strict
+        # json:quest template against the full quest type catalog.
+        "tools": False, "vision": False, "json": True, "min_context": 16384,
         "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
         "creative": False, "language_de": True, "latency_sensitive": False,
     },

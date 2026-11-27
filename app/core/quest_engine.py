@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import dataclasses
 import queue
+import re
 import threading
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -358,6 +359,33 @@ def _expressions(template: dict) -> List[Tuple[str, Any, Tuple[str, ...], str]]:
 MAX_TIME_LIMIT_S = 2 ** 63 - 1
 #: Maximum length of one step role note text.
 MAX_ROLE_NOTE_CHARS = 500
+#: The largest template accepted as serialized UTF-8 JSON (matches the admin
+#: route's body cap: a template is copied into every run's snapshot).
+MAX_TEMPLATE_BYTES = 256 * 1024
+#: Authoring issue codes that block template acceptance anywhere in the
+#: template: target/effect-key reference errors.
+_BLOCKING_CODES = ("unknown_target", "wrong_kind", "not_yet_created")
+#: Matches issue paths inside a step's ``on_done`` effect list.
+_ON_DONE_RE = re.compile(r"^steps\.\d+\.on_done")
+
+
+def blocking_issue(issue: Dict[str, str]) -> bool:
+    """Whether an authoring issue from :func:`validate_template` blocks draft
+    acceptance instead of staying a warning.
+
+    Blocks: any issue inside an effect list (``setup_effects``,
+    ``steps[].on_done``, ``rewards``), any ``giver_role`` issue, and anywhere
+    in the template a target/effect-key reference error (codes
+    ``unknown_target``, ``wrong_kind``, ``not_yet_created``). Every other issue
+    stays a warning on the draft.
+    """
+    path = str(issue.get("path") or "")
+    if (path == "giver_role"
+            or path.startswith("setup_effects")
+            or path.startswith("rewards")
+            or _ON_DONE_RE.match(path) is not None):
+        return True
+    return str(issue.get("code") or "") in _BLOCKING_CODES
 
 
 def check_template_fields(body: Dict[str, Any]) -> Optional[str]:
@@ -604,6 +632,85 @@ def check_bindings(template: dict, bindings: dict, *, strict: bool = False) -> l
                     raise
                 logger.exception("validate of quest type %r failed", t.id)
                 issues.append(_issue(where, "bad_param", f"'{t.label}' could not check its parameters: {e}"))
+    return issues
+
+
+def _uses_effect_target(expr: dict, role_keys: set[str], known: Dict[str, quest_catalog.QuestType]) -> bool:
+    """True when any leaf in ``expr`` has a ``target`` param naming a non-role key (an effect key)."""
+    for _leaf_path, leaf in quest_catalog.walk(expr):
+        t = known.get(leaf["type"])
+        if t is None:
+            continue
+        params = leaf.get("params") or {}
+        if not isinstance(params, dict):
+            continue
+        for spec in t.params:
+            if spec.get("type") == "target":
+                val = params.get(spec.get("key"))
+                if isinstance(val, str) and val.strip() and val not in role_keys:
+                    return True
+    return False
+
+
+def dry_check(template: dict, bindings: dict, avatar: str) -> list[dict]:
+    """Read-only dry evaluation of every step condition of ``template`` for ``avatar`` with ``bindings``.
+
+    Never writes and never submits background jobs (the synthetic run has an empty id).
+    Reports ``already_true`` when step 0 is already fulfilled before the quest starts, and
+    ``unavailable`` when a step evaluates unavailable unless its expression targets an effect
+    key (whose object does not exist before the run). Storage errors become a single
+    ``unavailable`` issue; this function never raises.
+    """
+    from app.core import quest_types
+    from app.core.timeutils import game_time, utc_now_iso
+
+    tpl = template if isinstance(template, dict) else {}
+    bnd = bindings if isinstance(bindings, dict) else {}
+    issues: List[Dict[str, str]] = []
+    try:
+        steps = _steps(tpl)
+        if not steps:
+            return issues
+        role_keys = {
+            r["key"] for r in (tpl.get("roles") or [])
+            if isinstance(r, dict) and isinstance(r.get("key"), str) and r["key"].strip()
+        }
+        known = quest_catalog.types()
+        labels = _binding_labels(tpl, bnd)
+        now_us = utc_now_iso(timespec="microseconds")
+        started_game_ts = game_time().canonical()
+        for i, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+            cond = step.get("condition")
+            if not isinstance(cond, dict):
+                continue
+            run = {
+                "id": "",
+                "state": "open",
+                "current_step": i,
+                "step_started_at": now_us,
+                "started_game_ts": started_game_ts,
+                "template_snapshot": tpl,
+                "bindings": bnd,
+                "binding_labels": labels,
+            }
+            ctx = quest_types.build_context(avatar, run)
+            if ctx is None:
+                return [_issue("", "no_context", f"The avatar '{avatar}' cannot be read")]
+            res = quest_catalog.evaluate_expression(cond, ctx)
+            if i == 0 and res.available and res.passed:
+                issues.append(_issue(
+                    "steps.0.condition",
+                    "already_true",
+                    "Step 1 is already fulfilled before the quest starts",
+                ))
+            if not res.available and not _uses_effect_target(cond, role_keys, known):
+                reason = (res.reason or "").strip()
+                msg = f"Step condition is unavailable: {reason}" if reason else "Step condition is unavailable"
+                issues.append(_issue(f"steps.{i}.condition", "unavailable", msg))
+    except Exception as e:  # noqa: BLE001 — dry_check never raises
+        return [_issue("", "unavailable", str(e))]
     return issues
 
 

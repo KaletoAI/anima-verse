@@ -408,10 +408,10 @@ def fallback_parent(task: str) -> Optional[str]:
     Pure rule, no config access — the admin routing UI and the effective-
     routing endpoint show the same rule resolve_llm applies:
       * "<parent>_<sub>" → parent for intent / thought / extraction
-      * building_layout, furnish, prop_mount_classify, room_description_sync, pose_animation_prompt, quest_judgement
+      * building_layout, furnish, prop_mount_classify, room_description_sync, pose_animation_prompt, quest_judgement, quest_structure
         → "intent"
         (strict-JSON tool work; the tool-class anchor)
-      * npc_* → "chat_stream" (character writing; the chat anchor)
+      * npc_*, quest_draft → "chat_stream" (character/quest writing; the chat anchor)
       * image_pose_check, image_prompt_shorten → "image_prompt" (the
         image-prompt anchor)
       * piece_back_text → "image_prompt": it writes image-prompt wording too —
@@ -431,8 +431,10 @@ def fallback_parent(task: str) -> Optional[str]:
     for parent in ("intent", "thought", "extraction"):
         if task.startswith(parent + "_") and task != parent:
             return parent
-    if task in ("building_layout", "furnish", "prop_mount_classify", "room_description_sync", "pose_animation_prompt", "quest_judgement"):
+    if task in ("building_layout", "furnish", "prop_mount_classify", "room_description_sync", "pose_animation_prompt", "quest_judgement", "quest_structure"):
         return "intent"
+    if task == "quest_draft":
+        return "chat_stream"
     if task.startswith("npc_"):
         return "chat_stream"
     if task in ("image_pose_check", "image_prompt_shorten", "piece_back_text"):

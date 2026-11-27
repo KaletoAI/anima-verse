@@ -64,7 +64,7 @@ Run 3 (a run of the template):
       undo -> not complete, one skip keys ["runs"]; R stays.
 Catalogs:
   (g) list_catalog{quest_types} returns the two header lines declared in
-      world_dev_tools._QUEST_TYPES_HEADER followed by one line per registered
+      quest_context.QUEST_TYPES_HEADER followed by one line per registered
       type, never cut (no line starts with "… ", budget MAX_QUEST_TYPES_CHARS):
       - header 1: 'Conditions go into steps[].condition and start_condition,
         prerequisite types into prerequisites.condition; an effect is an entry
