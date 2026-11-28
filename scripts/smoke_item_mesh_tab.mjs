@@ -7,13 +7,15 @@
  *
  * Plain Node, reads source files as text, no server or world DB.
  *
- * Expected checks (derived by hand from Task 4):
+ * Expected checks (derived by hand from Task 4 + item face count brief):
  * [1] frontend/src/tabs/items/ItemMeshTab.tsx exists and calls /mesh/generate,
- *     /mesh/copy, /mesh/status and /model/meta.
+ *     /mesh/reduce, /mesh/copy, /mesh/status and /model/meta.
  * [2] No window.confirm, window.alert, window.prompt and no bare confirm(/alert(.
  * [3] Every user-visible string literal in JSX text goes through t( and all
  *     required new strings appear inside t('...').
  * [4] frontend/src/tabs/items/ItemsTab.tsx imports ItemMeshTab.
+ * [5] ItemMeshTab has the "Face count" numeric input defaulting to 20000,
+ *     sends face_num on /mesh/generate, and has the reduce button posting /mesh/reduce.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -51,7 +53,7 @@ if (!meshExists) {
 }
 
 const meshSrc = readFileSync(MESH_TAB_PATH, 'utf8');
-for (const route of ['/mesh/generate', '/mesh/copy', '/mesh/status', '/model/meta']) {
+for (const route of ['/mesh/generate', '/mesh/reduce', '/mesh/copy', '/mesh/status', '/model/meta']) {
   check(`[1] ItemMeshTab.tsx mentions ${route}`, meshSrc.includes(route));
 }
 
@@ -71,8 +73,13 @@ const requiredStrings = [
   'Placeable in the world',
   'Size — longest edge (m)',
   'Default 0.25 m. A key is about 0.08 m, a book 0.25 m, a chair 0.9 m, a person 1.70 m.',
+  'Face count',
+  '{n} faces',
   'Generate mesh',
   'Regenerate mesh',
+  'Reduce to {n} faces',
+  'Reduction queued',
+  'Already at or below {n} faces',
   'Generate the item image first',
   'Use mesh of another item',
   'Delete mesh',
@@ -138,6 +145,28 @@ const itemsSrc = existsSync(ITEMS_TAB_PATH) ? readFileSync(ITEMS_TAB_PATH, 'utf8
 check(
   '[4] ItemsTab.tsx imports ItemMeshTab',
   /import\s+\{[^}]*\bItemMeshTab\b[^}]*\}\s+from\s+['"]\.\/ItemMeshTab['"]/.test(itemsSrc),
+);
+
+// [5] Face count field (default 20000), face_num sent on generate, reduce button posts /mesh/reduce
+check(
+  '[5] Face count defaults to 20000',
+  /DEFAULT_FACE_NUM\s*=\s*20000\b/.test(meshSrc) &&
+    /useState\(\s*(?:String\(\s*DEFAULT_FACE_NUM\s*\)|['"]20000['"]|20000)\s*\)/.test(meshSrc),
+);
+check(
+  '[5] Face count numeric input bounds (500..200000, step 1000)',
+  /MIN_FACE_NUM\s*=\s*500\b/.test(meshSrc) &&
+    /MAX_FACE_NUM\s*=\s*200000\b/.test(meshSrc) &&
+    /step=\{1000\}/.test(meshSrc),
+);
+check(
+  '[5] /mesh/generate sends face_num',
+  /\/mesh\/generate[`'"]\s*,\s*\{\s*face_num\b/.test(meshSrc),
+);
+check(
+  '[5] reduce button posts /mesh/reduce with face_num',
+  /\/mesh\/reduce[`'"]\s*,\s*\{\s*face_num\b/.test(meshSrc) &&
+    meshSrc.includes("t('Reduce to {n} faces')"),
 );
 
 if (failures.length > 0) {

@@ -803,7 +803,7 @@ def generate_clothing_image(item_id: str, backend: str = "") -> None:
     if clothing_image_done(item_id):
         return
     try:
-        ok = generate_item_image_sync(item_id, overrides={"backend": backend}, raise_errors=True)
+        ok = generate_item_image_sync(item_id, overrides={"backend": backend}, raise_errors=True, track=False)
     except NoRouteError as exc:
         # Exhausting a chain after a render failed is a failed attempt, not
         # initial unavailability. Routing preserves that failure as the cause.
@@ -898,7 +898,7 @@ def generate_item_image(item_id: str, backend: str = "") -> None:
     if item_image_done(item_id):
         return
     try:
-        ok = generate_item_image_sync(item_id, overrides={"backend": backend}, raise_errors=True)
+        ok = generate_item_image_sync(item_id, overrides={"backend": backend}, raise_errors=True, track=False)
     except NoRouteError as exc:
         if exc.__cause__ is not None:
             raise

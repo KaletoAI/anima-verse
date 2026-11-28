@@ -14,6 +14,16 @@ interface MeshStatus {
   bbox?: number[]
   copied_from?: string
   backend?: string
+  tris?: number
+  face_num?: number
+  tris_delivered?: number
+  reduced_from?: number
+  reduce_error?: string
+}
+
+interface ReduceResponse {
+  status: 'queued' | 'unchanged'
+  tris?: number
 }
 
 interface CopyCandidate {
@@ -22,6 +32,10 @@ interface CopyCandidate {
 }
 
 const DEFAULT_WORLD_SIZE_M = 0.25
+const DEFAULT_FACE_NUM = 20000
+const MIN_FACE_NUM = 500
+const MAX_FACE_NUM = 200000
+const REDUCE_TOLERANCE = 1.05
 const POLL_INTERVAL_MS = 2000
 
 function bboxDimensions(bbox?: number[]): [number, number, number] | null {
@@ -44,6 +58,7 @@ export function ItemMeshTab({ item, onSaved }: { item: Item; onSaved: () => void
   const [saving, setSaving] = useState(false)
 
   const [meshStatus, setMeshStatus] = useState<MeshStatus | null>(null)
+  const [faceCountText, setFaceCountText] = useState(String(DEFAULT_FACE_NUM))
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
@@ -115,11 +130,19 @@ export function ItemMeshTab({ item, onSaved }: { item: Item; onSaved: () => void
     }
   }, [item.id, onSaved, placeable, sizeText, t, toast])
 
+  const parsedFaceCount = Number(faceCountText.trim())
+  const faceNum =
+    faceCountText.trim() !== '' && Number.isFinite(parsedFaceCount)
+      ? Math.min(MAX_FACE_NUM, Math.max(MIN_FACE_NUM, Math.round(parsedFaceCount)))
+      : DEFAULT_FACE_NUM
+
   const startGenerate = useCallback(async () => {
     setBusy(true)
     setConfirmDelete(false)
     try {
-      await apiPost(`/inventory/items/${encodeURIComponent(item.id)}/mesh/generate`, {})
+      await apiPost(`/inventory/items/${encodeURIComponent(item.id)}/mesh/generate`, {
+        face_num: faceNum,
+      })
       toast(t('Mesh queued'))
       await loadStatus()
     } catch (e) {
@@ -127,7 +150,28 @@ export function ItemMeshTab({ item, onSaved }: { item: Item; onSaved: () => void
     } finally {
       if (mountedRef.current) setBusy(false)
     }
-  }, [item.id, loadStatus, t, toast])
+  }, [faceNum, item.id, loadStatus, t, toast])
+
+  const startReduce = useCallback(async () => {
+    setBusy(true)
+    setConfirmDelete(false)
+    try {
+      const res = await apiPost<ReduceResponse>(
+        `/inventory/items/${encodeURIComponent(item.id)}/mesh/reduce`,
+        { face_num: faceNum },
+      )
+      if (res?.status === 'unchanged') {
+        toast(t('Already at or below {n} faces').replace('{n}', faceNum.toLocaleString()))
+      } else {
+        toast(t('Reduction queued'))
+      }
+      await loadStatus()
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    } finally {
+      if (mountedRef.current) setBusy(false)
+    }
+  }, [faceNum, item.id, loadStatus, t, toast])
 
   const openCopyPicker = useCallback(async () => {
     if (pickerOpen) {
@@ -206,6 +250,8 @@ export function ItemMeshTab({ item, onSaved }: { item: Item; onSaved: () => void
   const hasImage = Boolean(item.image)
   const hasMesh = Boolean(meshStatus?.version)
   const canPreview = meshStatus?.status === 'done' && Boolean(meshStatus.version)
+  const canReduce =
+    hasMesh && typeof meshStatus?.tris === 'number' && meshStatus.tris > faceNum * REDUCE_TOLERANCE
 
   const parsedSize = Number(sizeText.trim())
   const effectiveSizeM =
@@ -226,6 +272,9 @@ export function ItemMeshTab({ item, onSaved }: { item: Item; onSaved: () => void
         : t('Mesh generation failed')
     }
     const parts = [t('Mesh ready')]
+    if (typeof meshStatus.tris === 'number' && meshStatus.tris > 0) {
+      parts.push(t('{n} faces').replace('{n}', meshStatus.tris.toLocaleString()))
+    }
     if (meshStatus.backend) parts.push(meshStatus.backend)
     if (meshStatus.copied_from) {
       parts.push(t('Copied from {id}').replace('{id}', meshStatus.copied_from))
@@ -290,6 +339,21 @@ export function ItemMeshTab({ item, onSaved }: { item: Item; onSaved: () => void
           {statusText}
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span className="ga-form-hint">{t('Face count')}</span>
+            <input
+              className="ga-input"
+              type="number"
+              min={MIN_FACE_NUM}
+              max={MAX_FACE_NUM}
+              step={1000}
+              style={{ width: 110 }}
+              disabled={isRunning || busy}
+              value={faceCountText}
+              onChange={(e) => setFaceCountText(e.target.value)}
+              onBlur={() => setFaceCountText(String(faceNum))}
+            />
+          </label>
           <button
             type="button"
             className="ga-btn ga-btn-sm ga-btn-primary"
@@ -298,6 +362,16 @@ export function ItemMeshTab({ item, onSaved }: { item: Item; onSaved: () => void
           >
             {hasMesh ? t('Regenerate mesh') : t('Generate mesh')}
           </button>
+          {canReduce ? (
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              disabled={isRunning || busy}
+              onClick={() => { void startReduce() }}
+            >
+              {t('Reduce to {n} faces').replace('{n}', faceNum.toLocaleString())}
+            </button>
+          ) : null}
           <button
             type="button"
             className="ga-btn ga-btn-sm"

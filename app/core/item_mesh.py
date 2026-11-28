@@ -11,6 +11,8 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import math
+import tempfile
 import threading
 import uuid
 from pathlib import Path
@@ -32,6 +34,74 @@ logger = get_logger("item_mesh")
 MESH_OCCASION = "mesh_item"
 MODEL_FILENAME = "model.glb"
 META_FILENAME = "model.json"
+
+DEFAULT_FACE_NUM = 20000
+MIN_FACE_NUM = 500
+MAX_FACE_NUM = 200000
+REDUCE_TOLERANCE = 1.05
+
+
+def normalize_face_num(raw: Any) -> int:
+    """Validate and normalize ``face_num`` into ``[MIN_FACE_NUM, MAX_FACE_NUM]``."""
+    msg = f"face_num must be an integer between {MIN_FACE_NUM} and {MAX_FACE_NUM}"
+    if raw is None:
+        return DEFAULT_FACE_NUM
+    if isinstance(raw, bool):
+        raise ValueError(msg)
+    if isinstance(raw, int):
+        val = raw
+    elif isinstance(raw, float):
+        if not math.isfinite(raw) or not raw.is_integer():
+            raise ValueError(msg)
+        val = int(raw)
+    elif isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            raise ValueError(msg)
+        try:
+            val = int(s, 10)
+        except ValueError as exc:
+            raise ValueError(msg) from exc
+    else:
+        raise ValueError(msg)
+    if val < MIN_FACE_NUM or val > MAX_FACE_NUM:
+        raise ValueError(msg)
+    return val
+
+
+def triangle_count(glb_bytes: bytes) -> int:
+    """Return the triangle count of ``glb_bytes`` via ``glb_mesh.static_arrays``."""
+    return int(len(glb_mesh.static_arrays(glb_bytes)[1]))
+
+
+def _reduce_glb(src: Path, face_num: int, tris: int, out_dir: Path) -> Tuple[Path, int]:
+    """Reduce ``src`` toward ``face_num`` triangles via Blender's ``lod`` script."""
+    from app.blender import runner
+    from app.blender.refine import unavailable_reason
+
+    ratio = face_num / tris
+    res = runner.run(
+        "lod",
+        inputs={"model": Path(src)},
+        params={"ratios": [ratio], "merge_vertices": True},
+        out_dir=Path(out_dir),
+        timeout_s=600,
+    )
+    outputs = (res or {}).get("outputs") if isinstance(res, dict) else None
+    if not isinstance(res, dict) or not res.get("ok") or not outputs:
+        err = (
+            (res.get("error") if isinstance(res, dict) else None)
+            or unavailable_reason()
+            or "no stage produced"
+        )
+        raise RuntimeError(str(err))
+    out_path = Path(next(iter(outputs.values())))
+    if not out_path.is_file():
+        raise RuntimeError(unavailable_reason() or "reduced mesh output missing")
+    stages = (res.get("data") or {}).get("stages") or []
+    stage_tris = stages[0].get("tris") if stages and isinstance(stages[0], dict) else None
+    achieved = int(stage_tris) if stage_tris is not None else triangle_count(out_path.read_bytes())
+    return out_path, achieved
 
 
 def _item_media_dir(item_id: str, *, create: bool = False) -> Path:
@@ -81,6 +151,9 @@ def mesh_meta(item_id: str) -> Optional[Dict[str, Any]]:
     meta.pop("version", None)
     if has_glb:
         meta["version"] = http_files.content_version(glb_path)
+        if "tris" not in meta:
+            with contextlib.suppress(Exception):
+                meta["tris"] = triangle_count(glb_path.read_bytes())
     return meta
 
 
@@ -101,73 +174,136 @@ def _compute_bbox(glb_bytes: bytes) -> list[float]:
     ]
 
 
-def _generate_worker(item_id: str, image_path: str) -> None:
+def _generate_worker(item_id: str, image_path: str, face_num: int = DEFAULT_FACE_NUM) -> None:
     """Background worker: run ``mesh_item`` generation, validate GLB and atomically publish."""
+    from app.core.task_queue import get_task_queue
     from app.imagegen.service import get_image_service
 
-    with keyed_lock("item_mesh", item_id):
-        glb_path, meta_path = mesh_paths(item_id)
-        glb_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_glb = glb_path.parent / f".model.{uuid.uuid4().hex[:8]}.glb"
-        try:
-            source_bytes = Path(image_path).read_bytes()
-            source_sha = hashlib.sha256(source_bytes).hexdigest()
+    item = get_item(item_id)
+    name = str((item or {}).get("name") or item_id)
+    task_id = ""
+    try:
+        task_id = get_task_queue().track_start(
+            "model3d_generation",
+            f"Item mesh: {name}",
+            agent_name=name,
+            start_running=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Item mesh %s: track_start failed: %s", item_id, exc)
+        task_id = ""
 
-            res = get_image_service().generate_mesh(
-                source_image_path=str(image_path),
-                output_path=str(tmp_glb),
-                occasion=MESH_OCCASION,
-                mesh_name=f"item-{item_id}",
-            )
-            if not isinstance(res, dict) or not res.get("ok"):
-                err = (res or {}).get("error") if isinstance(res, dict) else None
-                raise RuntimeError(str(err or "mesh generation failed"))
+    track_error = ""
+    try:
+        with keyed_lock("item_mesh", item_id):
+            glb_path, meta_path = mesh_paths(item_id)
+            glb_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_glb = glb_path.parent / f".model.{uuid.uuid4().hex[:8]}.glb"
+            try:
+                source_bytes = Path(image_path).read_bytes()
+                source_sha = hashlib.sha256(source_bytes).hexdigest()
 
-            delivered = Path(str(res.get("path") or ""))
-            if not delivered.is_file():
-                raise RuntimeError("mesh generation delivered no file")
+                res = get_image_service().generate_mesh(
+                    source_image_path=str(image_path),
+                    output_path=str(tmp_glb),
+                    occasion=MESH_OCCASION,
+                    mesh_name=f"item-{item_id}",
+                    face_num=face_num,
+                )
+                if not isinstance(res, dict) or not res.get("ok"):
+                    err = (res or {}).get("error") if isinstance(res, dict) else None
+                    raise RuntimeError(str(err or "mesh generation failed"))
 
-            glb_bytes = delivered.read_bytes()
-            bbox = _compute_bbox(glb_bytes)
+                delivered = Path(str(res.get("path") or ""))
+                if not delivered.is_file():
+                    raise RuntimeError("mesh generation delivered no file")
 
-            if delivered.parent.resolve() == glb_path.parent.resolve():
-                http_files.atomic_replace(delivered, glb_path)
-            else:
-                tmp_glb.write_bytes(glb_bytes)
-                http_files.atomic_replace(tmp_glb, glb_path)
+                glb_bytes = delivered.read_bytes()
+                tris_delivered = triangle_count(glb_bytes)
+                tris = tris_delivered
+                reduce_error: Optional[str] = None
+                reduced = False
 
-            record: Dict[str, Any] = {
-                "status": "done",
-                "created_at": utc_now_iso(),
-                "source_sha": source_sha,
-                "backend": str(res.get("backend") or ""),
-                "routing": res.get("routing") or {},
-                "bbox": bbox,
-            }
-            if res.get("fallback_from"):
-                record["fallback_from"] = res["fallback_from"]
-            _write_meta(meta_path, record)
-            logger.info("Item mesh %s generated via %s", item_id, record["backend"])
-        except Exception as e:  # noqa: BLE001 — recorded in model.json; any previous model.glb stays
-            err = (str(e) or type(e).__name__)[:300]
-            logger.warning("Item mesh %s failed: %s", item_id, err)
-            # A failed job leaves the previous model.glb in place, so its record
-            # facts stay too; only the status and the error are new.
-            prior = {k: v for k, v in _read_meta(meta_path).items()
-                     if k not in ("status", "error", "started_at")}
-            _write_meta(meta_path, {**prior, "status": "failed", "error": err})
-        finally:
-            tmp_glb.unlink(missing_ok=True)
+                if tris_delivered > face_num * REDUCE_TOLERANCE:
+                    try:
+                        with tempfile.TemporaryDirectory(prefix="av-item-lod-") as lod_tmp:
+                            reduced_path, reduced_tris = _reduce_glb(
+                                delivered, face_num, tris_delivered, Path(lod_tmp)
+                            )
+                            reduced_bytes = reduced_path.read_bytes()
+                            bbox = _compute_bbox(reduced_bytes)
+                            glb_bytes = reduced_bytes
+                            tris = reduced_tris
+                            reduced = True
+                    except Exception as red_exc:  # noqa: BLE001 — post-steps never discard the delivered mesh
+                        reduce_error = (str(red_exc) or type(red_exc).__name__)[:300]
+                        logger.warning(
+                            "Item mesh %s reduction failed, keeping delivered mesh: %s",
+                            item_id,
+                            reduce_error,
+                        )
+                        bbox = _compute_bbox(glb_bytes)
+                else:
+                    bbox = _compute_bbox(glb_bytes)
+
+                if not reduced and delivered.parent.resolve() == glb_path.parent.resolve():
+                    http_files.atomic_replace(delivered, glb_path)
+                else:
+                    tmp_glb.write_bytes(glb_bytes)
+                    http_files.atomic_replace(tmp_glb, glb_path)
+                    if delivered != tmp_glb and delivered.parent.resolve() == glb_path.parent.resolve():
+                        delivered.unlink(missing_ok=True)
+
+                record: Dict[str, Any] = {
+                    "status": "done",
+                    "created_at": utc_now_iso(),
+                    "source_sha": source_sha,
+                    "backend": str(res.get("backend") or ""),
+                    "routing": res.get("routing") or {},
+                    "bbox": bbox,
+                    "face_num": face_num,
+                    "tris": tris,
+                    "tris_delivered": tris_delivered,
+                }
+                if res.get("fallback_from"):
+                    record["fallback_from"] = res["fallback_from"]
+                if reduce_error:
+                    record["reduce_error"] = reduce_error
+                _write_meta(meta_path, record)
+                logger.info("Item mesh %s generated via %s", item_id, record["backend"])
+            except Exception as e:  # noqa: BLE001 — recorded in model.json; any previous model.glb stays
+                err = (str(e) or type(e).__name__)[:300]
+                track_error = err
+                logger.warning("Item mesh %s failed: %s", item_id, err)
+                # A failed job leaves the previous model.glb in place, so its record
+                # facts stay too; only the status and the error are new.
+                prior = {k: v for k, v in _read_meta(meta_path).items()
+                         if k not in ("status", "error", "started_at")}
+                _write_meta(meta_path, {**prior, "status": "failed", "error": err})
+            finally:
+                tmp_glb.unlink(missing_ok=True)
+    except BaseException as exc:
+        if not track_error:
+            track_error = (str(exc) or type(exc).__name__)[:300]
+        raise
+    finally:
+        if task_id:
+            try:
+                get_task_queue().track_finish(task_id, error=track_error)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Item mesh %s: track_finish failed: %s", item_id, exc)
 
 
-def start_generate(item_id: str) -> Dict[str, Any]:
+def start_generate(item_id: str, face_num: Any = None) -> Dict[str, Any]:
     """Queue 3D mesh generation for ``item_id`` in a background daemon thread.
 
     Raises:
         LookupError: when ``item_id`` does not exist.
-        ValueError: when the item has no image yet.
+        ValueError: when ``face_num`` is invalid or the item has no image yet.
         MediaGenerationDisabled: when media generation is switched off.
     """
+    target_faces = normalize_face_num(face_num)
+
     item = get_item(item_id)
     if not item:
         raise LookupError(f"Item not found: {item_id}")
@@ -188,9 +324,108 @@ def start_generate(item_id: str) -> Dict[str, Any]:
 
     threading.Thread(
         target=_generate_worker,
-        args=(item_id, image_path),
+        args=(item_id, image_path, target_faces),
         daemon=True,
         name=f"item-mesh-{item_id[:8]}",
+    ).start()
+    return {"status": "queued"}
+
+
+def _reduce_worker(item_id: str, face_num: int) -> None:
+    """Background worker: reduce an existing item mesh via Blender LOD and atomically publish."""
+    from app.core.task_queue import get_task_queue
+
+    item = get_item(item_id)
+    name = str((item or {}).get("name") or item_id)
+    task_id = ""
+    try:
+        task_id = get_task_queue().track_start(
+            "model3d_generation",
+            f"Item mesh reduce: {name}",
+            agent_name=name,
+            start_running=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Item mesh %s: track_start failed: %s", item_id, exc)
+        task_id = ""
+
+    track_error = ""
+    try:
+        with keyed_lock("item_mesh", item_id):
+            glb_path, meta_path = mesh_paths(item_id)
+            try:
+                if not glb_path.is_file():
+                    raise RuntimeError("Item mesh not found")
+                old_bytes = glb_path.read_bytes()
+                old_tris = triangle_count(old_bytes)
+                with tempfile.TemporaryDirectory(prefix="av-item-lod-") as lod_tmp:
+                    reduced_path, new_tris = _reduce_glb(glb_path, face_num, old_tris, Path(lod_tmp))
+                    new_bytes = reduced_path.read_bytes()
+                bbox = _compute_bbox(new_bytes)
+                with http_files.sibling_stage(glb_path) as stage:
+                    stage.write_bytes(new_bytes)
+                    http_files.atomic_replace(stage, glb_path)
+
+                prior = {
+                    k: v
+                    for k, v in _read_meta(meta_path).items()
+                    if k not in ("status", "error", "started_at", "reduce_error", "version")
+                }
+                record: Dict[str, Any] = {
+                    **prior,
+                    "status": "done",
+                    "face_num": face_num,
+                    "tris": new_tris,
+                    "reduced_from": old_tris,
+                    "bbox": bbox,
+                }
+                if "created_at" not in record:
+                    record["created_at"] = utc_now_iso()
+                _write_meta(meta_path, record)
+                logger.info("Item mesh %s reduced (%d -> %d tris)", item_id, old_tris, new_tris)
+            except Exception as e:  # noqa: BLE001 — leaves old model.glb untouched
+                err = (str(e) or type(e).__name__)[:300]
+                track_error = err
+                logger.warning("Item mesh %s reduce failed: %s", item_id, err)
+                prior = {
+                    k: v
+                    for k, v in _read_meta(meta_path).items()
+                    if k not in ("status", "error", "started_at")
+                }
+                _write_meta(meta_path, {**prior, "status": "failed", "error": err})
+    except BaseException as exc:
+        if not track_error:
+            track_error = (str(exc) or type(exc).__name__)[:300]
+        raise
+    finally:
+        if task_id:
+            try:
+                get_task_queue().track_finish(task_id, error=track_error)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Item mesh %s: track_finish failed: %s", item_id, exc)
+
+
+def start_reduce(item_id: str, face_num: Any = None) -> Dict[str, Any]:
+    """Queue Blender LOD reduction of an existing item mesh toward ``face_num`` triangles."""
+    if not get_item(item_id):
+        raise LookupError(f"Item not found: {item_id}")
+    glb_path, meta_path = mesh_paths(item_id)
+    if not glb_path.is_file():
+        raise LookupError(f"Item mesh not found: {item_id}")
+
+    target_faces = normalize_face_num(face_num)
+    current_tris = triangle_count(glb_path.read_bytes())
+    if current_tris <= target_faces * REDUCE_TOLERANCE:
+        return {"status": "unchanged", "tris": current_tris}
+
+    prior = {k: v for k, v in _read_meta(meta_path).items() if k not in ("status", "error")}
+    _write_meta(meta_path, {**prior, "status": "running", "started_at": utc_now_iso()})
+
+    threading.Thread(
+        target=_reduce_worker,
+        args=(item_id, target_faces),
+        daemon=True,
+        name=f"item-mesh-reduce-{item_id[:8]}",
     ).start()
     return {"status": "queued"}
 

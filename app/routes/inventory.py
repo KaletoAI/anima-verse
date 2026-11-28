@@ -436,12 +436,35 @@ def get_item_image_route(
 # ── Item 3D Mesh (world-placeable items) ──
 
 @router.post("/items/{item_id}/mesh/generate")
-async def generate_item_mesh_route(item_id: str) -> Dict[str, Any]:
+async def generate_item_mesh_route(item_id: str, request: Request) -> Dict[str, Any]:
     """Queue 3D mesh generation for an item via the ``mesh_item`` occasion."""
     import asyncio
     from app.core import item_mesh
     try:
-        return await asyncio.to_thread(item_mesh.start_generate, item_id)
+        body = await request.json()
+    except Exception:
+        body = {}
+    face_num = body.get("face_num") if isinstance(body, dict) else None
+    try:
+        return await asyncio.to_thread(item_mesh.start_generate, item_id, face_num)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/items/{item_id}/mesh/reduce")
+async def reduce_item_mesh_route(item_id: str, request: Request) -> Dict[str, Any]:
+    """Reduce an existing item 3D mesh toward ``face_num`` triangles via Blender LOD."""
+    import asyncio
+    from app.core import item_mesh
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    face_num = body.get("face_num") if isinstance(body, dict) else None
+    try:
+        return await asyncio.to_thread(item_mesh.start_reduce, item_id, face_num)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
